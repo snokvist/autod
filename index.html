@@ -1,0 +1,409 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>autod — device console</title>
+<style>
+  :root {
+    --bg:#0b0d10; --fg:#e8e8ea; --mut:#9aa1a6; --ok:#36c275; --err:#ff6b6b;
+    --panel:#12161a; --card:#151a1f; --line:#21262c;
+    /* Scrollbar tokens */
+    --scroll-track:#0f1317; --scroll-thumb:#2a3139; --scroll-thumb-hover:#36404a;
+  }
+
+  *{box-sizing:border-box; min-width:0}
+
+  /* Themed scrollbars (Firefox + WebKit) */
+  *{scrollbar-width:thin; scrollbar-color:var(--scroll-thumb) var(--scroll-track)}
+  *::-webkit-scrollbar{width:10px;height:10px}
+  *::-webkit-scrollbar-track{background:var(--scroll-track)}
+  *::-webkit-scrollbar-thumb{
+    background:var(--scroll-thumb);
+    border-radius:999px;
+    border:2px solid transparent; /* inset look */
+    background-clip:content-box;
+  }
+  *::-webkit-scrollbar-thumb:hover{background:var(--scroll-thumb-hover); background-clip:content-box}
+
+  html,body{
+    margin:0;height:100%;
+    background:var(--bg);color:var(--fg);
+    font:14px/1.4 system-ui,Segoe UI,Roboto,Inter,sans-serif;
+    -webkit-tap-highlight-color:transparent;
+    overflow-wrap:anywhere; word-break:break-word;
+  }
+
+  header{
+    padding:14px 16px;border-bottom:1px solid var(--line);
+    background:var(--panel);display:flex;justify-content:space-between;align-items:center;gap:12px;
+    position:sticky;top:0;z-index:1
+  }
+  header .title{font-weight:700}
+  header .sub{color:var(--mut);font-size:12px}
+
+  main{
+    padding:14px; /* subtle gutters for small canvases */
+    display:grid;gap:12px;grid-template-columns:1fr
+  }
+
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:hidden}
+  .card h2{margin:0;padding:12px 14px;border-bottom:1px solid var(--line);font-size:14px}
+  .card .body{padding:12px 14px;display:grid;gap:10px}
+
+  .row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+  .row > label{display:flex;align-items:center;gap:8px;flex:1 1 180px}
+
+  input,button,textarea{
+    background:#0f1317;color:var(--fg);border:1px solid var(--line);
+    border-radius:10px;padding:8px 10px;font:inherit;max-width:100%
+  }
+  input[type="text"], input:not([type]){
+    width:clamp(140px, 100%, 280px);
+  }
+  textarea{
+    width:100%;min-height:100px;resize:vertical;border-radius:12px;
+    white-space:pre-wrap; /* wrap long one-line responses */
+    overflow-wrap:anywhere; word-break:break-word;
+  }
+  button{cursor:pointer}
+
+  code,pre{font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace}
+  .inline{
+    display:block; /* full-width inside cards */
+    max-width:100%;
+    overflow:auto;
+    white-space:pre-wrap;           /* allow wrapping */
+    overflow-wrap:anywhere;         /* break long tokens (hashes/urls) */
+    word-break:break-word;
+    padding:8px 10px;
+    background:#0f1317;border:1px solid var(--line);border-radius:10px;
+  }
+
+  .kv{display:grid;grid-template-columns:minmax(90px,160px) 1fr;gap:6px;align-items:center}
+  .pill{display:inline-flex;align-items:center;gap:6px;padding:2px 8px;border:1px solid var(--line);border-radius:999px;color:var(--mut);font-size:12px}
+  .ok{color:var(--ok)} .err{color:var(--err)}
+  .grid{display:grid;gap:8px}
+  .caps{display:flex;flex-wrap:wrap;gap:6px}
+  .mut{color:var(--mut)}
+  .sse a{color:inherit;text-decoration:underline dotted;word-break:break-all}
+
+  /* NODES: pretty node grid + progress bar */
+  .nodes-grid{
+    display:grid;
+    grid-template-columns:repeat(auto-fill,minmax(240px,1fr));
+    gap:10px;
+  }
+  .node{
+    border:1px solid var(--line);
+    background:#0f1317;
+    border-radius:12px;
+    padding:10px;
+    display:grid;gap:6px;
+  }
+  .node .top{
+    display:flex;align-items:center;justify-content:space-between;gap:6px;
+  }
+  .node .ip{font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color:var(--mut)}
+  .node .meta{font-size:12px; color:var(--mut)}
+  .node .role{border-color:#2d333b}
+  .progress{
+    height:10px;border:1px solid var(--line);border-radius:999px;overflow:hidden;background:#0f1317
+  }
+  .progress > div{
+    height:100%; background:linear-gradient(90deg,var(--ok),#64d38f);
+    width:0%;
+  }
+  .nodes-toolbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+  .nodes-toolbar .mut{font-size:12px}
+  .nodes-stats{display:flex;flex-wrap:wrap;gap:8px;font-size:12px;color:var(--mut)}
+  .spacer{flex:1}
+  /* Better page feel inside tiny canvases */
+  body{overscroll-behavior:contain}
+</style>
+
+<header>
+  <div>
+    <div class="title">autod — device console</div>
+    <div class="sub" id="subtitle">loading caps…</div>
+  </div>
+  <div class="row" style="justify-content:flex-end">
+    <button id="refreshCaps">Refresh /caps</button>
+  </div>
+</header>
+
+<main>
+  <section class="card" id="capsCard">
+    <h2>Device & runtime</h2>
+    <div class="body grid">
+      <div class="kv"><div class="mut">Device</div><div id="dev_device">—</div></div>
+      <div class="kv"><div class="mut">Role</div><div id="dev_role">—</div></div>
+      <div class="kv"><div class="mut">Version</div><div id="dev_version">—</div></div>
+      <div class="kv"><div class="mut">Interfaces</div><div id="dev_if">—</div></div>
+      <div class="kv"><div class="mut">Uptime</div><div id="dev_uptime">—</div></div>
+      <div class="kv"><div class="mut">Loadavg</div><div id="dev_load">—</div></div>
+      <div class="kv"><div class="mut">Capabilities</div><div class="caps" id="dev_caps">—</div></div>
+      <div class="kv"><div class="mut">SSE</div><div class="sse" id="dev_sse">—</div></div>
+    </div>
+  </section>
+
+  <!-- NODES: new card -->
+  <section class="card" id="nodesCard">
+    <h2>Nodes</h2>
+    <div class="body grid">
+      <div class="nodes-toolbar">
+        <button id="nodesScanBtn">POST /nodes (scan)</button>
+        <div class="spacer"></div>
+        <div class="nodes-stats" id="nodesStats">—</div>
+      </div>
+      <div class="progress" aria-label="Scan progress">
+        <div id="nodesProgress"></div>
+      </div>
+      <div id="nodesNotice" class="mut">—</div>
+      <div class="nodes-grid" id="nodesGrid"></div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>/exec — run interpreter path</h2>
+    <div class="body">
+      <div class="row">
+        <label>path <input id="exec_path" value="/sys/video/exec"></label>
+        <label>args (space-separated) <input id="exec_args" placeholder="start ch=1"></label>
+        <button id="exec_btn">POST /exec</button>
+      </div>
+      <div class="mut">Body preview:</div>
+      <pre class="inline" id="exec_body_preview">{}</pre>
+      <div class="mut">Response:</div>
+      <textarea id="exec_out" readonly></textarea>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>/control — key/value</h2>
+    <div class="body">
+      <div class="row">
+        <label>key <input id="ctl_key" value="bitrate"></label>
+        <label>value <input id="ctl_value" value="5000"></label>
+        <button id="ctl_btn">POST /control</button>
+      </div>
+      <div class="mut">Body preview:</div>
+      <pre class="inline" id="ctl_body_preview">{}</pre>
+      <div class="mut">Response:</div>
+      <textarea id="ctl_out" readonly></textarea>
+    </div>
+  </section>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+const fmtOneLine = obj => JSON.stringify(obj);
+
+function joinCaps(caps){
+  if (!Array.isArray(caps) || !caps.length) return '—';
+  const frag = document.createDocumentFragment();
+  caps.forEach(c => {
+    const span = document.createElement('span');
+    span.className = 'pill';
+    span.textContent = c;
+    frag.appendChild(span);
+  });
+  return frag;
+}
+
+function secsToHhMmSs(secs){
+  if (!secs && secs !== 0) return '—';
+  const s = Math.floor(secs);
+  const h = Math.floor(s/3600), m = Math.floor((s%3600)/60), ss = s%60;
+  return `${h}h ${m}m ${ss}s`;
+}
+
+// NODES: helpers
+function tsToAgo(tsSec){
+  if (!tsSec) return '—';
+  const now = Date.now()/1000|0;
+  const d = Math.max(0, now - tsSec);
+  if (d < 60) return `${d|0}s ago`;
+  if (d < 3600) return `${(d/60)|0}m ago`;
+  if (d < 86400) return `${(d/3600)|0}h ago`;
+  return `${(d/86400)|0}d ago`;
+}
+function fmtDate(tsSec){
+  if (!tsSec) return '—';
+  const d = new Date(tsSec*1000);
+  return d.toISOString().replace('T',' ').replace(/\.\d+Z$/, 'Z');
+}
+
+async function loadCaps(){
+  $('#subtitle').textContent = 'loading caps…';
+  try{
+    const r = await fetch('/caps', {cache:'no-store'});
+    const caps = await r.json();
+    $('#dev_device').textContent  = caps.device || '—';
+    $('#dev_role').textContent    = caps.role || '—';
+    $('#dev_version').textContent = caps.version || '—';
+    if (Array.isArray(caps.ifaddrs) && caps.ifaddrs.length){
+      $('#dev_if').textContent = caps.ifaddrs.map(i => `${i.if}:${i.ip}`).join('  ');
+    } else $('#dev_if').textContent = '—';
+    $('#dev_uptime').textContent = caps.uptime_s ? secsToHhMmSs(caps.uptime_s) : '—';
+    if (Array.isArray(caps.loadavg)) $('#dev_load').textContent = caps.loadavg.join(' ');
+    else $('#dev_load').textContent = '—';
+    const capsEl = $('#dev_caps'); capsEl.innerHTML = '';
+    const chip = joinCaps(caps.caps);
+    if (chip === '—') capsEl.textContent = '—'; else capsEl.appendChild(chip);
+    const sseEl = $('#dev_sse'); sseEl.innerHTML = '';
+    if (Array.isArray(caps.sse) && caps.sse.length){
+      sseEl.innerHTML = caps.sse.map(e => `<a href="${e.url}" target="_blank" rel="noreferrer">${e.name||e.url}</a>`).join('  ');
+    } else sseEl.textContent = '—';
+    $('#subtitle').textContent = `${caps.device||'device'} ${caps.version?('v'+caps.version):''}`;
+  }catch(e){
+    $('#subtitle').textContent = 'failed to load /caps';
+  }
+}
+
+function parseArgs(text){
+  const out = [];
+  text.trim().replace(/"([^"]*)"|'([^']*)'|(\S+)/g, (_,dq,sq,bare) => {
+    out.push((dq ?? sq ?? bare) + '');
+    return '';
+  });
+  return out;
+}
+
+function tryParseValue(s){
+  const t = s.trim();
+  if (/^-?\d+$/.test(t)) return parseInt(t,10);
+  if (/^-?\d+\.\d+$/.test(t)) return parseFloat(t);
+  if ((t.startsWith('{') && t.endsWith('}')) || (t.startsWith('[') && t.endsWith(']'))){
+    try { return JSON.parse(t); } catch {}
+  }
+  return t;
+}
+
+async function doExec(){
+  const path = $('#exec_path').value.trim();
+  const args = parseArgs($('#exec_args').value);
+  const body = { path, args };
+  $('#exec_body_preview').textContent = fmtOneLine(body);
+  try{
+    const r = await fetch('/exec', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+    const txt = await r.text();
+    $('#exec_out').value = txt.replace(/\n/g,'\\n'); // one-line content, will wrap visually
+  }catch(e){
+    $('#exec_out').value = `{"error":"fetch_failed","msg":"${e.message}"}`;
+  }
+}
+
+async function doControl(){
+  const key = $('#ctl_key').value.trim();
+  const raw = $('#ctl_value').value;
+  const value = tryParseValue(raw);
+  const body = { key, value };
+  $('#ctl_body_preview').textContent = fmtOneLine(body);
+  try{
+    const r = await fetch('/control', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+    const txt = await r.text();
+    $('#ctl_out').value = txt.replace(/\n/g,'\\n');
+  }catch(e){
+    $('#ctl_out').value = `{"error":"fetch_failed","msg":"${e.message}"}`;
+  }
+}
+
+/* -------------------------
+   NODES: fetch + render + scan
+--------------------------*/
+let nodesPollTimer = null;
+
+function renderNodesCard(state){
+  const {
+    nodes = [],
+    scan_feature_enabled = 0,
+    scanning = 0,
+    targets = 0,
+    done = 0,
+    progress_pct,
+    last_started,
+    last_finished
+  } = state || {};
+
+  // stats line
+  const pct = typeof progress_pct === 'number'
+    ? Math.max(0, Math.min(100, Math.round(progress_pct)))
+    : (targets>0 ? Math.max(0, Math.min(100, Math.round(100*done/targets))) : (scanning?0:100));
+
+  $('#nodesStats').textContent =
+    `feature:${scan_feature_enabled? 'on':'off'} • scanning:${scanning? 'yes':'no'} • targets:${targets} • done:${done} • progress:${pct}% • started:${fmtDate(last_started)} • finished:${fmtDate(last_finished)}`;
+
+  // progress bar
+  $('#nodesProgress').style.width = pct + '%';
+
+  // notice
+  $('#nodesNotice').textContent = scanning
+    ? 'Scanning… polling /nodes every 800ms'
+    : (nodes.length ? `${nodes.length} node(s) found` : 'No nodes found');
+
+  // button enable/disable
+  $('#nodesScanBtn').disabled = !scan_feature_enabled || !!scanning;
+
+  // node grid
+  const grid = $('#nodesGrid');
+  grid.innerHTML = '';
+  nodes.forEach(n => {
+    const div = document.createElement('div');
+    div.className = 'node';
+    div.innerHTML = `
+      <div class="top">
+        <span class="pill role">${n.role||'—'}</span>
+        <span class="ip">${n.ip||'—'}:${n.port||''}</span>
+      </div>
+      <div><strong>${n.device||'—'}</strong> <span class="meta">v${n.version||'—'}</span></div>
+      <div class="meta">last seen: ${tsToAgo(n.last_seen)} (${fmtDate(n.last_seen)})</div>
+    `;
+    grid.appendChild(div);
+  });
+}
+
+async function fetchNodes(){
+  try{
+    const r = await fetch('/nodes', {cache:'no-store'});
+    const data = await r.json();
+    renderNodesCard(data);
+    // handle polling lifecycle
+    if (data.scanning){
+      if (!nodesPollTimer){
+        nodesPollTimer = setInterval(fetchNodes, 800); // steady poll while scanning
+      }
+    } else {
+      if (nodesPollTimer){ clearInterval(nodesPollTimer); nodesPollTimer = null; }
+    }
+  }catch(e){
+    renderNodesCard({nodes:[]});
+    $('#nodesNotice').textContent = `Failed to load /nodes: ${e.message}`;
+    if (nodesPollTimer){ clearInterval(nodesPollTimer); nodesPollTimer = null; }
+  }
+}
+
+async function triggerNodesScan(){
+  $('#nodesScanBtn').disabled = true;
+  try{
+    // POST /nodes to trigger scan (empty JSON body is fine)
+    await fetch('/nodes', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'});
+  }catch(e){
+    $('#nodesNotice').textContent = `Failed to POST /nodes: ${e.message}`;
+  }finally{
+    // Immediately refresh and start polling
+    fetchNodes();
+  }
+}
+
+// wire up
+$('#exec_btn').addEventListener('click', doExec);
+$('#ctl_btn').addEventListener('click', doControl);
+$('#refreshCaps').addEventListener('click', loadCaps);
+$('#exec_args').addEventListener('keydown',e=>{ if(e.key==='Enter') doExec(); });
+$('#ctl_value').addEventListener('keydown',e=>{ if(e.key==='Enter') doControl(); });
+
+// NODES: events
+$('#nodesScanBtn').addEventListener('click', triggerNodesScan);
+
+// initial loads
+loadCaps();
+fetchNodes(); // NODES: populate at boot
+</script>

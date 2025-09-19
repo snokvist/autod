@@ -1,0 +1,341 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>LAN Scanner (file:// friendly)</title>
+<style>
+  :root{
+    --bg:#0b0d10; --fg:#e8e8ea; --mut:#9aa1a6; --ok:#39c172; --bad:#ff6b6b;
+    --panel:#12161a; --card:#151a1f; --accent:#3aa0ff; --border:#222;
+    --page: 420px;               /* comfy mobile width cap */
+    --inner: calc(100% - 28px);  /* leaves space on both sides */
+    --scroll-track:#0e1216; --scroll-thumb:#1a2230;
+  }
+  *{ box-sizing: border-box; }
+
+  html,body{
+    margin:0;height:100%;
+    background:var(--bg);color:var(--fg);
+    font:14px/1.45 system-ui,Segoe UI,Roboto,Inter,sans-serif
+  }
+
+  /* Themed scrollbars */
+  *{
+    scrollbar-width: thin;                     /* Firefox */
+    scrollbar-color: var(--accent) var(--scroll-track);
+  }
+  ::-webkit-scrollbar{ width:10px; height:10px; }
+  ::-webkit-scrollbar-track{ background: var(--scroll-track); }
+  ::-webkit-scrollbar-thumb{
+    background: linear-gradient(180deg, var(--accent), #5cfbc7);
+    border-radius: 10px;
+    border: 1px solid var(--border);
+  }
+  ::-webkit-scrollbar-thumb:hover{ filter: brightness(1.1); }
+
+  .wrap{ max-width:var(--page); margin:0 auto; }
+  .inner{ width:var(--inner); margin:0 auto; } /* gently inset everything */
+
+  header{
+    position:sticky; top:0; background:var(--panel);
+    border-bottom:1px solid var(--border); z-index:5
+  }
+
+  /* tiny bar that always stays visible (title + toggle) */
+  .topbar{
+    display:flex; align-items:center; justify-content:space-between; gap:10px;
+    padding:10px 0;
+  }
+  .topbar .inner{ display:flex; align-items:center; justify-content:space-between; gap:10px; }
+  .topbar h1{margin:0;font-size:16px;font-weight:600}
+
+  .ghost{
+    background:transparent;color:var(--fg);border:1px solid var(--border);
+    border-radius:10px;padding:8px 12px;min-height:36px;cursor:pointer
+  }
+
+  /* collapsible areas */
+  #controls, #statusArea { transition:opacity .18s ease, height .18s ease; }
+  header.collapsed #controls,
+  header.collapsed #statusArea { display:none !important; }
+
+  /* controls block */
+  #controls{ padding:12px 0; }
+  #controls .inner{ display:flex; flex-direction:column; gap:12px; }
+  .field{ display:flex; flex-direction:column; gap:6px; width:100%; }
+  .label{ color:var(--mut); font-size:12px; }
+
+  input,button{
+    background:#0f1317; color:var(--fg); border:1px solid var(--border); border-radius:12px;
+    padding:12px 14px; font:inherit; min-height:44px;
+  }
+  input{ width:100%; max-width:100%; text-align:center; }
+  button{ cursor:pointer; transition:transform .05s ease }
+  button:active{ transform:scale(0.98) }
+  .btn-primary{ background:var(--accent); border-color:transparent; color:#000; font-weight:700 }
+  .btn-danger{ background:var(--bad); border-color:transparent; color:#000; font-weight:700 }
+
+  .row{ display:flex; flex-direction:column; gap:10px; } /* stacked to avoid any overlap */
+  .actions{ display:flex; gap:10px; justify-content:center }
+
+  /* status + progress */
+  #statusArea{ padding:0 0 12px }
+  #statusArea .inner{ display:block; }
+  .statusline{
+    padding:6px 0; color:var(--mut);
+    display:flex; justify-content:center; gap:12px; flex-wrap:wrap; text-align:center
+  }
+  .progress-wrap{ display:flex; justify-content:center }
+  .progress{
+    width:100%; height:10px; border-radius:999px; background:#0e1216;
+    overflow:hidden; border:1px solid var(--border)
+  }
+  .bar{ height:100%; width:0% }
+  .bar::before{
+    content:""; display:block; height:100%; width:100%;
+    background:linear-gradient(90deg, var(--accent), #5cfbc7);
+  }
+  .pct{ min-width:52px; text-align:center }
+
+  main{ padding:12px 0 16px; }
+  main .inner{ display:grid; gap:12px; }
+
+  .node{ background:var(--card); border:1px solid var(--border); border-radius:14px; overflow:hidden }
+  .head{ display:flex; align-items:center; justify-content:space-between; padding:10px 12px; gap:8px }
+  .addr{ font-weight:700 }
+  .caps{ color:var(--mut); font-size:12px }
+  .badges{ display:flex; gap:6px; flex-wrap:wrap; margin-top:6px }
+  .badge{
+    font-size:12px; padding:3px 8px; border:1px solid var(--border);
+    border-radius:999px; background:#0f1317; color:#fff
+  }
+  .badge.ok{ border-color:#1d3 }
+  .panel{ display:none; border-top:1px solid var(--border); background:#0f1317; max-height:65vh; overflow:auto }
+  .panel.visible{ display:block }
+  .panel .loading{ padding:12px; color:var(--mut) }
+</style>
+
+<body>
+<div class="wrap">
+  <header id="hdr" class="">
+    <div class="topbar">
+      <div class="inner">
+        <h1>LAN Scanner</h1>
+        <button id="toggleHdr" class="ghost" title="Collapse/expand scanner">Collapse</button>
+      </div>
+    </div>
+
+    <div id="controls">
+      <div class="inner">
+        <div class="row">
+          <div class="field">
+            <div class="label">Subnet (first three octets)</div>
+            <input id="subnet" value="192.168.2" placeholder="e.g. 192.168.2" />
+          </div>
+          <div class="field">
+            <div class="label">Port</div>
+            <input id="port" value="8080" inputmode="numeric" pattern="[0-9]*" placeholder="8080" />
+          </div>
+        </div>
+        <div class="actions">
+          <button id="scan" class="btn-primary" style="min-width:140px">Scan</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="statusArea">
+      <div class="inner">
+        <div class="statusline">
+          <div id="status">Idle.</div>
+          <div id="counts">0/254 • found 0</div>
+          <div class="pct" id="pct">0%</div>
+        </div>
+        <div class="progress-wrap">
+          <div class="progress"><div class="bar" id="bar"></div></div>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <div class="inner" id="list"></div>
+  </main>
+</div>
+
+<script>
+/* ===== DOM ===== */
+const $ = s => document.querySelector(s);
+const hdr=$('#hdr'), list=$('#list'), statusEl=$('#status'), countsEl=$('#counts'), bar=$('#bar'), pctEl=$('#pct');
+const subnetEl=$('#subnet'), portEl=$('#port'), scanBtn=$('#scan'), toggleHdrBtn=$('#toggleHdr');
+
+/* ===== state ===== */
+let isScanning=false, done=0, found=0, total=254;
+let displayPct = 0;  // lerped percentage
+
+/* ===== utils ===== */
+const esc = s => (s||'').replace(/[&<>"]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;" }[c]));
+function* ips(sub){ for(let i=1;i<=254;i++) yield `${sub}.${i}`; }
+function setCounts(){ countsEl.textContent=`${done}/${total} • found ${found}`; }
+function setStatus(t){ statusEl.textContent=t; }
+function setUI(r){ isScanning=r; scanBtn.textContent=r?'Cancel':'Scan';
+  scanBtn.classList.toggle('btn-danger',r); scanBtn.classList.toggle('btn-primary',!r);
+  subnetEl.disabled=r; portEl.disabled=r; }
+
+function setCollapsed(v){
+  hdr.classList.toggle('collapsed', v);
+  toggleHdrBtn.textContent = v ? 'Expand' : 'Collapse';
+}
+toggleHdrBtn.addEventListener('click', () => setCollapsed(!hdr.classList.contains('collapsed')));
+
+const sleep = ms => new Promise(r=>setTimeout(r,ms));
+
+/* Timeout fetch (file:// friendly) */
+function fetchTO(url, opts={}, ms=900){
+  const ctrl=new AbortController(); const id=setTimeout(()=>ctrl.abort(),ms);
+  return fetch(url,{...opts,signal:ctrl.signal}).finally(()=>clearTimeout(id));
+}
+
+/* Reachability via no-cors (opaque ok), ONLY /health — single attempt */
+async function probeReachable(ip, port, timeoutMs=900){
+  const url = `http://${ip}:${port}/health`;
+  try { await fetchTO(url, { mode:'no-cors', cache:'no-store' }, timeoutMs); return true; }
+  catch { return false; }
+}
+
+/* Optional details via CORS JSON on /caps (best-effort) */
+async function tryCaps(ip, port, timeoutMs=1100){
+  const url = `http://${ip}:${port}/caps`;
+  try{
+    const r = await fetchTO(url, { mode:'cors', headers:{'Accept':'application/json'}, cache:'no-store' }, timeoutMs);
+    if (!r.ok) throw 0;
+    return await r.json();
+  }catch{ return { corsBlocked:true }; }
+}
+
+/* Card rendering */
+function makeCard(ip, port, meta){
+  const el=document.createElement('div'); el.className='node';
+  const dev=meta?.device||meta?.alias||'', ver=meta?.version?('v'+meta.version):'';
+  const role=meta?.role|| (Array.isArray(meta?.roles)?meta.roles[0]:'') || '';
+  const capsArr = Array.isArray(meta?.caps) ? meta.caps : [];
+  const load = Array.isArray(meta?.loadavg)? meta.loadavg.map(x=>Number(x).toFixed(2)).join(' / ') : null;
+  const uptime = typeof meta?.uptime_s==='number'?Math.round(meta.uptime_s): (typeof meta?.uptime==='number'?Math.round(meta.uptime):null);
+
+  el.innerHTML=`
+    <div class="head">
+      <div>
+        <div>
+          <span class="addr">${esc(ip)}:${port}</span>
+          <span class="caps">${(dev||ver)?' • ':''}${esc(dev)} ${esc(ver)}</span>
+        </div>
+        <div class="badges">
+          ${role?`<span class="badge">${esc(role)}</span>`:''}
+          ${capsArr.length?`<span class="badge ok">caps: ${capsArr.length}</span>`:''}
+          ${load?`<span class="badge">load ${esc(load)}</span>`:''}
+          ${uptime!=null?`<span class="badge">uptime ${uptime}s</span>`:''}
+          ${meta && meta.corsBlocked?`<span class="badge">limited (no CORS)</span>`:''}
+        </div>
+      </div>
+      <div><button class="open">Open</button></div>
+    </div>
+    <div class="panel"><div class="loading">Loading UI (/)…</div><div class="content"></div></div>
+  `;
+
+  el.querySelector('.open').addEventListener('click', async ()=>{
+    const panel = el.querySelector('.panel');
+    const content = el.querySelector('.content');
+    panel.classList.toggle('visible');
+    if (!panel.dataset.loaded && panel.classList.contains('visible')){
+      // shrink scanner on first open
+      setCollapsed(true);
+      // embed device UI via iframe; works from file:// without reading response
+      content.innerHTML = `<iframe src="http://${ip}:${port}/" style="width:100%;height:60vh;border:0" referrerpolicy="no-referrer"></iframe>`;
+      panel.dataset.loaded="1";
+      el.querySelector('.loading')?.remove();
+    }
+  });
+
+  return el;
+}
+
+/* Progress heartbeat (lerped for uniform movement) */
+function startProgressLoop(){
+  const id = setInterval(()=>{
+    const target = total ? (done/total)*100 : 0;
+    displayPct += (target - displayPct) * 0.3;    // slightly snappier
+    const clamped = Math.max(0, Math.min(100, displayPct));
+    bar.style.width = clamped + '%';
+    pctEl.textContent = Math.round(clamped) + '%';
+    setCounts();
+    if (!isScanning && Math.abs(clamped-100) < 0.5){ clearInterval(id); }
+  }, 100);
+  return id;
+}
+
+/* Scan driver: a bit faster + uniform (concurrency 32, light jitter, single /health) */
+async function scan(subnet, port){
+  isScanning=true; setUI(true); list.innerHTML='';
+  setStatus(`Scanning ${subnet}.x …`);
+  done=0; found=0; total=254; displayPct=0; bar.style.width='0%'; pctEl.textContent='0%'; setCounts();
+
+  const queue = Array.from(ips(subnet));
+  const concurrency = 32;        // slightly faster but not bursty
+  const baseDelayMs = 10;        // light pacing
+  const jitterMs = 8;
+
+  const workers = [];
+  const progressId = startProgressLoop();
+
+  const work = async (k)=>{
+    await sleep(k * 10);  // stagger
+    for (let i=k; i<queue.length && isScanning; i+=concurrency){
+      const ip = queue[i];
+      await sleep(baseDelayMs + Math.random()*jitterMs);  // uniform pacing
+
+      const ok = await probeReachable(ip, port);
+      done++;
+      if (ok){
+        const card = makeCard(ip, port, {});
+        list.appendChild(card);
+        found++;
+
+        // best-effort enrichment via /caps (if CORS allowed). Non-blocking.
+        (async()=>{
+          const caps = await tryCaps(ip, port);
+          if (caps && !caps.corsBlocked){
+            const upgraded = makeCard(ip, port, caps);
+            card.replaceWith(upgraded);
+          } else {
+            const badge = document.createElement('span');
+            badge.className = 'badge';
+            badge.textContent = 'limited (no CORS)';
+            card.querySelector('.badges')?.appendChild(badge);
+          }
+        })();
+      }
+    }
+  };
+
+  for (let k=0; k<concurrency; k++) workers.push(work(k));
+  await Promise.all(workers).catch(()=>{ /* ignore */ });
+
+  displayPct = 100; bar.style.width = '100%'; pctEl.textContent = '100%';
+  setCounts();
+  setStatus(`Done. Found ${found} host(s).`);
+  isScanning=false; setUI(false);
+  // progress loop auto-stops
+}
+
+/* Events */
+scanBtn.addEventListener('click', ()=>{
+  if (isScanning){
+    // soft-cancel: stop scheduling more; in-flight fetches settle
+    isScanning=false; setStatus('Canceling…'); setUI(false); return;
+  }
+  const subnet=subnetEl.value.trim(); const port=parseInt(portEl.value.trim(),10)||8080;
+  if (!/^\d+\.\d+\.\d+$/.test(subnet)){ alert('Enter subnet like 192.168.2'); return; }
+  scan(subnet, port);
+});
+</script>
+</body>
+</html>
