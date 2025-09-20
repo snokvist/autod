@@ -1,0 +1,365 @@
+# Execution Plane Contract (v0.2)
+
+**Status:** Draft (ready for implementation)
+**Applies to:** HTTP daemon exec plane, node handler (`exec-handler.sh`)
+**Decision record:** `/control` removed; **all actions** go through `/exec` with paths under `/sys/...`.
+
+---
+
+## 1. Goals & Non‑Goals
+
+### Goals
+- Single, uniform command path for **all** actions: `/sys/<cap>/<command>`.
+- Keep daemon minimal; all feature logic lives in the **handler script**.
+- Cheap to parse on constrained nodes (argv-based, no JSON parsing in the handler).
+- Consistent, machine-readable outputs so WebUI and GUI render the **same** controls.
+
+### Non‑Goals
+- No long-running job framework. Handlers must finish within daemon timeout (default 5000 ms) or self-fork and return promptly.
+- No secondary control plane (`/control`)—removed.
+
+---
+
+## 2. Capability Discovery
+
+### 2.1 `/caps` (unchanged, hint list)
+The daemon serves a flat list of capabilities as a hint that the handler is expected to support paths beneath the same names.
+
+```json
+{
+  "device": "radxa2l",
+  "role": "wayfinder",
+  "version": "1.0.0",
+  "caps": ["exec","health","nodes","caps","udp_relay","video","vrx"],
+  "port": 55667,
+  "...": "..."
+}
+```
+
+### 2.2 Per-cap Help (machine-readable)
+UIs discover commands and build control surfaces by invoking:
+
+```
+POST /exec
+{"path": "/sys/<cap>/help", "args": []}
+```
+
+**Handler stdout** MUST be JSON with this shape:
+
+```jsonc
+{
+  "cap": "video",
+  "commands": [
+    {
+      "name": "start",
+      "args": []
+    },
+    {
+      "name": "stop",
+      "args": []
+    },
+    {
+      "name": "params",
+      "args": [
+        {
+          "key": "bitrate",
+          "type": "string",                 // "string" | "int" | "float" | "bool" | "enum"
+          "control": {                      // UI hint block
+            "kind": "range",                // "toggle" | "range" | "select" | "text"
+            "min": 500_000,                 // for range
+            "max": 10_000_000,              // for range
+            "step": 50_000,                 // for range
+            "unit": "bps"                   // optional display unit
+          },
+          "required": false,
+          "default": "4000000",
+          "description": "Target encoder bitrate"
+        },
+        {
+          "key": "gop",
+          "type": "int",
+          "control": {
+            "kind": "range",
+            "min": 1,
+            "max": 240,
+            "step": 1
+          },
+          "required": false,
+          "default": 30,
+          "description": "Group-of-pictures length (frames)"
+        },
+        {
+          "key": "profile",
+          "type": "enum",
+          "control": {
+            "kind": "select",
+            "options": ["baseline", "main", "high"],
+            "multi": false                  // when true, UI uses multi-select
+          },
+          "required": false,
+          "default": "high",
+          "description": "H.264 profile"
+        },
+        {
+          "key": "low_latency",
+          "type": "bool",
+          "control": { "kind": "toggle" },  // supports true/false/on/off/1/0, see §4.3
+          "required": false,
+          "default": false,
+          "description": "Enable low-latency mode"
+        }
+      ],
+      "description": "Update encoder parameters"
+    }
+  ]
+}
+```
+
+**Notes**
+- `control` is a **hint** for UI builders; the handler is the source of truth.
+- `type: "enum"` implies `control.kind: "select"`; include `options` and optional `multi`.
+- `toggle` implies boolean semantics; UI may render a switch. See normalization rules in §4.3.
+
+---
+
+## 3. Command Invocation
+
+### 3.1 Endpoint
+```
+POST /exec
+Content-Type: application/json
+```
+
+### 3.2 Request (canonical)
+```json
+{
+  "path": "/sys/<cap>/<command>",
+  "args": ["pos1", "pos2", "key=value", "--flag"]
+}
+```
+
+- **`path`** MUST start with `/sys/` and include `<cap>/<command>`.
+- **`args`** is an array of strings passed as-is to the handler as argv after the path.
+- Conventions (not enforced):
+  - Positional subverbs: e.g., `["restart"]`
+  - Named values: `key=value` tokens, e.g., `["bitrate=4000000","gop=30"]`
+  - Flags: `--flag` (presence-only)
+
+### 3.3 Response (always 200 on executed attempt)
+If the handler was invoked and returned (even with nonzero exit code), the daemon returns HTTP **200** with:
+
+```json
+{
+  "rc": 0,
+  "elapsed_ms": 23,
+  "stdout": "string (may be empty)",
+  "stderr": "string (may be empty)"
+}
+```
+
+- **`rc`** is the handler’s **exit code**.
+- **`elapsed_ms`** is measured by the daemon.
+- For network/daemon validation errors (bad JSON, missing fields, path not allowed), return **4xx/5xx** with an error object; handler not invoked.
+
+### 3.4 Timeouts
+- Daemon enforces a hard timeout (default **5000 ms**).
+- On timeout, the daemon aborts the process group, returns HTTP 200 with a nonzero `rc` (e.g., `124`) and `stderr` containing `"timeout"`.
+- Handlers that need longer work must self-fork, quickly print an “accepted” message to stdout, and exit `0`.
+
+---
+
+## 4. Argument Semantics & Normalization
+
+### 4.1 Accepted forms
+- **Positional:** `"args": ["host.example.com"]` → `/sys/ping <host>`
+- **Key/Value:** `"args": ["gop=30","bitrate=4000000"]`
+- **Flags:** `"args": ["--force"]`
+
+### 4.2 Parsing contract (handler-side)
+- The handler MUST treat each arg as a raw string token.
+- For `key=value`, split on the **first** `=` only.
+- Unknown keys SHOULD produce a nonzero `rc` with a helpful `stderr` message.
+- Missing required keys SHOULD produce `rc!=0` with `stderr` listing missing keys.
+
+### 4.3 Boolean normalization (UI ⇄ handler)
+Handlers MUST accept the following for **true**: `true`, `on`, `1`, `yes` (any case).
+Handlers MUST accept the following for **false**: `false`, `off`, `0`, `no` (any case).
+UI MAY send canonical lowercase (`true`/`false`).
+
+### 4.4 Numeric units
+Handlers MAY accept unit suffixes and normalize internally. Recommended canonical set:
+- Bitrate: `k` (1000), `M` (1_000_000), `G` (1_000_000_000) or explicit `bps`.
+- Time: `ms`, `s`.
+If unsupported, handler MUST clearly reject with `rc!=0` and message.
+
+---
+
+## 5. Help Schema (formal)
+
+```jsonc
+{
+  "cap": "<string>",                          // e.g., "video"
+  "commands": [
+    {
+      "name": "<string>",                     // e.g., "params"
+      "description": "<string>",              // short human description
+      "args": [
+        {
+          "key": "<string>",                  // e.g., "bitrate"
+          "type": "string|int|float|bool|enum",
+          "required": false,                  // default false
+          "default": "<any>",                 // optional
+          "description": "<string>",
+          "control": {
+            "kind": "toggle|range|select|text",
+            "min": <number>,                  // range only
+            "max": <number>,                  // range only
+            "step": <number>,                 // range only
+            "unit": "<string>",               // optional display hint
+            "options": ["<string>", "..."],   // select only (for enum)
+            "multi": false                    // select only
+          }
+        }
+      ]
+    }
+  ]
+}
+```
+
+**Validation rules**
+- If `type=="enum"`, `control.kind` SHOULD be `"select"` and `options` MUST be provided.
+- If `control.kind=="range"`, `min`, `max`, `step` MUST be present.
+- If `type=="bool"`, `control.kind` SHOULD be `"toggle"`.
+
+---
+
+## 6. Examples
+
+### 6.1 Start video
+```
+POST /exec
+{"path":"/sys/video/start","args":[]}
+→ 200
+{"rc":0,"elapsed_ms":12,"stdout":"starting...","stderr":""}
+```
+
+### 6.2 Update params (range + enum + toggle)
+```
+POST /exec
+{"path":"/sys/video/params","args":["bitrate=4000000","gop=30","profile=high","low_latency=true"]}
+→ 200
+{"rc":0,"elapsed_ms":18,"stdout":"ok","stderr":""}
+```
+
+### 6.3 Discover UI controls
+```
+POST /exec
+{"path":"/sys/video/help","args":[]}
+→ 200
+{"rc":0,"elapsed_ms":2,"stdout":"{...JSON as in §2.2...}","stderr":""}
+```
+
+### 6.4 Ping (positional)
+```
+POST /exec
+{"path":"/sys/ping","args":["8.8.8.8"]}
+→ 200
+{"rc":0,"elapsed_ms":37,"stdout":"64 bytes from 8.8.8.8 ...","stderr":""}
+```
+
+---
+
+## 7. Exit Codes (recommended)
+
+- `0` — Success
+- `2` — Usage/validation error (unknown key, missing required, invalid value)
+- `3` — Unsupported platform/state (cap present but command not available now)
+- `4` — Resource/file not found
+- `124` — Timeout reached (also used by daemon on kill)
+- `>128` — Signal termination (OS-level failure)
+
+Handlers SHOULD print human-friendly error messages to **stderr**.
+
+---
+
+## 8. Security Considerations
+
+- Keep the handler’s PATH minimal and commands whitelisted.
+- Validate and sanitize any values used in shell ops (quote expansion, globbing).
+- Consider restricting `path` to a known allowlist (`/sys/<cap>/<command>` tuples) in the daemon configuration if available.
+- Hide secrets in environment; never echo them to stdout/stderr.
+
+---
+
+## 9. Versioning & Compatibility
+
+- This document is **v0.2**. Include `"contract_version": "0.2"` inside `/sys/<cap>/help` if desired.
+- Additive changes (new caps/commands/keys) SHOULD preserve existing behavior.
+- Breaking changes (key renames, semantics) MUST bump the contract version.
+
+---
+
+## 10. Implementation Checklist (Handler)
+
+- [ ] Route `/sys/<cap>/<command>` in a `case` statement.
+- [ ] Provide `/sys/<cap>/help` JSON with `control` hints (toggle|range|select|text).
+- [ ] Parse `key=value`, positional, and `--flag` args.
+- [ ] Normalize booleans (§4.3) and units where applicable (§4.4).
+- [ ] Enforce required keys; error clearly on unknown keys.
+- [ ] Exit with meaningful `rc`; write JSON (for help) on **stdout**, errors on **stderr**.
+- [ ] Complete within timeout or self-fork and return immediately.
+
+---
+
+## 11. Minimal Handler Snippet (reference)
+
+```sh
+#!/bin/sh
+die(){ echo "$*" 1>&2; exit 2; }
+
+case "$1" in
+  /sys/video/start)   shift; video-ctl start "$@";;
+
+  /sys/video/params)
+    shift
+    bitrate= gop= profile= low_latency=
+    for kv in "$@"; do
+      case "$kv" in
+        bitrate=*)     bitrate="${kv#*=}" ;;
+        gop=*)         gop="${kv#*=}" ;;
+        profile=*)     profile="${kv#*=}" ;;
+        low_latency=*) case "$(echo "${kv#*=}" | tr A-Z a-z)" in
+                         1|true|on|yes) low_latency=1 ;;
+                         0|false|off|no) low_latency=0 ;;
+                         *) die "invalid bool: low_latency=${kv#*=}" ;;
+                       esac ;;
+        *)             die "unknown param: $kv" ;;
+      esac
+    done
+    # apply values if set ...
+    [ -n "$bitrate" ]     && video-ctl set-bitrate "$bitrate"
+    [ -n "$gop" ]         && video-ctl set-gop "$gop"
+    [ -n "$profile" ]     && video-ctl set-profile "$profile"
+    [ -n "$low_latency" ] && video-ctl set-low-latency "$low_latency"
+    echo "ok"
+    ;;
+
+  /sys/video/help)
+    cat <<'JSON'
+{"cap":"video","commands":[
+  {"name":"start","args":[]},
+  {"name":"params","args":[
+    {"key":"bitrate","type":"int","control":{"kind":"range","min":500000,"max":10000000,"step":50000,"unit":"bps"},"required":false,"default":4000000,"description":"Target encoder bitrate"},
+    {"key":"gop","type":"int","control":{"kind":"range","min":1,"max":240,"step":1},"required":false,"default":30,"description":"GOP length in frames"},
+    {"key":"profile","type":"enum","control":{"kind":"select","options":["baseline","main","high"],"multi":false},"required":false,"default":"high","description":"H.264 profile"},
+    {"key":"low_latency","type":"bool","control":{"kind":"toggle"},"required":false,"default":false,"description":"Enable low-latency mode"}
+  ],"description":"Update encoder parameters"}
+]}
+JSON
+    ;;
+
+  /sys/ping) shift; ping -c1 -W1 "$1" 2>&1 ;;
+
+  *) echo "unknown path: $1" 1>&2; exit 2;;
+esac
+```

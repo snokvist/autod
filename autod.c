@@ -47,6 +47,23 @@ strip autod
 static volatile sig_atomic_t g_stop=0;
 static void on_signal(int s){ (void)s; g_stop=1; }
 
+/* helper */
+static inline void set_num2(JSON_Object *o, const char *key, double x) {
+    char buf[32];
+    /* true rounding to 2 decimals, then print exactly 2 decimals */
+    long long q = (long long)(x * 100.0 + (x >= 0 ? 0.5 : -0.5));
+    snprintf(buf, sizeof(buf), "%.2f", q / 100.0);
+    json_object_set_string(o, key, buf);
+}
+
+static inline void arr_append_num2(JSON_Array *a, double x) {
+    char buf[32];
+    long long q = (long long)(x * 100.0 + (x >= 0 ? 0.5 : -0.5));
+    snprintf(buf, sizeof(buf), "%.2f", q / 100.0);
+    json_array_append_string(a, buf);
+}
+
+
 
 /* ----------------------- Config (no auth) ----------------------- */
 typedef struct {
@@ -204,9 +221,34 @@ static inline long long now_ms(void) {
 }
 
 static void json_add_runtime(JSON_Object *o) {
-    FILE *f=fopen("/proc/uptime","r"); if(f){ double up=0; if(fscanf(f,"%lf",&up)==1) json_object_set_number(o,"uptime_s",up); fclose(f); }
-    f=fopen("/proc/loadavg","r"); if(f){ double a,b,c; if(fscanf(f,"%lf %lf %lf",&a,&b,&c)==3){ JSON_Value *arr=json_value_init_array(); JSON_Array *ar=json_array(arr); json_array_append_number(ar,a); json_array_append_number(ar,b); json_array_append_number(ar,c); json_object_set_value(o,"loadavg",arr);} fclose(f);}
-    f=fopen("/proc/meminfo","r"); if(f){ char k[64]; long v; while(fscanf(f,"%63[^:]: %ld kB\n",k,&v)==2){ if(!strcmp(k,"MemFree")) json_object_set_number(o,"memfree_kb",v); if(!strcmp(k,"MemAvailable")) json_object_set_number(o,"memavail_kb",v);} fclose(f); }
+    FILE *f=fopen("/proc/uptime","r");
+    if(f){
+        double up=0;
+        if (fscanf(f, "%lf", &up) == 1) set_num2(o, "uptime_s", up);
+        fclose(f);
+    }
+    f=fopen("/proc/loadavg","r");
+    if(f){
+        double a,b,c;
+        if(fscanf(f,"%lf %lf %lf",&a,&b,&c)==3){
+            JSON_Value *arr = json_value_init_array();
+            JSON_Array *ar = json_array(arr);
+            arr_append_num2(ar, a);
+            arr_append_num2(ar, b);
+            arr_append_num2(ar, c);
+            json_object_set_value(o, "loadavg", arr);
+        }
+        fclose(f);
+    }
+    f=fopen("/proc/meminfo","r");
+    if(f){
+        char k[64]; long v;
+        while(fscanf(f,"%63[^:]: %ld kB\n",k,&v)==2){
+            if(!strcmp(k,"MemFree"))     json_object_set_number(o,"memfree_kb",(double)v);
+            if(!strcmp(k,"MemAvailable"))json_object_set_number(o,"memavail_kb",(double)v);
+        }
+        fclose(f);
+    }
     json_object_set_number(o,"ts_unix",(double)time(NULL));
 }
 
@@ -516,47 +558,6 @@ static int h_exec(struct mg_connection *c, void *ud){
         send_json(c, resp, 500, 1);
     }
     json_value_free(resp); json_value_free(root); return 1;
-}
-
-static int h_control(struct mg_connection *c, void *ud){
-    app_t *app=(app_t*)ud;
-    upload_t u={0};
-    if (read_body(c, &u) != 0) return 0;
-    JSON_Value *root=json_parse_string(u.body?u.body:"{}");
-    free(u.body);
-
-    JSON_Object *o=root?json_object(root):NULL;
-    const char *key=o?json_object_get_string(o,"key"):NULL;
-    JSON_Value *valv=o?json_object_get_value(o,"value"):NULL;
-
-    JSON_Value *resp=json_value_init_object(); JSON_Object *or=json_object(resp);
-    if(key && valv){
-        char *sv=json_serialize_to_string(valv);
-        JSON_Value *argsv=json_value_init_array(); JSON_Array *args=json_array(argsv);
-        json_array_append_string(args,key); json_array_append_string(args, sv?sv:"");
-        if(sv) json_free_serialized_string(sv);
-
-        int rc=0; long long elapsed=0; char *out=NULL,*err=NULL;
-        int r=run_exec(&app->cfg, "/control", args, app->cfg.exec_timeout_ms, app->cfg.max_output_bytes, &rc,&elapsed,&out,&err);
-        if(r==0){
-            json_object_set_number(or,"rc",rc);
-            json_object_set_number(or,"elapsed_ms",(double)elapsed);
-            json_object_set_string(or,"stdout", out?out:"");
-            json_object_set_string(or,"stderr", err?err:"");
-            free(out); free(err);
-            send_json(c, resp, 200, 1);
-        } else {
-            json_object_set_string(or,"error","exec_failed");
-            send_json(c, resp, 500, 1);
-        }
-        json_value_free(argsv);
-    } else {
-        json_object_set_string(or,"error","missing_key_or_value");
-        send_json(c, resp, 400, 1);
-    }
-    if(root) json_value_free(root);
-    json_value_free(resp);
-    return 1;
 }
 
 /* ----------------------- Tiny HTTP client for scanner ----------------------- */
@@ -936,10 +937,15 @@ static void gui_fill_snapshot(autod_gui_snapshot_t *s, void *user) {
 /* ----------------------- main ----------------------- */
 
 int main(int argc, char **argv){
+ #ifdef USE_SDL2_GUI
 int want_gui = 0;
+#endif
+
 const char *cfgpath = "./autod.conf";
 for (int i=1; i<argc; i++) {
+     #ifdef USE_SDL2_GUI
     if (!strcmp(argv[i], "--gui")) { want_gui = 1; continue; }
+    #endif
     /* first non-flag becomes cfg path */
     if (argv[i][0] != '-') { cfgpath = argv[i]; }
 }
@@ -974,7 +980,6 @@ signal(SIGTERM, on_signal);
     mg_set_request_handler(app.ctx, "/health",  h_health,  &app);
     mg_set_request_handler(app.ctx, "/caps",    h_caps,    &app);
     mg_set_request_handler(app.ctx, "/exec",    h_exec,    &app);
-    mg_set_request_handler(app.ctx, "/control", h_control, &app);
     mg_set_request_handler(app.ctx, "/nodes",   h_nodes,   &app);
     mg_set_request_handler(app.ctx, "/",        h_root,    &app);
 
