@@ -1,15 +1,18 @@
 /*
 autod.c — lightweight HTTP control plane (CivetWeb, NO AUTH), with optional LAN scanner
 
-Build example (IPv4, no TLS/CGI/file-server):
-    gcc -Os -std=c11 -Wall -Wextra -DNO_SSL -DNO_CGI -DNO_FILES \
-        autod.c parson.c civetweb.c -o autod -pthread
-    strip autod
+With GUI
+gcc -Os -std=c11 -Wall -Wextra -DNO_SSL -DNO_CGI -DNO_FILES -DUSE_SDL2_GUI -DUSE_SDL2_TTF \
+    autod.c parson.c civetweb.c autod_gui_sdl.c \
+    -o autod -pthread \
+    `pkg-config --libs --cflags sdl2` `pkg-config --libs --cflags SDL2_ttf`
+strip autod
 
-Deps next to this file:
-    parson.c / parson.h
-    civetweb.c / civetweb.h
-    md5.inl match.inl response.inl handle_form.inl openssl_dl.inl (from CivetWeb)
+No GUI compile
+gcc -Os -std=c11 -Wall -Wextra -DNO_SSL -DNO_CGI -DNO_FILES \
+    autod.c parson.c civetweb.c -o autod -pthread
+strip autod
+
 */
 
 #define _POSIX_C_SOURCE 200809L
@@ -34,36 +37,12 @@ Deps next to this file:
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <pthread.h>
-
 #include "civetweb.h"
 #include "parson.h"
 
-
 #ifdef USE_SDL2_GUI
-#include <SDL2/SDL.h>
-
-#ifdef USE_SDL2_GUI
-#ifdef USE_SDL2_TTF
-#include <SDL_ttf.h>
-static TTF_Font *g_font = NULL;  // <-- file-scope, shared with draw_text()
+#include "autod_gui.h"
 #endif
-
-static void draw_text(SDL_Renderer *R, int x, int y, const char *s) {
-    if (!g_font || !s || !*s) return;
-    SDL_Color col = {255,255,255,255};
-    SDL_Surface *surf = TTF_RenderUTF8_Blended(g_font, s, col);
-    if (!surf) return;
-    SDL_Texture *tex = SDL_CreateTextureFromSurface(R, surf);
-    if (tex) {
-        SDL_Rect dst = {x, y, surf->w, surf->h};
-        SDL_RenderCopy(R, tex, NULL, &dst);
-        SDL_DestroyTexture(tex);
-    }
-    SDL_FreeSurface(surf);
-}
-#endif
-#endif
-
 
 static volatile sig_atomic_t g_stop=0;
 static void on_signal(int s){ (void)s; g_stop=1; }
@@ -218,11 +197,6 @@ static void substitute_ip_placeholder(struct mg_connection *c,
         return;
     }
 }
-
-
-
-
-
 
 static inline long long now_ms(void) {
     struct timespec ts; clock_gettime(CLOCK_MONOTONIC,&ts);
@@ -858,31 +832,6 @@ static void start_scan_async(config_t *cfg) {
 }
 
 
-#ifdef USE_SDL2_GUI
-typedef struct {
-    int count;
-    node_info_t nodes[64]; /* cap what we draw */
-    int scanning;
-    unsigned targets, done;
-    int progress_pct;      /* integer 0..100, stable */
-} gui_snapshot_t;
-
-/* reuse your progress_pct() already defined above */
-static void take_gui_snapshot(gui_snapshot_t *s) {
-    pthread_mutex_lock(&g_nodes_mx);
-    int n = (g_nodes_count < 64) ? g_nodes_count : 64;
-    s->count = n;
-    for (int i=0; i<n; i++) s->nodes[i] = g_nodes[i];
-    pthread_mutex_unlock(&g_nodes_mx);
-
-    s->scanning = g_scan_in_progress ? 1 : 0;
-    s->targets  = g_scan_total;
-    s->done     = g_scan_done;
-    s->progress_pct = progress_pct();
-}
-#endif
-
-
 
 /* ----------------------- /nodes endpoint ----------------------- */
 static int h_nodes(struct mg_connection *c, void *ud){
@@ -958,193 +907,29 @@ static int h_nodes(struct mg_connection *c, void *ud){
     return 1;
 }
 
-
 #ifdef USE_SDL2_GUI
-static volatile int g_gui_should_quit = 0;
+/* ---- GUI snapshot adapter (no SDL deps) ---- */
+static inline int progress_pct(void); /* already declared above in your file */
 
-static int gui_thread_main(void *arg) {
-    config_t *cfg = (config_t*)arg;
+static void gui_fill_snapshot(autod_gui_snapshot_t *s, void *user) {
+    (void)user;
+    pthread_mutex_lock(&g_nodes_mx);
+    int n = (g_nodes_count < 64) ? g_nodes_count : 64;
+    s->count = n;
+    for (int i=0; i<n; i++) {
+        strncpy(s->nodes[i].ip,      g_nodes[i].ip,      sizeof(s->nodes[i].ip)-1);
+        strncpy(s->nodes[i].role,    g_nodes[i].role,    sizeof(s->nodes[i].role)-1);
+        strncpy(s->nodes[i].device,  g_nodes[i].device,  sizeof(s->nodes[i].device)-1);
+        strncpy(s->nodes[i].version, g_nodes[i].version, sizeof(s->nodes[i].version)-1);
+    }
+    pthread_mutex_unlock(&g_nodes_mx);
 
-    if (SDL_Init(SDL_INIT_VIDEO) != 0) return 0;
-
-    /* Hints to reduce whole-screen flashing with some X11 WMs */
-    SDL_SetHint(SDL_HINT_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR, "0");
-    SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0");
-
-#ifdef USE_SDL2_TTF
-if (TTF_Init() != 0) { SDL_Quit(); return 0; }
-const char *fallbacks[] = {
-    "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-    "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
-    NULL
-};
-for (int i=0; fallbacks[i]; i++) {
-    g_font = TTF_OpenFont(fallbacks[i], 14);
-    if (g_font) break;
+    s->scanning     = g_scan_in_progress ? 1 : 0;
+    s->targets      = g_scan_total;
+    s->done         = g_scan_done;
+    s->progress_pct = progress_pct();
 }
-if (!g_font) { TTF_Quit(); SDL_Quit(); return 0; }
-#endif
-
-    SDL_Window *W = SDL_CreateWindow("autod - nodes",
-        SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-        900, 600, SDL_WINDOW_SHOWN);
-    if (!W) {
-#ifdef USE_SDL2_TTF
-        TTF_Quit();
-#endif
-        SDL_Quit();
-        return 0;
-    }
-
-    SDL_Renderer *R = SDL_CreateRenderer(W, -1,
-        SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
-    if (!R) {
-        SDL_DestroyWindow(W);
-#ifdef USE_SDL2_TTF
-        TTF_Quit();
-#endif
-        SDL_Quit();
-        return 0;
-    }
-    SDL_RenderSetLogicalSize(R, 900, 600);
-
-    /* --- layout derived from font height --- */
-    int fh = 8; /* default for bitmap path */
-#ifdef USE_SDL2_TTF
-    fh = TTF_FontHeight(g_font);
-    if (fh < 8) fh = 8;
-#endif
-    const int pad      = 8;
-    const int header_h = 28;
-    const int status_y = header_h + pad;        /* “Scan:” line */
-    const int header_y = status_y + fh + pad;   /* column labels */
-    const int sep_y    = header_y + fh + 2;     /* separator line (below labels) */
-    const int row_y0   = sep_y + 12;            /* first row */
-    const int row_h    = fh + 8;                /* row spacing */
-
-    int sel = 0;                    /* selected row */
-    Uint32 last_snap = 0;
-    int trigger_enter = 0;          /* set by event, consumed after snapshot */
-
-    while (!g_gui_should_quit && !g_stop) {
-        /* 1) events */
-        SDL_Event e;
-        while (SDL_PollEvent(&e)) {
-            if (e.type == SDL_QUIT) { g_gui_should_quit = 1; break; }
-            if (e.type == SDL_KEYDOWN) {
-                switch (e.key.keysym.sym) {
-                    case SDLK_q:
-                    case SDLK_ESCAPE:
-                        g_gui_should_quit = 1;
-                        break;
-                    case SDLK_UP:
-                        if (sel > 0) sel--;
-                        break;
-                    case SDLK_DOWN:
-                        sel++;
-                        break;
-                    case SDLK_SPACE:
-                        if (cfg->enable_scan) start_scan_async(cfg);
-                        break;
-                    case SDLK_RETURN:
-                        trigger_enter = 1; /* handle after we have a fresh snapshot */
-                        break;
-                }
-            }
-        }
-
-        /* 2) snapshot current data (cheap, thread-safe) */
-        gui_snapshot_t s = {0};
-        Uint32 now = SDL_GetTicks();
-        if (now - last_snap > 200) { take_gui_snapshot(&s); last_snap = now; }
-        else { take_gui_snapshot(&s); }
-
-        if (sel >= s.count) sel = s.count ? (s.count - 1) : 0;
-        if (sel < 0) sel = 0;
-
-        /* act on Enter with the fresh snapshot */
-        if (trigger_enter) {
-            trigger_enter = 0;
-            if (sel < s.count) {
-                fprintf(stderr, "ENTER on %s (role=%s)\n",
-                        s.nodes[sel].ip,
-                        s.nodes[sel].role[0] ? s.nodes[sel].role : "-");
-                /* TODO: open details pane or fire /exec */
-            }
-        }
-
-        /* 3) draw */
-        SDL_SetRenderDrawColor(R, 18,22,26,255);
-        SDL_RenderClear(R);
-
-        /* header bar */
-        SDL_Rect hdr = {0,0,900,header_h};
-        SDL_SetRenderDrawColor(R, 32,38,44,255);
-        SDL_RenderFillRect(R, &hdr);
-        SDL_SetRenderDrawColor(R, 255,255,255,255);
-        draw_text(R, pad, 10, "autod — Nodes (Up/Down=Select, Space=Rescan, Q/Esc=Quit)");
-
-        /* status line */
-        char st[256];
-        const char *role   = (cfg->role[0]   ? cfg->role   : "-");
-        const char *device = (cfg->device[0] ? cfg->device : "-");
-        snprintf(st, sizeof(st),
-                 "Scan: %s  %u/%u  %d%%  |  Port:%d  Role:%.24s  Device:%.24s",
-                 s.scanning ? "RUNNING" : "idle",
-                 s.done, s.targets, s.progress_pct,
-                 cfg->port, role, device);
-        draw_text(R, pad, status_y, st);
-
-        /* table headers */
-        draw_text(R, pad,   header_y, "IP");
-        draw_text(R, 180,   header_y, "Role");
-        draw_text(R, 360,   header_y, "Device");
-        draw_text(R, 600,   header_y, "Version");
-
-        /* separator line (NOW below the labels) */
-        SDL_SetRenderDrawColor(R, 80,80,80,255);
-        SDL_RenderDrawLine(R, pad, sep_y, 892, sep_y);
-
-        /* rows */
-        int y = row_y0;
-        for (int i=0; i<s.count && i<64; i++, y += row_h) {
-            if (i == sel) {
-                SDL_Rect hi = {pad-2, y-2, 888, fh+6};
-                SDL_SetRenderDrawColor(R, 24,28,34,255);
-                SDL_RenderFillRect(R, &hi);
-            }
-            SDL_SetRenderDrawColor(R, 255,255,255,255);
-            draw_text(R, pad,  y, s.nodes[i].ip);
-            draw_text(R, 180,  y, s.nodes[i].role[0]?s.nodes[i].role:"-");
-            draw_text(R, 360,  y, s.nodes[i].device[0]?s.nodes[i].device:"-");
-            draw_text(R, 600,  y, s.nodes[i].version[0]?s.nodes[i].version:"-");
-        }
-
-        /* progress bar */
-        SDL_Rect bar = {pad, 560, 884, 12};
-        SDL_SetRenderDrawColor(R, 32,38,44,255);
-        SDL_RenderFillRect(R, &bar);
-        SDL_SetRenderDrawColor(R, 54,194,117,255);
-        int w = (s.progress_pct * bar.w) / 100;
-        SDL_Rect fill = {bar.x, bar.y, w, bar.h};
-        SDL_RenderFillRect(R, &fill);
-
-        SDL_RenderPresent(R);
-        /* no SDL_Delay — vsync paces us */
-    }
-
-    SDL_DestroyRenderer(R);
-    SDL_DestroyWindow(W);
-
-#ifdef USE_SDL2_TTF
-if (g_font) { TTF_CloseFont(g_font); g_font = NULL; }
-TTF_Quit();
-#endif
-SDL_Quit();
-    return 0;
-}
-#endif
+#endif /* USE_SDL2_GUI */
 
 
 
@@ -1158,11 +943,15 @@ for (int i=1; i<argc; i++) {
     /* first non-flag becomes cfg path */
     if (argv[i][0] != '-') { cfgpath = argv[i]; }
 }
-app_t app; cfg_defaults(&app.cfg);
-if (parse_ini(cfgpath, &app.cfg) < 0)
-    fprintf(stderr, "WARN: could not read %s, using defaults\n", cfgpath);
+app_t app;
+cfg_defaults(&app.cfg);
 
-    signal(SIGINT,on_signal); signal(SIGTERM,on_signal);
+if (parse_ini(cfgpath, &app.cfg) < 0) {
+    fprintf(stderr, "WARN: could not read %s, using defaults\n", cfgpath);
+}
+
+signal(SIGINT, on_signal);
+signal(SIGTERM, on_signal);
 
     /* CivetWeb options */
     char portbuf[16]; snprintf(portbuf, sizeof(portbuf), "%d", app.cfg.port);
@@ -1195,14 +984,15 @@ if (parse_ini(cfgpath, &app.cfg) < 0)
     fprintf(stderr,"autod listening on %s:%d (scan %s)\n",
             app.cfg.bind_addr, app.cfg.port, app.cfg.enable_scan?"ENABLED":"disabled");
 
-
-#ifdef USE_SDL2_GUI
-if (want_gui) {
-    SDL_Thread *th = SDL_CreateThread(gui_thread_main, "autod_gui", &app.cfg);
-    (void)th;
-}
-#endif
-
+    #ifdef USE_SDL2_GUI
+    if (want_gui) {
+        autod_gui_config_t gcfg = {0};
+        gcfg.port = app.cfg.port;
+        if (app.cfg.role[0])   strncpy(gcfg.role,   app.cfg.role,   sizeof(gcfg.role)-1);
+        if (app.cfg.device[0]) strncpy(gcfg.device, app.cfg.device, sizeof(gcfg.device)-1);
+        (void)autod_gui_start(&gcfg, gui_fill_snapshot, NULL);
+    }
+    #endif
 
     /* Seed cache (self) always; kickoff scan only if enabled */
     add_self_nodes(&app.cfg);
