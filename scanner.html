@@ -134,7 +134,7 @@
           </div>
           <div class="field">
             <div class="label">Port</div>
-            <input id="port" value="8080" inputmode="numeric" pattern="[0-9]*" placeholder="8080" />
+            <input id="port" value="55667" inputmode="numeric" pattern="[0-9]*" placeholder="55667" />
           </div>
         </div>
         <div class="actions">
@@ -332,7 +332,7 @@ scanBtn.addEventListener('click', ()=>{
     // soft-cancel: stop scheduling more; in-flight fetches settle
     isScanning=false; setStatus('Canceling…'); setUI(false); return;
   }
-  const subnet=subnetEl.value.trim(); const port=parseInt(portEl.value.trim(),10)||8080;
+  const subnet=subnetEl.value.trim(); const port=parseInt(portEl.value.trim(),10)||55667;
   if (!/^\d+\.\d+\.\d+$/.test(subnet)){ alert('Enter subnet like 192.168.2'); return; }
   scan(subnet, port);
 });
