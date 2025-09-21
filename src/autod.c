@@ -396,9 +396,25 @@ fail_before_fork:
 
 /* ----------------------- CivetWeb helpers ----------------------- */
 
+static const char *reason_phrase_for_status(int code) {
+    switch (code) {
+    case 200: return "OK";
+    case 202: return "Accepted";
+    case 400: return "Bad Request";
+    case 404: return "Not Found";
+    case 500: return "Internal Server Error";
+    default:  return NULL;
+    }
+}
+
 static void add_common_headers(struct mg_connection *c, int code, const char *ctype,
                                size_t clen, int cors_public) {
-    mg_printf(c, "HTTP/1.1 %d OK\r\n", code);
+    const char *reason = reason_phrase_for_status(code);
+    if (reason) {
+        mg_printf(c, "HTTP/1.1 %d %s\r\n", code, reason);
+    } else {
+        mg_printf(c, "HTTP/1.1 %d\r\n", code);
+    }
     mg_printf(c, "Content-Type: %s\r\n", ctype ? ctype : "application/octet-stream");
     mg_printf(c, "Content-Length: %zu\r\n", clen);
     if (cors_public) {
