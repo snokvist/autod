@@ -160,6 +160,7 @@ If the handler was invoked and returned (even with nonzero exit code), the daemo
 - **`rc`** is the handler’s **exit code**.
 - **`elapsed_ms`** is measured by the daemon.
 - For network/daemon validation errors (bad JSON, missing fields, path not allowed), return **4xx/5xx** with an error object; handler not invoked.
+- Oversized request bodies (>256 KiB) are rejected before the handler runs with HTTP **413** and `{ "error": "body_too_large" }`.  Manual repro: `dd if=/dev/zero bs=1k count=300 | curl -XPOST --data-binary @- http://<host>:<port>/exec`.
 
 ### 3.4 Timeouts
 - Daemon enforces a hard timeout (default **5000 ms**).
