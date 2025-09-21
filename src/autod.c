@@ -257,17 +257,27 @@ static void json_add_ifaddrs(JSON_Object *o) {
 /* ----------------------- Exec runner ----------------------- */
 typedef struct { char *body; size_t len; } upload_t;
 
+static void close_pipe_pair(int pipefd[2]) {
+    if (pipefd[0] >= 0) { close(pipefd[0]); pipefd[0] = -1; }
+    if (pipefd[1] >= 0) { close(pipefd[1]); pipefd[1] = -1; }
+}
+
 static int run_exec(const config_t *cfg, const char *path, JSON_Array *args,
                     int timeout_ms, int max_bytes,
                     int *rc_out, long long *elapsed_ms,
                     char **out_stdout, char **out_stderr)
 {
-    int out_pipe[2], err_pipe[2];
-    if (pipe(out_pipe) < 0 || pipe(err_pipe) < 0) return -1;
+    int out_pipe[2] = { -1, -1 }, err_pipe[2] = { -1, -1 };
+    char *buf_out = NULL, *buf_err = NULL;
+    pid_t pid = -1;
+    long long t0 = 0;
 
-    long long t0 = now_ms();
-    pid_t pid = fork();
-    if (pid < 0) return -1;
+    if (pipe(out_pipe) < 0) goto fail_before_fork;
+    if (pipe(err_pipe) < 0) goto fail_before_fork;
+
+    t0 = now_ms();
+    pid = fork();
+    if (pid < 0) goto fail_before_fork;
 
     if (pid == 0) {
         dup2(out_pipe[1], STDOUT_FILENO);
@@ -289,10 +299,11 @@ static int run_exec(const config_t *cfg, const char *path, JSON_Array *args,
     }
 
     /* parent */
-    close(out_pipe[1]); close(err_pipe[1]);
-    char *buf_out = malloc(max_bytes + 1);
-    char *buf_err = malloc(max_bytes + 1);
-    if (!buf_out || !buf_err) { if (buf_out) free(buf_out); if (buf_err) free(buf_err); return -1; }
+    close(out_pipe[1]); out_pipe[1] = -1;
+    close(err_pipe[1]); err_pipe[1] = -1;
+    buf_out = malloc(max_bytes + 1);
+    buf_err = malloc(max_bytes + 1);
+    if (!buf_out || !buf_err) goto fail_after_fork;
     int wout = 0, werr = 0;
 
     struct pollfd pfds[2] = {
@@ -338,7 +349,8 @@ static int run_exec(const config_t *cfg, const char *path, JSON_Array *args,
         remain = timeout_ms - (int)(t - t0);
     }
 
-    close(out_pipe[0]); close(err_pipe[0]);
+    close_pipe_pair(out_pipe);
+    close_pipe_pair(err_pipe);
 
     int rc = 0;
     if (!child_done) {
@@ -364,6 +376,22 @@ static int run_exec(const config_t *cfg, const char *path, JSON_Array *args,
     *out_stdout = buf_out;
     *out_stderr = buf_err;
     return 0;
+
+fail_after_fork:
+    if (buf_out) { free(buf_out); buf_out = NULL; }
+    if (buf_err) { free(buf_err); buf_err = NULL; }
+    close_pipe_pair(out_pipe);
+    close_pipe_pair(err_pipe);
+    if (pid > 0) {
+        kill(pid, SIGKILL);
+        while (waitpid(pid, NULL, 0) < 0 && errno == EINTR) {}
+    }
+    return -1;
+
+fail_before_fork:
+    close_pipe_pair(out_pipe);
+    close_pipe_pair(err_pipe);
+    return -1;
 }
 
 /* ----------------------- CivetWeb helpers ----------------------- */
