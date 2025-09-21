@@ -257,6 +257,8 @@ static void json_add_ifaddrs(JSON_Object *o) {
 /* ----------------------- Exec runner ----------------------- */
 typedef struct { char *body; size_t len; } upload_t;
 
+enum { MAX_BODY_BYTES = 262144 }; /* 256 KiB guard */
+
 static void close_pipe_pair(int pipefd[2]) {
     if (pipefd[0] >= 0) { close(pipefd[0]); pipefd[0] = -1; }
     if (pipefd[1] >= 0) { close(pipefd[1]); pipefd[1] = -1; }
@@ -421,14 +423,13 @@ static void add_cors_options(struct mg_connection *c) {
 }
 
 static int read_body(struct mg_connection *c, upload_t *u) {
-    const size_t MAX_BODY = 262144; /* 256 KiB guard */
     u->body = NULL;
     u->len  = 0;
 
     const char *cl = mg_get_header(c, "Content-Length");
     size_t need = cl ? (size_t)strtoul(cl, NULL, 10) : 0;
     if (need == 0) return 0;
-    if (need > MAX_BODY) return -1;
+    if (need > MAX_BODY_BYTES) return -1;
 
     char *buf = (char*)malloc(need + 1);
     if (!buf) return -1;
@@ -552,7 +553,25 @@ static int h_caps(struct mg_connection *c, void *ud){
 static int h_exec(struct mg_connection *c, void *ud){
     app_t *app=(app_t*)ud;
     upload_t u={0};
-    if (read_body(c, &u) != 0) return 0;
+    int rb = read_body(c, &u);
+    if (rb != 0) {
+        if (u.body) { free(u.body); u.body = NULL; }
+        JSON_Value *v=json_value_init_object(); JSON_Object *o=json_object(v);
+        int status = 400;
+        const char *err = "body_read_failed";
+        const char *cl = mg_get_header(c, "Content-Length");
+        if (cl && *cl) {
+            size_t need = (size_t)strtoul(cl, NULL, 10);
+            if (need > (size_t)MAX_BODY_BYTES) {
+                status = 413;
+                err = "body_too_large";
+            }
+        }
+        json_object_set_string(o,"error",err);
+        send_json(c, v, status, 1);
+        json_value_free(v);
+        return 1;
+    }
     JSON_Value *root=json_parse_string(u.body?u.body:"{}");
     free(u.body);
     if(!root){
