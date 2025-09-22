@@ -397,6 +397,11 @@ static struct http_conn* hc_get(int fd){
     for (int i=0;i<MAX_HTTP_CONN;i++) if (HC[i].fd==0){
         HC[i].fd=fd; HC[i].cap=4096; HC[i].len=0; HC[i].need=0; HC[i].have_hdr=0;
         HC[i].buf=malloc(HC[i].cap);
+        if (!HC[i].buf){
+            HC[i].fd=0; HC[i].cap=HC[i].len=HC[i].need=HC[i].have_hdr=0;
+            return NULL;
+        }
+        HC[i].buf[0]='\0';
         return &HC[i];
     }
     return NULL;
@@ -658,17 +663,85 @@ static void http_handle_get_config(int fd){
 }
 
 static void http_handle_post_config(int fd, const char *body, size_t len){
-    if (save_file_atomic(CFG_TMP_PATH, CFG_PATH, body, len)!=0){
-        http_send(fd,"HTTP/1.0 500 Internal Server Error\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\npersist failed\n");
+    struct config newc;
+    char *dup = strndup(body, len);
+    if (!dup){
+        http_send(fd,"HTTP/1.0 500 Internal Server Error\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\noom\n");
         return;
     }
-    struct config newc;
-    if (load_ini_text(body, &newc)!=0){
+    if (load_ini_text(dup, &newc)!=0){
+        free(dup);
         http_send(fd,"HTTP/1.0 400 Bad Request\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nbad ini\n");
         return;
     }
+    free(dup);
+
+    if (newc.bufsz <= 0) newc.bufsz = 9000;
+
+    struct config oldc = G;
+    int need_http = strcmp(newc.http_bind, oldc.http_bind) || newc.control_port != oldc.control_port;
+    int new_http_fd = -1;
+
+    if (need_http){
+        new_http_fd = http_listen(newc.http_bind, newc.control_port);
+        if (new_http_fd < 0){
+            http_send(fd,"HTTP/1.0 500 Internal Server Error\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nhttp listen failed\n");
+            return;
+        }
+    }
+
+    char *new_udp = malloc((size_t)newc.bufsz);
+    if (!new_udp){
+        if (new_http_fd >= 0) close(new_http_fd);
+        http_send(fd,"HTTP/1.0 500 Internal Server Error\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\noom\n");
+        return;
+    }
+
+    if (apply_config_relays(&newc)!=0){
+        if (apply_config_relays(&oldc)!=0){
+            fprintf(stderr,"Failed to restore previous relay config after error\n");
+        }
+        free(new_udp);
+        if (new_http_fd >= 0) close(new_http_fd);
+        http_send(fd,"HTTP/1.0 400 Bad Request\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nno valid binds\n");
+        return;
+    }
+
+    if (need_http){
+        struct epoll_event ev={.events=EPOLLIN, .data.fd=new_http_fd};
+        if (epoll_ctl(EPFD, EPOLL_CTL_ADD, new_http_fd, &ev)<0){
+            perror("epoll_ctl add http");
+            if (apply_config_relays(&oldc)!=0){
+                fprintf(stderr,"Failed to restore previous relay config after error\n");
+            }
+            free(new_udp);
+            close(new_http_fd);
+            http_send(fd,"HTTP/1.0 500 Internal Server Error\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nhttp listen failed\n");
+            return;
+        }
+        if (HTTP_LFD>=0){
+            epoll_ctl(EPFD, EPOLL_CTL_DEL, HTTP_LFD, NULL);
+            close(HTTP_LFD);
+        }
+        HTTP_LFD = new_http_fd;
+        new_http_fd = -1;
+    }
+
+    char *old_udp = UDP_BUF;
+    UDP_BUF = new_udp;
+    new_udp = NULL;
+
     G = newc;
-    apply_config_relays(&G);
+
+    if (save_file_atomic(CFG_TMP_PATH, CFG_PATH, body, len)!=0){
+        http_send(fd,"HTTP/1.0 500 Internal Server Error\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\npersist failed\n");
+        reload_from_disk();
+        if (old_udp) free(old_udp);
+        if (new_http_fd >= 0) close(new_http_fd);
+        return;
+    }
+
+    if (old_udp) free(old_udp);
     http_send(fd,"HTTP/1.0 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{\"ok\":true}\n");
 }
 
@@ -748,15 +821,17 @@ static inline void handle_http_on_fd(int fd, uint32_t evs){
     while (1){
         ssize_t r=recv(fd,tmp,sizeof(tmp),0);
         if (r>0){
-            if (hc->len + (size_t)r > HTTP_BUF_MAX){ hc_del(fd); break; }
-            if (hc->len + (size_t)r > hc->cap){
-                size_t ncap = hc->cap*2; if (ncap < hc->len+(size_t)r) ncap = hc->len+(size_t)r;
+            if (hc->len + (size_t)r >= HTTP_BUF_MAX){ hc_del(fd); break; }
+            if (hc->len + (size_t)r >= hc->cap){
+                size_t need = hc->len + (size_t)r + 1;
+                size_t ncap = hc->cap*2; if (ncap < need) ncap = need;
                 if (ncap>HTTP_BUF_MAX) ncap=HTTP_BUF_MAX;
                 char *nb=realloc(hc->buf,ncap); if(!nb){ hc_del(fd); break; }
                 hc->buf=nb; hc->cap=ncap;
             }
             memcpy(hc->buf+hc->len, tmp, (size_t)r);
             hc->len += (size_t)r;
+            if (hc->len < hc->cap) hc->buf[hc->len]='\0';
 
             char *hdr = hc->buf;
             char *hdr_end = strstr(hdr, "\r\n\r\n");

@@ -89,20 +89,23 @@ struct client {
     uint64_t last_send_ms;
 };
 
-static void send_str(int fd, const char *s) {
-    size_t n = strlen(s);
-    while (n) {
-        ssize_t w = send(fd, s, n, MSG_NOSIGNAL);
-        if (w > 0) { s += w; n -= (size_t)w; }
-        else if (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) { usleep(1000); }
-        else break;
+static int send_str(int fd, const char *s) {
+    size_t off = 0;
+    size_t total = strlen(s);
+    while (off < total) {
+        ssize_t w = send(fd, s + off, total - off, MSG_NOSIGNAL);
+        if (w > 0) { off += (size_t)w; continue; }
+        if (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) { usleep(1000); continue; }
+        if (w < 0 && errno == EINTR) continue;
+        return -1;
     }
+    return 0;
 }
 
 static void send_heartbeat(int fd) {
     // SSE comment line (just a colon) + blank line
     static const char *hb = ":\n\n";
-    send(fd, hb, strlen(hb), MSG_NOSIGNAL);
+    (void)send_str(fd, hb);
 }
 
 static const char *HTTP_HEADERS =
@@ -197,7 +200,7 @@ static int accept_http_or_404(int lfd, struct client *clients, int *nclients) {
     // Parse: expect "GET <path> ..."
     const char *p = req;
     if (strncmp(p, "GET ", 4) != 0) {
-        send_str(cfd, HTTP_404);
+        (void)send_str(cfd, HTTP_404);
         close(cfd);
         return 0;
     }
@@ -224,7 +227,7 @@ static int accept_http_or_404(int lfd, struct client *clients, int *nclients) {
             "Content-Length: 3\r\n"
             "\r\n"
             "ok\n";
-        send_str(cfd, ok);
+        (void)send_str(cfd, ok);
         close(cfd);
         return 0;
     }
@@ -232,9 +235,9 @@ static int accept_http_or_404(int lfd, struct client *clients, int *nclients) {
     if (is_events) {
         // Switch to non-blocking ONLY after we decide to keep it
         set_nonblock(cfd);
-        send_str(cfd, HTTP_HEADERS);
+        (void)send_str(cfd, HTTP_HEADERS);
         // Optional: advertise retry interval to EventSource clients
-        send_str(cfd, "retry: 2000\n\n");
+        (void)send_str(cfd, "retry: 2000\n\n");
         if (*nclients < MAX_CLIENTS) {
             clients[*nclients].fd = cfd;
             clients[*nclients].last_send_ms = now_ms();
@@ -243,10 +246,10 @@ static int accept_http_or_404(int lfd, struct client *clients, int *nclients) {
             close(cfd);
         }
     } else if (is_root) {
-        send_str(cfd, HTTP_ROOT);
+        (void)send_str(cfd, HTTP_ROOT);
         close(cfd);
     } else {
-        send_str(cfd, HTTP_404);
+        (void)send_str(cfd, HTTP_404);
         close(cfd);
     }
     return 0;
@@ -264,8 +267,10 @@ static void broadcast(struct client *clients, int *nclients,
                           "data: %s\n"
                           "\n",
                           event, (unsigned long long)id, json);
-        ssize_t w = send(clients[i].fd, frame, (size_t)fl, MSG_NOSIGNAL);
-        if (w < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+        if (fl < 0) fl = 0;
+        if ((size_t)fl >= sizeof(frame)) fl = (int)sizeof(frame) - 1;
+        frame[(size_t)fl] = '\0';
+        if (send_str(clients[i].fd, frame) < 0) {
             drop_client(clients, nclients, i);
             continue;
         }
