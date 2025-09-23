@@ -140,25 +140,15 @@ $(eval $(call DEFINE_FLAVOR,musl,$(CC_MUSL),musl,$(APP)-musl,-musl,$(STRIP_MUSL)
 $(eval $(call DEFINE_FLAVOR,gnu,$(CC_GNU),gnu,$(APP)-gnu,-gnu,$(STRIP_GNU)))
 
 # ===== Top-level convenience targets =====
-.PHONY: all gui tools tools-musl tools-gnu clean strip install help \
-        sse_tail sse_tail-musl sse_tail-gnu \
-        udp_relay udp_relay-musl udp_relay-gnu
+.PHONY: all gui tools tools-musl tools-gnu clean strip install help
 
 all: native
 gui: native-gui
 
 # Utilities (native by default)
-tools: native-sse_tail native-udp_relay
-tools-musl: musl-sse_tail musl-udp_relay
-tools-gnu: gnu-sse_tail gnu-udp_relay
-
-# Direct convenience
-sse_tail:        native-sse_tail
-sse_tail-musl:   musl-sse_tail
-sse_tail-gnu:    gnu-sse_tail
-udp_relay:       native-udp_relay
-udp_relay-musl:  musl-udp_relay
-udp_relay-gnu:   gnu-udp_relay
+tools: sse_tail udp_relay
+tools-musl: sse_tail-musl udp_relay-musl
+tools-gnu: sse_tail-gnu udp_relay-gnu
 
 clean:
 	rm -rf build \
