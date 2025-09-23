@@ -14,6 +14,26 @@ static volatile int g_gui_should_quit = 0;
 
 #ifdef USE_SDL2_TTF
 static TTF_Font *g_font = NULL;
+
+static TTF_Font *load_font(void) {
+    const char *env_font = getenv("AUTOD_GUI_FONT");
+    const char *fallbacks[] = {
+        env_font && *env_font ? env_font : NULL,
+        "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
+        NULL
+    };
+
+    for (int i = 0; fallbacks[i]; i++) {
+        g_font = TTF_OpenFont(fallbacks[i], 14);
+        if (g_font) return g_font;
+    }
+    fprintf(stderr, "GUI: failed to open font (set AUTOD_GUI_FONT)\n");
+    return NULL;
+}
 #endif
 
 static void draw_text(SDL_Renderer *R, int x, int y, const char *s) {
@@ -49,14 +69,7 @@ static int gui_thread(void *arg) {
 
 #ifdef USE_SDL2_TTF
     if (TTF_Init() != 0) { SDL_Quit(); free(G); return 0; }
-    const char *fallbacks[] = {
-        "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
-        NULL
-    };
-    for (int i=0; fallbacks[i]; i++) { g_font = TTF_OpenFont(fallbacks[i], 14); if (g_font) break; }
-    if (!g_font) { TTF_Quit(); SDL_Quit(); free(G); return 0; }
+    if (!load_font()) { TTF_Quit(); SDL_Quit(); free(G); return 0; }
 #endif
 
     SDL_Window *W = SDL_CreateWindow("autod - nodes",
