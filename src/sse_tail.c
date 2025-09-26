@@ -94,18 +94,22 @@ static int send_str(int fd, const char *s) {
     size_t total = strlen(s);
     while (off < total) {
         ssize_t w = send(fd, s + off, total - off, MSG_NOSIGNAL);
-        if (w > 0) { off += (size_t)w; continue; }
-        if (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) { usleep(1000); continue; }
+        if (w > 0) {
+            off += (size_t)w;
+            continue;
+        }
         if (w < 0 && errno == EINTR) continue;
         return -1;
     }
     return 0;
 }
 
-static void send_heartbeat(int fd) {
+static int send_heartbeat(struct client *c, uint64_t now) {
     // SSE comment line (just a colon) + blank line
     static const char *hb = ":\n\n";
-    (void)send_str(fd, hb);
+    if (send_str(c->fd, hb) < 0) return -1;
+    c->last_send_ms = now;
+    return 0;
 }
 
 static const char *HTTP_HEADERS =
@@ -406,7 +410,13 @@ int main(int argc, char **argv) {
 
         uint64_t now = now_ms();
         if (now - last_hb >= HEARTBEAT_MS) {
-            for (int i = 0; i < nclients; i++) send_heartbeat(clients[i].fd);
+            for (int i = 0; i < nclients; ) {
+                if (send_heartbeat(&clients[i], now) < 0) {
+                    drop_client(clients, &nclients, i);
+                    continue;
+                }
+                i++;
+            }
             last_hb = now;
         }
 
