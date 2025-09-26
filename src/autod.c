@@ -264,6 +264,47 @@ static void close_pipe_pair(int pipefd[2]) {
     if (pipefd[1] >= 0) { close(pipefd[1]); pipefd[1] = -1; }
 }
 
+static void drain_exec_pipe(int fd, char *buf, int *written, int max_bytes) {
+    if (fd < 0) return;
+
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags >= 0 && !(flags & O_NONBLOCK)) {
+        (void)fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+    }
+
+    char tmp[1024];
+    for (;;) {
+        ssize_t r = read(fd, tmp, sizeof(tmp));
+        if (r > 0) {
+            if (buf && written) {
+                int space = max_bytes - *written;
+                if (space < 0) space = 0;
+                int copy = (int)r;
+                if (copy > space) copy = space;
+                if (copy > 0) {
+                    memcpy(buf + *written, tmp, (size_t)copy);
+                    *written += copy;
+                }
+            }
+            continue;
+        }
+        if (r == 0) break;
+        if (r < 0) {
+            if (errno == EINTR) continue;
+            if (errno == EAGAIN || errno == EWOULDBLOCK) break;
+        }
+        break;
+    }
+}
+
+static void drain_exec_pipes(int out_fd, int err_fd,
+                             char *buf_out, int *wout,
+                             char *buf_err, int *werr,
+                             int max_bytes) {
+    drain_exec_pipe(out_fd, buf_out, wout, max_bytes);
+    drain_exec_pipe(err_fd, buf_err, werr, max_bytes);
+}
+
 static int run_exec(const config_t *cfg, const char *path, JSON_Array *args,
                     int timeout_ms, int max_bytes,
                     int *rc_out, long long *elapsed_ms,
@@ -350,6 +391,8 @@ static int run_exec(const config_t *cfg, const char *path, JSON_Array *args,
 
         remain = timeout_ms - (int)(t - t0);
     }
+
+    drain_exec_pipes(out_pipe[0], err_pipe[0], buf_out, &wout, buf_err, &werr, max_bytes);
 
     close_pipe_pair(out_pipe);
     close_pipe_pair(err_pipe);
