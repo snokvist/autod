@@ -1101,7 +1101,11 @@ int main(int argc, char **argv){
 
                         /* snapshot addresses so HTTP mutations won't race */
                         struct dest snap[MAX_DESTS];
+                        struct dest *dest_refs[MAX_DESTS];
                         memcpy(snap, r->dests, (size_t)cnt*sizeof(struct dest));
+                        for (int d=0; d<cnt; d++){
+                            dest_refs[d] = &r->dests[d];
+                        }
 
                         /* build sendmmsg batch (same payload to N dests) */
                         struct mmsghdr msgs[MAX_DESTS];
@@ -1122,12 +1126,9 @@ int main(int argc, char **argv){
                             if (rc > 0){
                                 for (int j=0; j<rc; j++){
                                     r->bytes_out += (uint64_t)m;
-                                    struct sockaddr_in *sa = (struct sockaddr_in*)msgs[sent_total + j].msg_hdr.msg_name;
-                                    for (int x=0; x<r->dest_cnt; x++){
-                                        if (sockaddr_equal(&r->dests[x].addr, sa)){
-                                            r->dests[x].pkts_out++;
-                                            break;
-                                        }
+                                    struct dest *dd = dest_refs[sent_total + j];
+                                    if (dd){
+                                        dd->pkts_out++;
                                     }
                                 }
                                 sent_total += rc;
