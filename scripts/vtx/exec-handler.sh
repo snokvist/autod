@@ -86,6 +86,48 @@ norm_bitrate(){
   esac
 }
 
+is_ipv4_octet(){
+  case "$1" in
+    25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9]) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+validate_udp_uri(){
+  uri="$1"
+  case "$uri" in
+    udp://*:* ) ;;
+    *) return 1 ;;
+  esac
+  rest=${uri#udp://}
+  host=${rest%%:*}
+  port=${rest#*:}
+  [ -n "$host" ] && [ -n "$port" ] || return 1
+  case "$host" in
+    *[!0-9.]* ) return 1 ;;
+  esac
+  case "$port" in
+    *[!0-9]*) return 1 ;;
+    [1-9]) ;;
+    [1-9][0-9]) ;;
+    [1-9][0-9][0-9]) ;;
+    [1-9][0-9][0-9][0-9]) ;;
+    [1-5][0-9][0-9][0-9][0-9]) ;;
+    6[0-4][0-9][0-9][0-9]) ;;
+    65[0-4][0-9][0-9]) ;;
+    655[0-2][0-9]) ;;
+    6553[0-5]) ;;
+    *) return 1 ;;
+  esac
+  oldifs=$IFS
+  IFS=.
+  set -- $host
+  IFS=$oldifs
+  [ $# -eq 4 ] || return 1
+  for oct in "$@"; do is_ipv4_octet "$oct" || return 1; done
+  return 0
+}
+
 # device CLI wrappers
 cli_get(){ cli -g "$1"; }
 cli_set(){ cli -s "$1" "$2"; }
@@ -120,7 +162,7 @@ video_help_json(){
     {"key":"hue","type":"int","required":false,"default":50,"description":"Image hue","control":{"kind":"range","min":0,"max":100,"step":1}},
     {"key":"saturation","type":"int","required":false,"default":50,"description":"Image saturation","control":{"kind":"range","min":0,"max":100,"step":1}},
     {"key":"luminance","type":"int","required":false,"default":50,"description":"Image luminance","control":{"kind":"range","min":0,"max":100,"step":1}},
-    {"key":"outgoing_server","type":"enum","required":false,"default":"udp://224.0.0.1:5600","description":"Primary output","control":{"kind":"select","options":["udp://192.168.2.20:5600","udp://192.168.2.20:5700","udp://192.168.2.20:5701","udp://192.168.2.20:5702","udp://192.168.2.20:5703","udp://224.0.0.1:5600"],"multi":false}}
+    {"key":"outgoing_server","type":"string","required":false,"default":"udp://224.0.0.1:5600","description":"Primary output (udp://{ip}:{port})","control":{"kind":"text","placeholder":"udp://192.168.2.20:5600"}}
   ]
 }
 JSON
@@ -132,8 +174,9 @@ video_set_one(){
   pair="$1"; key="${pair%%=*}"; val="${pair#*=}"
   [ -n "$key" ] || die "missing key in pair"; [ "$key" != "$val" ] || die "missing value in pair"
   case "$key" in
-    mirror|flip) n="$(norm_bool "$val")"; [ "$n" != "__ERR__" ] || die "invalid bool: $key=$val"; val="$n" ;;
-    bitrate)     n="$(norm_bitrate "$val")"; [ "$n" != "__ERR__" ] || die "invalid bitrate: $val"; val="$n" ;;
+    mirror|flip)        n="$(norm_bool "$val")"; [ "$n" != "__ERR__" ] || die "invalid bool: $key=$val"; val="$n" ;;
+    bitrate)            n="$(norm_bitrate "$val")"; [ "$n" != "__ERR__" ] || die "invalid bitrate: $val"; val="$n" ;;
+    outgoing_server)    validate_udp_uri "$val" || die "invalid outgoing server: $val" ;;
   esac
   cli_key="$(map_cli_key "$key")" || die "unknown setting: $key"
   cli_set "$cli_key" "$val" || die "set failed: $key=$val"
