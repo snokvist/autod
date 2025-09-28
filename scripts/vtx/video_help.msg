@@ -25,6 +25,6 @@
     {"key":"hue","type":"int","required":false,"default":50,"description":"Image hue","control":{"kind":"range","min":0,"max":100,"step":1}},
     {"key":"saturation","type":"int","required":false,"default":50,"description":"Image saturation","control":{"kind":"range","min":0,"max":100,"step":1}},
     {"key":"luminance","type":"int","required":false,"default":50,"description":"Image luminance","control":{"kind":"range","min":0,"max":100,"step":1}},
-    {"key":"outgoing_server","type":"enum","required":false,"default":"udp://224.0.0.1:5600","description":"Primary output","control":{"kind":"select","options":["http://192.168.2.20:5600","http://192.168.2.20:5700","http://192.168.2.20:5701","http://192.168.2.20:5702","http://192.168.2.20:5703","udp://224.0.0.1:5600"],"multi":false}}
+    {"key":"outgoing_server","type":"string","required":false,"default":"udp://224.0.0.1:5600","description":"Primary output (udp://{ip}:{port})","control":{"kind":"text","placeholder":"udp://192.168.2.20:5600"}}
   ]
 }
