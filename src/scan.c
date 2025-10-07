@@ -399,7 +399,6 @@ static void plan_targets(ipvec_t *vec, int port, uint32_t *self_a_out) {
 
 static void *scan_thread(void *arg) {
     scan_ctx_t *sc = (scan_ctx_t*)arg;
-    if (__sync_lock_test_and_set(&g_scan_in_progress, 1)) { free(sc); return NULL; }
 
     // New scan sequence
     unsigned seq = __sync_add_and_fetch(&g_scan_seq, 1);
@@ -447,20 +446,22 @@ static void *scan_thread(void *arg) {
 int scan_start_async(const scan_config_t *cfg) {
     if (!cfg) return -1;
     g_cfg = *cfg;
-    if (__sync_lock_test_and_set(&g_scan_in_progress, 1)) {
-        __sync_lock_release(&g_scan_in_progress);
+    if (!__sync_bool_compare_and_swap(&g_scan_in_progress, 0, 1)) {
         return 1; // already running
     }
-    __sync_lock_release(&g_scan_in_progress);
 
     pthread_t th;
     scan_ctx_t *sc = (scan_ctx_t*)malloc(sizeof(*sc));
-    if (!sc) return -1;
+    if (!sc) {
+        __sync_lock_release(&g_scan_in_progress);
+        return -1;
+    }
     sc->cfg = *cfg;
     if (pthread_create(&th, NULL, scan_thread, sc) == 0) {
         pthread_detach(th);
         return 0;
     }
     free(sc);
+    __sync_lock_release(&g_scan_in_progress);
     return -1;
 }
