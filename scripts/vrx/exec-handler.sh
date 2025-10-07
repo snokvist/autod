@@ -6,6 +6,7 @@
 # Implemented:
 #   /sys/reboot                                 (schedule reboot)
 #   /sys/pixelpilot/help|get|set|params|apply|stop|restart|start|status
+#   /sys/pixelpilot_mini_rk/help|toggle_osd|toggle_recording|reboot
 #   /sys/udp_relay/help|get|set|params|start|stop|status
 #   /sys/link/help|mode|select|start|stop|status
 #   /sys/ping                                    (utility passthrough)
@@ -400,6 +401,34 @@ link_route_status(){
   esac
 }
 
+# ======================= Pixelpilot Mini RK =======================
+pixelpilot_mini_rk_pids(){ pidof pixelpilot_mini_rk 2>/dev/null; }
+
+pixelpilot_mini_rk_signal(){
+  action="$1"
+  [ -n "$action" ] || action="action"
+  pids="$(pixelpilot_mini_rk_pids)"
+  if [ -z "$pids" ]; then
+    echo "pixelpilot_mini_rk not running" 1>&2
+    return 3
+  fi
+  if kill -SIGUSR1 $pids 2>/dev/null; then
+    echo "$action toggled via SIGUSR1 ($pids)"
+    return 0
+  fi
+  echo "failed to signal pixelpilot_mini_rk" 1>&2
+  return 4
+}
+
+pixelpilot_mini_rk_toggle_osd(){ pixelpilot_mini_rk_signal "OSD"; }
+pixelpilot_mini_rk_toggle_recording(){ pixelpilot_mini_rk_signal "Recording"; }
+
+pixelpilot_mini_rk_reboot(){
+  ( nohup sh -c 'reboot now' >/dev/null 2>&1 & )
+  echo "reboot requested"
+  return 0
+}
+
 # ======================= DISPATCH =======================
 case "$1" in
   # general
@@ -432,6 +461,12 @@ case "$1" in
   /sys/link/start)         shift; link_route_start "$@" ;;
   /sys/link/stop)          shift; link_route_stop "$@" ;;
   /sys/link/status)        shift; link_route_status "$@" ;;
+
+  # pixelpilot mini rk
+  /sys/pixelpilot_mini_rk/help)             print_help_msg "pixelpilot_mini_rk_help.msg" ;;
+  /sys/pixelpilot_mini_rk/toggle_osd)       shift; pixelpilot_mini_rk_toggle_osd "$@" ;;
+  /sys/pixelpilot_mini_rk/toggle_recording) shift; pixelpilot_mini_rk_toggle_recording "$@" ;;
+  /sys/pixelpilot_mini_rk/reboot)           shift; pixelpilot_mini_rk_reboot "$@" ;;
 
   # utility
   /sys/ping)               shift; ping -c 1 -W 1 "$1" 2>&1 ;;

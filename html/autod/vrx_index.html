@@ -158,6 +158,57 @@
     </div>
   </section>
 
+  <section class="card" id="pixelpilotMiniRkCard" style="display:none">
+    <h2>Pixelpilot Mini RK</h2>
+    <div class="body grid">
+      <div class="cap-toolbar">
+        <div class="spacer"></div>
+        <div class="cap-stats" id="pixelpilotMiniRkStats">—</div>
+      </div>
+      <div class="grid" id="pixelpilotMiniRkGrid">
+        <div class="ctl" id="pixelpilotMiniRkOsdCtl">
+          <div class="lbl">
+            <div class="name">Toggle OSD</div>
+            <div class="val">—</div>
+          </div>
+          <div class="row">
+            <button id="pixelpilotMiniRkToggleOsdBtn">Toggle OSD</button>
+          </div>
+          <div class="desc">Send SIGUSR1 to pixelpilot_mini_rk to toggle the on-screen display.</div>
+          <div class="errtxt" style="display:none"></div>
+        </div>
+        <div class="ctl" id="pixelpilotMiniRkRecordingCtl">
+          <div class="lbl">
+            <div class="name">Toggle Recording</div>
+            <div class="val">—</div>
+          </div>
+          <div class="row">
+            <button id="pixelpilotMiniRkToggleRecordingBtn">Toggle Recording</button>
+          </div>
+          <div class="desc">Send SIGUSR1 to pixelpilot_mini_rk to toggle DVR recording.</div>
+          <div class="errtxt" style="display:none"></div>
+        </div>
+        <div class="ctl" id="pixelpilotMiniRkRebootCtl">
+          <div class="lbl">
+            <div class="name">Reboot</div>
+            <div class="val">—</div>
+          </div>
+          <div class="row">
+            <button id="pixelpilotMiniRkRebootBtn">Reboot device</button>
+          </div>
+          <div class="desc">Issue <code>reboot now</code> in the background.</div>
+          <div class="errtxt" style="display:none"></div>
+        </div>
+      </div>
+      <div>
+        <div class="mut">Last request:</div>
+        <pre class="inline" id="pixelpilotMiniRkReqPreview">{}</pre>
+        <div class="mut">Last response:</div>
+        <textarea id="pixelpilotMiniRkResp" readonly></textarea>
+      </div>
+    </div>
+  </section>
+
   <section class="card" id="udpRelayCard" style="display:none">
     <h2>UDP relay</h2>
     <div class="body grid">
@@ -248,6 +299,43 @@ function flashCtl(ctlEl, ok){
   const cls = ok ? 'flash-ok' : 'flash-err';
   ctlEl.classList.add(cls);
   setTimeout(()=> ctlEl.classList.remove(cls), 700);
+}
+
+async function runMiniRkCommand(path, ctl){
+  const statsEl = document.getElementById('pixelpilotMiniRkStats');
+  if (statsEl) statsEl.textContent = 'running…';
+  try{
+    const res = await postExec({path, args:[]}, CMD_TIMEOUT_MS, 'pixelpilotMiniRk');
+    const ok = (res && typeof res.rc === 'number') ? res.rc === 0 : true;
+    if (statsEl) statsEl.textContent = `${ok ? 'ok' : 'error'} • ${new Date().toLocaleTimeString()}`;
+    if (ctl){
+      const valEl = ctl.querySelector('.val');
+      if (valEl){
+        const raw = (res?.stdout ?? '').trim();
+        valEl.textContent = raw ? raw.split('\n')[0] : (ok ? 'ok' : 'error');
+      }
+      const errEl = ctl.querySelector('.errtxt');
+      if (errEl){
+        if (ok){
+          errEl.style.display = 'none';
+        } else {
+          errEl.textContent = (res?.stderr || res?.stdout || 'command failed');
+          errEl.style.display = 'block';
+        }
+      }
+      flashCtl(ctl, ok);
+    }
+  }catch(e){
+    if (statsEl) statsEl.textContent = `error • ${new Date().toLocaleTimeString()}`;
+    if (ctl){
+      flashCtl(ctl, false);
+      const errEl = ctl.querySelector('.errtxt');
+      if (errEl){
+        errEl.textContent = e?.message || 'command failed';
+        errEl.style.display = 'block';
+      }
+    }
+  }
 }
 
 const CAP_GET_STAGGER_MS = 100;
@@ -733,6 +821,26 @@ function reloadUdpRelayEmbed(){
 
 const linkUI = { help:null };
 
+const pixelpilotMiniRkUI = { initialized:false };
+
+function ensurePixelpilotMiniRkUI(){
+  if (pixelpilotMiniRkUI.initialized) return;
+  const statsEl = document.getElementById('pixelpilotMiniRkStats');
+  if (statsEl) statsEl.textContent = 'ready';
+  const cfg = [
+    { btn:'#pixelpilotMiniRkToggleOsdBtn', ctl:'#pixelpilotMiniRkOsdCtl', path:'/sys/pixelpilot_mini_rk/toggle_osd' },
+    { btn:'#pixelpilotMiniRkToggleRecordingBtn', ctl:'#pixelpilotMiniRkRecordingCtl', path:'/sys/pixelpilot_mini_rk/toggle_recording' },
+    { btn:'#pixelpilotMiniRkRebootBtn', ctl:'#pixelpilotMiniRkRebootCtl', path:'/sys/pixelpilot_mini_rk/reboot' }
+  ];
+  for (const {btn, ctl, path} of cfg){
+    const btnEl = document.querySelector(btn);
+    const ctlEl = document.querySelector(ctl);
+    if (!btnEl || !ctlEl) continue;
+    btnEl.addEventListener('click', ()=> runMiniRkCommand(path, ctlEl));
+  }
+  pixelpilotMiniRkUI.initialized = true;
+}
+
 function buildLinkButtonsFromHelp(help){
   const names = new Set((help?.commands||[]).map(c=>c.name));
   const cmds = $('#linkCmds'); cmds.innerHTML='';
@@ -888,6 +996,14 @@ async function loadCaps(){
     } else {
       $('#udpRelayCard').style.display = 'none';
       $('#udpRelayStats').textContent = 'cap missing';
+    }
+
+    if (capList.includes('pixelpilot_mini_rk')){
+      $('#pixelpilotMiniRkCard').style.display = '';
+      ensurePixelpilotMiniRkUI();
+    } else {
+      $('#pixelpilotMiniRkCard').style.display = 'none';
+      $('#pixelpilotMiniRkStats').textContent = 'cap missing';
     }
 
     if (capList.includes('link')){
