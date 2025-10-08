@@ -684,8 +684,8 @@ function createCapManager(config){
     if (!holder) return;
     holder.innerHTML = '';
     const names = new Set((help?.commands||[]).map(c=>c.name));
-    const labelMap = { start:'Start', stop:'Stop', restart:'Restart', apply:'Apply', status:'Status', mode:'Mode' };
-    for (const cmd of ['start','stop','restart','apply','status']){
+    const labelMap = { start:'Start', stop:'Stop', restart:'Restart', apply:'Apply', status:'Status', mode:'Mode', toggle_record:'Toggle record' };
+    for (const cmd of ['start','stop','restart','apply','status','toggle_record']){
       if (!names.has(cmd)) continue;
       const btn = document.createElement('button');
       btn.textContent = labelMap[cmd] || cmd;
