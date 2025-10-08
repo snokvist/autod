@@ -7,7 +7,7 @@
 #   /sys/reboot                                 (schedule reboot)
 #   /sys/pixelpilot/help|start|stop|toggle_record
 #   /sys/pixelpilot_mini_rk/help|toggle_osd|toggle_recording|reboot
-#   /sys/udp_relay/help|get|set|params|start|stop|status
+#   /sys/udp_relay/help|start|stop|status
 #   /sys/link/help|mode|select|start|stop|status
 #   /sys/ping                                    (utility passthrough)
 #
@@ -21,7 +21,6 @@
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
 HELP_DIR="${HELP_DIR:-/etc/autod}"
 STATE_DIR="${VRX_STATE_DIR:-/tmp/vrx}"
-UDP_RELAY_STATE_FILE="$STATE_DIR/udp_relay.env"
 LINK_STATE_FILE="$STATE_DIR/link.env"
 
 # ======================= Helpers =======================
@@ -98,34 +97,6 @@ config_set(){
   return 0
 }
 
-# Normalization helpers
-norm_bool(){
-  v=$(echo "$1" | tr 'A-Z' 'a-z')
-  case "$v" in
-    1|true|on|yes|enabled) echo 1 ;;
-    0|false|off|no|disabled) echo 0 ;;
-    *) echo "__ERR__" ;;
-  esac
-}
-
-norm_bitrate(){
-  v="$1"
-  case "$v" in
-    *[!0-9kKmM]*) echo "__ERR__" ;;
-    *[kK])        echo "${v%[kK]}" ;;
-    *[mM])        echo $(( ${v%[mM]} * 1000 )) ;;
-    *)            echo "$v" ;;
-  esac
-}
-
-norm_uint(){
-  v="$1"
-  case "$v" in
-    ''|*[!0-9]*) echo "__ERR__" ;;
-    *) echo "$v" ;;
-  esac
-}
-
 # ======================= General =======================
 reboot_cmd(){
   ( nohup sh -c 'sleep 1; reboot now' >/dev/null 2>&1 & )
@@ -191,10 +162,6 @@ pixelpilot_stop_cmd(){ stop_pixelpilot; }
 pixelpilot_toggle_record_cmd(){ toggle_pixelpilot_record; }
 
 # ======================= UDP Relay =======================
-udp_env_key(){ echo "udp_relay_$1"; }
-udp_get_value(){ config_get "$(udp_env_key "$1")" "$UDP_RELAY_STATE_FILE"; }
-udp_set_value(){ config_set "$(udp_env_key "$1")" "$2" "$UDP_RELAY_STATE_FILE"; }
-
 udp_relay_start(){
   if [ -x /etc/init.d/S60udp_relay ]; then /etc/init.d/S60udp_relay start >/dev/null 2>&1 && { echo "udp relay started"; return 0; }; fi
   if have systemctl; then systemctl start udp-relay >/dev/null 2>&1 && { echo "udp relay started"; return 0; }; fi
@@ -224,58 +191,6 @@ udp_relay_status(){
     echo "udp relay not running"
   fi
   return 0
-}
-
-validate_udp_key(){
-  case "$1" in
-    listen_addr|listen_port|target_addr|target_port|ttl|max_bitrate|enabled) return 0 ;;
-    *) return 1 ;;
-  esac
-}
-
-validate_udp_value(){
-  key="$1"; val="$2"
-  case "$key" in
-    enabled)
-      norm="$(norm_bool "$val")"; [ "$norm" != "__ERR__" ] || die "invalid bool: $key=$val"; echo "$norm" ;;
-    listen_port|target_port|ttl|max_bitrate)
-      norm="$(norm_uint "$val")"; [ "$norm" != "__ERR__" ] || die "invalid integer: $key=$val"; echo "$norm" ;;
-    listen_addr|target_addr)
-      [ -n "$val" ] || die "$key must be non-empty"; echo "$val" ;;
-    *) echo "$val" ;;
-  esac
-}
-
-udp_relay_get(){
-  name="$1"
-  [ -n "$name" ] || die "missing name"
-  validate_udp_key "$name" || die "unknown setting: $name"
-  udp_get_value "$name" || die "setting unavailable: $name"
-}
-
-udp_relay_set_one(){
-  pair="$1"; key="${pair%%=*}"; val="${pair#*=}"
-  [ -n "$key" ] || die "missing key"
-  [ "$key" != "$val" ] || die "missing value"
-  validate_udp_key "$key" || die "unknown setting: $key"
-  norm_val="$(validate_udp_value "$key" "$val")"
-  udp_set_value "$key" "$norm_val" >/dev/null || die "failed to persist $key"
-}
-
-udp_relay_params(){
-  ok=1
-  for kv in "$@"; do
-    case "$kv" in --*) continue ;; esac
-    out="$(udp_relay_set_one "$kv" 2>&1)" || { echo "$out" 1>&2; ok=0; }
-  done
-  [ $ok -eq 1 ] || exit 2
-  echo "ok"
-}
-
-udp_relay_set_cmd(){
-  [ $# -ge 1 ] || die "usage: /sys/udp_relay/set key=value"
-  udp_relay_set_one "$1" || exit $?
-  echo "ok"
 }
 
 # ======================= Link Aggregation =======================
@@ -375,9 +290,6 @@ case "$1" in
 
   # udp relay
   /sys/udp_relay/help)     print_help_msg "udp_relay_help.msg" ;;
-  /sys/udp_relay/get)      shift; udp_relay_get "$1" ;;
-  /sys/udp_relay/set)      shift; udp_relay_set_cmd "$@" ;;
-  /sys/udp_relay/params)   shift; udp_relay_params "$@" ;;
   /sys/udp_relay/start)    shift; udp_relay_start "$@" ;;
   /sys/udp_relay/stop)     shift; udp_relay_stop "$@" ;;
   /sys/udp_relay/status)   shift; udp_relay_status "$@" ;;
