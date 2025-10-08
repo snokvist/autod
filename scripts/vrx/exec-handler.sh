@@ -5,9 +5,9 @@
 #
 # Implemented:
 #   /sys/reboot                                 (schedule reboot)
-#   /sys/pixelpilot/help|get|set|params|apply|stop|restart|start|status
+#   /sys/pixelpilot/help|start|stop|toggle_record
 #   /sys/pixelpilot_mini_rk/help|toggle_osd|toggle_recording|reboot
-#   /sys/udp_relay/help|get|set|params|start|stop|status
+#   /sys/udp_relay/help|start|stop|status
 #   /sys/link/help|mode|select|start|stop|status
 #   /sys/ping                                    (utility passthrough)
 #
@@ -21,8 +21,6 @@
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
 HELP_DIR="${HELP_DIR:-/etc/autod}"
 STATE_DIR="${VRX_STATE_DIR:-/tmp/vrx}"
-PIXELPILOT_STATE_FILE="$STATE_DIR/pixelpilot.env"
-UDP_RELAY_STATE_FILE="$STATE_DIR/udp_relay.env"
 LINK_STATE_FILE="$STATE_DIR/link.env"
 
 # ======================= Helpers =======================
@@ -99,34 +97,6 @@ config_set(){
   return 0
 }
 
-# Normalization helpers
-norm_bool(){
-  v=$(echo "$1" | tr 'A-Z' 'a-z')
-  case "$v" in
-    1|true|on|yes|enabled) echo 1 ;;
-    0|false|off|no|disabled) echo 0 ;;
-    *) echo "__ERR__" ;;
-  esac
-}
-
-norm_bitrate(){
-  v="$1"
-  case "$v" in
-    *[!0-9kKmM]*) echo "__ERR__" ;;
-    *[kK])        echo "${v%[kK]}" ;;
-    *[mM])        echo $(( ${v%[mM]} * 1000 )) ;;
-    *)            echo "$v" ;;
-  esac
-}
-
-norm_uint(){
-  v="$1"
-  case "$v" in
-    ''|*[!0-9]*) echo "__ERR__" ;;
-    *) echo "$v" ;;
-  esac
-}
-
 # ======================= General =======================
 reboot_cmd(){
   ( nohup sh -c 'sleep 1; reboot now' >/dev/null 2>&1 & )
@@ -135,42 +105,46 @@ reboot_cmd(){
 }
 
 # ======================= Pixelpilot =======================
-pixelpilot_env_key(){ echo "pixelpilot_$1"; }
-pixelpilot_get_value(){ config_get "$(pixelpilot_env_key "$1")" "$PIXELPILOT_STATE_FILE"; }
-pixelpilot_set_value(){ config_set "$(pixelpilot_env_key "$1")" "$2" "$PIXELPILOT_STATE_FILE"; }
-
 pixelpilot_pids(){ pidof pixelpilot 2>/dev/null; }
 
-sighup_pixelpilot(){
-  pids="$(pixelpilot_pids)"
-  [ -n "$pids" ] || return 3
-  kill -HUP $pids 2>/dev/null || return 4
-  return 0
-}
-
 start_pixelpilot(){
-  if [ -x /etc/init.d/S95pixelpilot ]; then /etc/init.d/S95pixelpilot start >/dev/null 2>&1 && { echo "pixelpilot started"; return 0; }; fi
-  if have systemctl; then systemctl start pixelpilot >/dev/null 2>&1 && { echo "pixelpilot started"; return 0; }; fi
-  if have service; then service pixelpilot start >/dev/null 2>&1 && { echo "pixelpilot started"; return 0; }; fi
-  echo "pixelpilot start unsupported on this device" 1>&2
-  return 3
+  if ! have systemctl; then
+    echo "systemctl unavailable" 1>&2
+    return 3
+  fi
+  if systemctl start openipc >/dev/null 2>&1; then
+    echo "openipc started"
+    return 0
+  fi
+  echo "failed to start openipc" 1>&2
+  return 4
 }
 
 stop_pixelpilot(){
-  if [ -x /etc/init.d/S95pixelpilot ]; then /etc/init.d/S95pixelpilot stop >/dev/null 2>&1 && { echo "pixelpilot stopped"; return 0; }; fi
-  if have systemctl; then systemctl stop pixelpilot >/dev/null 2>&1 && { echo "pixelpilot stopped"; return 0; }; fi
-  if have service; then service pixelpilot stop >/dev/null 2>&1 && { echo "pixelpilot stopped"; return 0; }; fi
-  echo "pixelpilot stop unsupported on this device" 1>&2
-  return 3
+  if ! have systemctl; then
+    echo "systemctl unavailable" 1>&2
+    return 3
+  fi
+  if systemctl stop openipc >/dev/null 2>&1; then
+    echo "openipc stopped"
+    return 0
+  fi
+  echo "failed to stop openipc" 1>&2
+  return 4
 }
 
-restart_pixelpilot(){
-  if [ -x /etc/init.d/S95pixelpilot ]; then /etc/init.d/S95pixelpilot restart >/dev/null 2>&1 && { echo "pixelpilot restarted"; return 0; }; fi
-  if have systemctl; then systemctl restart pixelpilot >/dev/null 2>&1 && { echo "pixelpilot restarted"; return 0; }; fi
-  if have service; then service pixelpilot restart >/dev/null 2>&1 && { echo "pixelpilot restarted"; return 0; }; fi
-  if start_pixelpilot; then return 0; fi
-  echo "pixelpilot restart unsupported on this device" 1>&2
-  return 3
+toggle_pixelpilot_record(){
+  pids="$(pixelpilot_pids)"
+  if [ -z "$pids" ]; then
+    echo "pixelpilot not running" 1>&2
+    return 3
+  fi
+  if kill -SIGUSR $pids 2>/dev/null; then
+    echo "toggled pixelpilot recording via SIGUSR ($pids)"
+    return 0
+  fi
+  echo "failed to signal pixelpilot" 1>&2
+  return 4
 }
 
 pixelpilot_status(){
@@ -183,85 +157,11 @@ pixelpilot_status(){
   return 0
 }
 
-apply_pixelpilot_settings(){
-  if sighup_pixelpilot; then echo "applied via SIGHUP"; return 0; fi
-  if restart_pixelpilot; then echo "applied via restart"; return 0; fi
-  echo "apply failed: pixelpilot not running and no restart method" 1>&2
-  return 3
-}
-
-validate_pixelpilot_key(){
-  case "$1" in
-    profile|bitrate|stream_url|fec_mode|osd_enabled|latency_mode) return 0 ;;
-    *) return 1 ;;
-  esac
-}
-
-validate_pixelpilot_value(){
-  key="$1"; val="$2"
-  case "$key" in
-    osd_enabled)
-      norm="$(norm_bool "$val")"; [ "$norm" != "__ERR__" ] || die "invalid bool: $key=$val"; echo "$norm" ;;
-    bitrate)
-      norm="$(norm_bitrate "$val")"; [ "$norm" != "__ERR__" ] || die "invalid bitrate: $val"; echo "$norm" ;;
-    profile)
-      case "$val" in standard|long_range|cinematic) echo "$val" ;; *) die "invalid profile: $val" ;; esac ;;
-    fec_mode)
-      case "$val" in off|1/2|2/3|3/4|5/6) echo "$val" ;; *) die "invalid fec_mode: $val" ;; esac ;;
-    latency_mode)
-      case "$val" in low|normal|high) echo "$val" ;; *) die "invalid latency_mode: $val" ;; esac ;;
-    stream_url)
-      [ -n "$val" ] || die "stream_url must be non-empty"; echo "$val" ;;
-    *) echo "$val" ;;
-  esac
-}
-
-pixelpilot_get(){
-  name="$1"
-  [ -n "$name" ] || die "missing name"
-  validate_pixelpilot_key "$name" || die "unknown setting: $name"
-  pixelpilot_get_value "$name" || die "setting unavailable: $name"
-}
-
-pixelpilot_set_one(){
-  pair="$1"
-  key="${pair%%=*}"; val="${pair#*=}"
-  [ -n "$key" ] || die "missing key in pair"
-  [ "$key" != "$val" ] || die "missing value in pair"
-  validate_pixelpilot_key "$key" || die "unknown setting: $key"
-  norm_val="$(validate_pixelpilot_value "$key" "$val")"
-  pixelpilot_set_value "$key" "$norm_val" >/dev/null || die "failed to persist $key"
-}
-
-pixelpilot_params(){
-  ok=1
-  for kv in "$@"; do
-    case "$kv" in --*) continue ;; esac
-    out="$(pixelpilot_set_one "$kv" 2>&1)" || { echo "$out" 1>&2; ok=0; }
-  done
-  [ $ok -eq 1 ] || exit 2
-  apply_pixelpilot_settings || exit $?
-  echo "ok"
-}
-
-pixelpilot_set_cmd(){
-  [ $# -ge 1 ] || die "usage: /sys/pixelpilot/set key=value"
-  pixelpilot_set_one "$1" || exit $?
-  apply_pixelpilot_settings || exit $?
-  echo "ok"
-}
-
-pixelpilot_apply_cmd(){ apply_pixelpilot_settings; }
-pixelpilot_stop_cmd(){ stop_pixelpilot; }
-pixelpilot_restart_cmd(){ restart_pixelpilot; }
 pixelpilot_start_cmd(){ start_pixelpilot; }
-pixelpilot_status_cmd(){ pixelpilot_status; }
+pixelpilot_stop_cmd(){ stop_pixelpilot; }
+pixelpilot_toggle_record_cmd(){ toggle_pixelpilot_record; }
 
 # ======================= UDP Relay =======================
-udp_env_key(){ echo "udp_relay_$1"; }
-udp_get_value(){ config_get "$(udp_env_key "$1")" "$UDP_RELAY_STATE_FILE"; }
-udp_set_value(){ config_set "$(udp_env_key "$1")" "$2" "$UDP_RELAY_STATE_FILE"; }
-
 udp_relay_start(){
   if [ -x /etc/init.d/S60udp_relay ]; then /etc/init.d/S60udp_relay start >/dev/null 2>&1 && { echo "udp relay started"; return 0; }; fi
   if have systemctl; then systemctl start udp-relay >/dev/null 2>&1 && { echo "udp relay started"; return 0; }; fi
@@ -291,58 +191,6 @@ udp_relay_status(){
     echo "udp relay not running"
   fi
   return 0
-}
-
-validate_udp_key(){
-  case "$1" in
-    listen_addr|listen_port|target_addr|target_port|ttl|max_bitrate|enabled) return 0 ;;
-    *) return 1 ;;
-  esac
-}
-
-validate_udp_value(){
-  key="$1"; val="$2"
-  case "$key" in
-    enabled)
-      norm="$(norm_bool "$val")"; [ "$norm" != "__ERR__" ] || die "invalid bool: $key=$val"; echo "$norm" ;;
-    listen_port|target_port|ttl|max_bitrate)
-      norm="$(norm_uint "$val")"; [ "$norm" != "__ERR__" ] || die "invalid integer: $key=$val"; echo "$norm" ;;
-    listen_addr|target_addr)
-      [ -n "$val" ] || die "$key must be non-empty"; echo "$val" ;;
-    *) echo "$val" ;;
-  esac
-}
-
-udp_relay_get(){
-  name="$1"
-  [ -n "$name" ] || die "missing name"
-  validate_udp_key "$name" || die "unknown setting: $name"
-  udp_get_value "$name" || die "setting unavailable: $name"
-}
-
-udp_relay_set_one(){
-  pair="$1"; key="${pair%%=*}"; val="${pair#*=}"
-  [ -n "$key" ] || die "missing key"
-  [ "$key" != "$val" ] || die "missing value"
-  validate_udp_key "$key" || die "unknown setting: $key"
-  norm_val="$(validate_udp_value "$key" "$val")"
-  udp_set_value "$key" "$norm_val" >/dev/null || die "failed to persist $key"
-}
-
-udp_relay_params(){
-  ok=1
-  for kv in "$@"; do
-    case "$kv" in --*) continue ;; esac
-    out="$(udp_relay_set_one "$kv" 2>&1)" || { echo "$out" 1>&2; ok=0; }
-  done
-  [ $ok -eq 1 ] || exit 2
-  echo "ok"
-}
-
-udp_relay_set_cmd(){
-  [ $# -ge 1 ] || die "usage: /sys/udp_relay/set key=value"
-  udp_relay_set_one "$1" || exit $?
-  echo "ok"
 }
 
 # ======================= Link Aggregation =======================
@@ -435,21 +283,13 @@ case "$1" in
   /sys/reboot)             shift; reboot_cmd "$@" ;;
 
   # pixelpilot
-  /sys/pixelpilot/help)    print_help_msg "pixelpilot_help.msg" ;;
-  /sys/pixelpilot/get)     shift; pixelpilot_get "$1" ;;
-  /sys/pixelpilot/set)     shift; pixelpilot_set_cmd "$@" ;;
-  /sys/pixelpilot/params)  shift; pixelpilot_params "$@" ;;
-  /sys/pixelpilot/apply)   shift; pixelpilot_apply_cmd "$@" ;;
-  /sys/pixelpilot/stop)    shift; pixelpilot_stop_cmd "$@" ;;
-  /sys/pixelpilot/restart) shift; pixelpilot_restart_cmd "$@" ;;
-  /sys/pixelpilot/start)   shift; pixelpilot_start_cmd "$@" ;;
-  /sys/pixelpilot/status)  shift; pixelpilot_status_cmd "$@" ;;
+  /sys/pixelpilot/help)           print_help_msg "pixelpilot_help.msg" ;;
+  /sys/pixelpilot/start)          shift; pixelpilot_start_cmd "$@" ;;
+  /sys/pixelpilot/stop)           shift; pixelpilot_stop_cmd "$@" ;;
+  /sys/pixelpilot/toggle_record)  shift; pixelpilot_toggle_record_cmd "$@" ;;
 
   # udp relay
   /sys/udp_relay/help)     print_help_msg "udp_relay_help.msg" ;;
-  /sys/udp_relay/get)      shift; udp_relay_get "$1" ;;
-  /sys/udp_relay/set)      shift; udp_relay_set_cmd "$@" ;;
-  /sys/udp_relay/params)   shift; udp_relay_params "$@" ;;
   /sys/udp_relay/start)    shift; udp_relay_start "$@" ;;
   /sys/udp_relay/stop)     shift; udp_relay_stop "$@" ;;
   /sys/udp_relay/status)   shift; udp_relay_status "$@" ;;
