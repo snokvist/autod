@@ -268,6 +268,16 @@ pixelpilot_mini_rk_signal(){
     echo "$action toggled via SIGUSR1 ($pids)"
     return 0
   fi
+  for pid in $pids; do
+    if kill -0 "$pid" 2>/dev/null; then
+      continue
+    fi
+    if [ -d "/proc/$pid" ]; then
+      echo "insufficient permissions to signal pixelpilot_mini_rk (pid $pid)" 1>&2
+      return 4
+    fi
+  done
+  echo "pixelpilot_mini_rk exited before it could be signalled" 1>&2
   echo "failed to signal pixelpilot_mini_rk" 1>&2
   return 4
 }
