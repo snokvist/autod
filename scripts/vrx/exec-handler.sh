@@ -261,6 +261,22 @@ link_route_status(){
 # ======================= Pixelpilot Mini RK =======================
 pixelpilot_mini_rk_pids(){ pidof pixelpilot_mini_rk 2>/dev/null; }
 
+send_pid_signal(){
+  pid="$1"
+  signal="$2"
+  if kill -"$signal" "$pid" 2>/dev/null; then
+    return 0
+  fi
+  short_sig="$signal"
+  case "$short_sig" in
+    SIG*) short_sig="${short_sig#SIG}" ;;
+  esac
+  if [ "$short_sig" != "$signal" ] && kill -"$short_sig" "$pid" 2>/dev/null; then
+    return 0
+  fi
+  return 1
+}
+
 pixelpilot_mini_rk_signal(){
   signal="$1"
   action="$2"
@@ -272,32 +288,32 @@ pixelpilot_mini_rk_signal(){
     return 3
   fi
   success_pids=""
-  denied_pids=""
+  active_but_failed_pids=""
   missing_pids=""
   for pid in $pids; do
-    if kill -"$signal" "$pid" 2>/dev/null; then
+    if send_pid_signal "$pid" "$signal"; then
       success_pids="$success_pids $pid"
       continue
     fi
     if kill -0 "$pid" 2>/dev/null; then
-      denied_pids="$denied_pids $pid"
+      active_but_failed_pids="$active_but_failed_pids $pid"
       continue
     fi
     if [ -d "/proc/$pid" ]; then
-      denied_pids="$denied_pids $pid"
+      active_but_failed_pids="$active_but_failed_pids $pid"
     else
       missing_pids="$missing_pids $pid"
     fi
   done
 
   success_pids="${success_pids# }"
-  denied_pids="${denied_pids# }"
+  active_but_failed_pids="${active_but_failed_pids# }"
   missing_pids="${missing_pids# }"
 
   if [ -n "$success_pids" ]; then
     echo "$action toggled via $signal ($success_pids)"
-    if [ -n "$denied_pids" ]; then
-      echo "insufficient permissions to signal pixelpilot_mini_rk (pid $denied_pids)" 1>&2
+    if [ -n "$active_but_failed_pids" ]; then
+      echo "pixelpilot_mini_rk running but $signal delivery failed (pid $active_but_failed_pids)" 1>&2
     fi
     if [ -n "$missing_pids" ]; then
       echo "pixelpilot_mini_rk pid(s) exited before they could be signalled ($missing_pids)" 1>&2
@@ -305,8 +321,8 @@ pixelpilot_mini_rk_signal(){
     return 0
   fi
 
-  if [ -n "$denied_pids" ]; then
-    echo "insufficient permissions to signal pixelpilot_mini_rk (pid $denied_pids)" 1>&2
+  if [ -n "$active_but_failed_pids" ]; then
+    echo "pixelpilot_mini_rk running but $signal delivery failed (pid $active_but_failed_pids)" 1>&2
     return 4
   fi
 
