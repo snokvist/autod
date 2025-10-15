@@ -24,6 +24,11 @@ HELP_DIR="${HELP_DIR:-$SCRIPT_DIR}"
 STATE_DIR="${VRX_STATE_DIR:-/tmp/vrx}"
 LINK_STATE_FILE="$STATE_DIR/link.env"
 
+if [ "$(id -u)" -ne 0 ]; then
+  echo "exec-handler.sh requires root privileges; ensure autod.service runs as root" 1>&2
+  exit 4
+fi
+
 # ======================= Helpers =======================
 die(){ echo "$*" 1>&2; exit 2; }
 have(){ command -v "$1" >/dev/null 2>&1; }
