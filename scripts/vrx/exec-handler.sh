@@ -266,20 +266,51 @@ pixelpilot_mini_rk_signal(){
     echo "pixelpilot_mini_rk not running" 1>&2
     return 3
   fi
-  if kill -"$signal" $pids 2>/dev/null; then
-    echo "$action toggled via $signal ($pids)"
-    return 0
-  fi
+  success_pids=""
+  denied_pids=""
+  missing_pids=""
   for pid in $pids; do
+    if kill -"$signal" "$pid" 2>/dev/null; then
+      success_pids="$success_pids $pid"
+      continue
+    fi
     if kill -0 "$pid" 2>/dev/null; then
+      denied_pids="$denied_pids $pid"
       continue
     fi
     if [ -d "/proc/$pid" ]; then
-      echo "insufficient permissions to signal pixelpilot_mini_rk (pid $pid)" 1>&2
-      return 4
+      denied_pids="$denied_pids $pid"
+    else
+      missing_pids="$missing_pids $pid"
     fi
   done
-  echo "pixelpilot_mini_rk exited before it could be signalled" 1>&2
+
+  success_pids="${success_pids# }"
+  denied_pids="${denied_pids# }"
+  missing_pids="${missing_pids# }"
+
+  if [ -n "$success_pids" ]; then
+    echo "$action toggled via $signal ($success_pids)"
+    if [ -n "$denied_pids" ]; then
+      echo "insufficient permissions to signal pixelpilot_mini_rk (pid $denied_pids)" 1>&2
+    fi
+    if [ -n "$missing_pids" ]; then
+      echo "pixelpilot_mini_rk pid(s) exited before they could be signalled ($missing_pids)" 1>&2
+    fi
+    return 0
+  fi
+
+  if [ -n "$denied_pids" ]; then
+    echo "insufficient permissions to signal pixelpilot_mini_rk (pid $denied_pids)" 1>&2
+    return 4
+  fi
+
+  if [ -n "$missing_pids" ]; then
+    echo "pixelpilot_mini_rk exited before it could be signalled ($missing_pids)" 1>&2
+    echo "failed to signal pixelpilot_mini_rk with $signal" 1>&2
+    return 4
+  fi
+
   echo "failed to signal pixelpilot_mini_rk with $signal" 1>&2
   return 4
 }
