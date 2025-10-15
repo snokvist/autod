@@ -1,6 +1,15 @@
 # ==== Project ====
 APP          := autod
 
+# Install prefixes (override as needed)
+PREFIX       ?= /usr/local
+BINDIR       ?= $(PREFIX)/bin
+SYSCONFDIR   ?= /etc
+DATADIR      ?= $(PREFIX)/share
+AUTOD_DATADIR ?= $(DATADIR)/$(APP)
+VRXDIR       ?= $(AUTOD_DATADIR)/vrx
+SYSTEMD_DIR  ?= /etc/systemd/system
+
 # Paths
 SRC_DIR      := src
 
@@ -163,7 +172,34 @@ strip: ;
 	-@command -v $(STRIP_GNU)    >/dev/null 2>&1 && $(STRIP_GNU)    $(APP)-gnu sse_tail-gnu udp_relay-gnu 2>/dev/null || true
 
 install: native
-	install -Dm755 $(APP) /usr/local/bin/$(APP)
+	install -Dm755 $(APP) $(DESTDIR)$(BINDIR)/$(APP)
+	install -d $(DESTDIR)$(VRXDIR)
+	install -m644 html/autod/vrx_index.html $(DESTDIR)$(VRXDIR)/vrx_index.html
+	install -m755 scripts/vrx/exec-handler.sh $(DESTDIR)$(VRXDIR)/exec-handler.sh
+	@set -e; \
+	for helper in scripts/vrx/*.msg; do \
+		[ -e "$$helper" ] || continue; \
+		install -m644 "$$helper" "$(DESTDIR)$(VRXDIR)/"; \
+	done
+	@set -e; \
+	confdir="$(DESTDIR)$(SYSCONFDIR)/$(APP)"; \
+	install -d "$$confdir"; \
+	target="$$confdir/autod.conf"; \
+	if [ -f "$$target" ]; then \
+		target="$$target.dist"; \
+	fi; \
+	install -m644 configs/autod.conf "$$target"; \
+	sed -i \
+		-e 's#^interpreter=.*#interpreter=$(VRXDIR)/exec-handler.sh#' \
+		-e 's#^ui_path=.*#ui_path=$(VRXDIR)/vrx_index.html#' \
+		"$$target"
+	install -d $(DESTDIR)$(SYSTEMD_DIR)
+	sed \
+		-e 's#@AUTOD_BIN@#$(BINDIR)/$(APP)#g' \
+		-e 's#@AUTOD_CONF@#$(SYSCONFDIR)/$(APP)/autod.conf#g' \
+		-e 's#@VRX_DIR@#$(VRXDIR)#g' \
+		configs/autod.service > $(DESTDIR)$(SYSTEMD_DIR)/$(APP).service
+	chmod 644 $(DESTDIR)$(SYSTEMD_DIR)/$(APP).service
 
 help:
 	@echo "Builds:"

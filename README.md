@@ -66,6 +66,24 @@ All commands are run from the repository root.
 
 Each flavour drops intermediates under `build/<flavour>/` and strips binaries automatically when the matching `strip` tool is found.
 
+### Installing on Debian/`systemd`
+
+`make install` builds the native daemon and stages a simple system-wide layout that targets Debian 11:
+
+- `autod` → `$(PREFIX)/bin/autod` (default prefix `/usr/local`).
+- VRX web UI and helpers → `$(PREFIX)/share/autod/vrx/` (`vrx_index.html`, `exec-handler.sh`, `*.msg`).
+- Configuration → `/etc/autod/autod.conf` (existing files are preserved and a `.dist` copy is written instead).
+- Service unit → `/etc/systemd/system/autod.service` pointing at the installed binary and config.
+
+After installation reload `systemd` and enable the daemon:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now autod
+```
+
+The service starts in the VRX data directory so the bundled helper scripts can find their message payloads without additional configuration.
+
 If you prefer direct compiler invocation, consult the comment at the top of [`src/autod.c`](src/autod.c), but using the provided `Makefile` keeps flags consistent.
 
 ---

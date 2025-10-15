@@ -19,7 +19,8 @@
 #   control and otherwise return rc=3 to indicate unsupported operations.
 
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
-HELP_DIR="${HELP_DIR:-/etc/autod}"
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
+HELP_DIR="${HELP_DIR:-$SCRIPT_DIR}"
 STATE_DIR="${VRX_STATE_DIR:-/tmp/vrx}"
 LINK_STATE_FILE="$STATE_DIR/link.env"
 
@@ -31,13 +32,16 @@ ensure_parent_dir(){ dir="$1"; [ -d "$dir" ] || mkdir -p "$dir"; }
 # print external help JSON (fallback to simple error payload)
 print_help_msg(){
   name="$1"
-  file="$HELP_DIR/$name"
-  if [ -r "$file" ]; then
-    cat "$file"
-  else
-    echo "{\"error\":\"help file not found\",\"name\":\"$name\"}"
-    return 4
-  fi
+  for base in "$HELP_DIR" "$SCRIPT_DIR" "/etc/autod"; do
+    [ -n "$base" ] || continue
+    file="$base/$name"
+    if [ -r "$file" ]; then
+      cat "$file"
+      return 0
+    fi
+  done
+  echo "{\"error\":\"help file not found\",\"name\":\"$name\"}"
+  return 4
 }
 
 # kv storage fallbacks when fw_(print|set)env are unavailable
