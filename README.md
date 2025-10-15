@@ -75,7 +75,7 @@ Each flavour drops intermediates under `build/<flavour>/` and strips binaries au
 - Configuration → `/etc/autod/autod.conf` (existing files are preserved and a `.dist` copy is written instead).
 - Service unit → `/etc/systemd/system/autod.service` pointing at the installed binary and config.
 
-After installation reload `systemd` and enable the daemon:
+After installation `make install` reloads `systemd` automatically when installing directly on the host (no `DESTDIR`). If you staged into a `DESTDIR`, reload manually once the files land on the target system, then enable the daemon:
 
 ```bash
 sudo systemctl daemon-reload
