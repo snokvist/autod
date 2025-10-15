@@ -194,15 +194,15 @@ install: native
 		-e 's#^ui_path=.*#ui_path=$(VRXDIR)/vrx_index.html#' \
 		"$$target"
 	install -d $(DESTDIR)$(SYSTEMD_DIR)
-        sed \
-                -e 's#@AUTOD_BIN@#$(BINDIR)/$(APP)#g' \
-                -e 's#@AUTOD_CONF@#$(SYSCONFDIR)/$(APP)/autod.conf#g' \
-                -e 's#@VRX_DIR@#$(VRXDIR)#g' \
-                configs/autod.service > $(DESTDIR)$(SYSTEMD_DIR)/$(APP).service
-        chmod 644 $(DESTDIR)$(SYSTEMD_DIR)/$(APP).service
-        @if command -v systemctl >/dev/null 2>&1 && [ -z "$(DESTDIR)" ]; then \
-                systemctl daemon-reload; \
-        fi
+	sed \
+		-e 's#@AUTOD_BIN@#$(BINDIR)/$(APP)#g' \
+		-e 's#@AUTOD_CONF@#$(SYSCONFDIR)/$(APP)/autod.conf#g' \
+		-e 's#@VRX_DIR@#$(VRXDIR)#g' \
+		configs/autod.service > $(DESTDIR)$(SYSTEMD_DIR)/$(APP).service
+	chmod 644 $(DESTDIR)$(SYSTEMD_DIR)/$(APP).service
+	@if command -v systemctl >/dev/null 2>&1 && [ -z "$(DESTDIR)" ]; then \
+		systemctl daemon-reload; \
+	fi
 
 help:
 	@echo "Builds:"
