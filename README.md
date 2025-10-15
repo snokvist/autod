@@ -84,7 +84,7 @@ sudo systemctl enable --now autod
 
 The service starts in the VRX data directory so the bundled helper scripts can find their message payloads without additional configuration.
 
-Pixelpilot Mini RK actions (`toggle_osd`, `toggle_recording`) are implemented as `SIGUSR1` signals against the `pixelpilot_mini_rk` process. Ensure the `autod` daemon runs with permission to signal that process (for example by running both as `root` or the same service user); otherwise the UI will report `failed to signal pixelpilot_mini_rk`.
+Pixelpilot Mini RK actions (`toggle_osd`, `toggle_recording`) signal the `pixelpilot_mini_rk` process directly (`SIGUSR1` for the OSD overlay, `SIGUSR2` for recording). Ensure the `autod` daemon runs with permission to send both signals (for example by running both as `root` or the same service user); otherwise the UI will report `failed to signal pixelpilot_mini_rk`.
 
 If you prefer direct compiler invocation, consult the comment at the top of [`src/autod.c`](src/autod.c), but using the provided `Makefile` keeps flags consistent.
 

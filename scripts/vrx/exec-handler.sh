@@ -257,15 +257,17 @@ link_route_status(){
 pixelpilot_mini_rk_pids(){ pidof pixelpilot_mini_rk 2>/dev/null; }
 
 pixelpilot_mini_rk_signal(){
-  action="$1"
+  signal="$1"
+  action="$2"
+  [ -n "$signal" ] || signal="SIGUSR1"
   [ -n "$action" ] || action="action"
   pids="$(pixelpilot_mini_rk_pids)"
   if [ -z "$pids" ]; then
     echo "pixelpilot_mini_rk not running" 1>&2
     return 3
   fi
-  if kill -SIGUSR1 $pids 2>/dev/null; then
-    echo "$action toggled via SIGUSR1 ($pids)"
+  if kill -"$signal" $pids 2>/dev/null; then
+    echo "$action toggled via $signal ($pids)"
     return 0
   fi
   for pid in $pids; do
@@ -278,12 +280,12 @@ pixelpilot_mini_rk_signal(){
     fi
   done
   echo "pixelpilot_mini_rk exited before it could be signalled" 1>&2
-  echo "failed to signal pixelpilot_mini_rk" 1>&2
+  echo "failed to signal pixelpilot_mini_rk with $signal" 1>&2
   return 4
 }
 
-pixelpilot_mini_rk_toggle_osd(){ pixelpilot_mini_rk_signal "OSD"; }
-pixelpilot_mini_rk_toggle_recording(){ pixelpilot_mini_rk_signal "Recording"; }
+pixelpilot_mini_rk_toggle_osd(){ pixelpilot_mini_rk_signal SIGUSR1 "OSD"; }
+pixelpilot_mini_rk_toggle_recording(){ pixelpilot_mini_rk_signal SIGUSR2 "Recording"; }
 
 pixelpilot_mini_rk_reboot(){
   ( nohup sh -c 'reboot now' >/dev/null 2>&1 & )
