@@ -40,9 +40,10 @@
   .sse a{color:inherit;text-decoration:underline dotted;word-break:break-all}
 
   .dvr-list{display:grid;gap:6px}
-  .dvr-item{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 10px;border:1px solid var(--line);border-radius:10px;background:#0f1317}
-  .dvr-item a{color:inherit;text-decoration:none}
+  .dvr-item{display:grid;gap:4px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:#0f1317}
+  .dvr-item a{color:inherit;text-decoration:none;font-weight:600;word-break:break-all}
   .dvr-item a:hover{text-decoration:underline}
+  .dvr-meta{color:var(--mut);font-size:12px}
   .dvr-message{font-size:12px}
   .dvr-message.ok{color:var(--ok)}
   .dvr-message.err{color:var(--err)}
@@ -120,7 +121,22 @@
 </header>
 
 <main>
-  <section class="card" id="capsCard">
+  <section class="card" id="dvrCard" style="display:none">
+    <h2>DVR recordings</h2>
+    <div class="body grid">
+      <div class="row">
+        <button id="dvrRefreshBtn">Refresh list</button>
+        <button id="dvrDeleteAllBtn">Delete all</button>
+        <div class="spacer"></div>
+        <div class="mut" id="dvrStatus">—</div>
+      </div>
+      <div id="dvrMessage" class="dvr-message" style="display:none"></div>
+      <div id="dvrEmptyState" class="dvr-empty" style="display:none">No recordings found.</div>
+      <div id="dvrList" class="dvr-list"></div>
+    </div>
+  </section>
+
+  <section class="card" id="capsCard" style="display:none">
     <h2>Device & runtime</h2>
     <div class="body grid">
       <div class="kv"><div class="mut">Device</div><div id="dev_device">—</div></div>
@@ -134,7 +150,7 @@
     </div>
   </section>
 
-  <section class="card" id="nodesCard">
+  <section class="card" id="nodesCard" style="display:none">
     <h2>Nodes</h2>
     <div class="body grid">
       <div class="nodes-toolbar">
@@ -273,22 +289,6 @@
       </div>
     </div>
   </section>
-
-  <section class="card" id="dvrCard" style="display:none">
-    <h2>DVR recordings</h2>
-    <div class="body grid">
-      <div class="row">
-        <button id="dvrRefreshBtn">Refresh list</button>
-        <button id="dvrDeleteAllBtn">Delete all</button>
-        <div class="spacer"></div>
-        <div class="mut" id="dvrStatus">—</div>
-      </div>
-      <div id="dvrMessage" class="dvr-message" style="display:none"></div>
-      <div id="dvrEmptyState" class="dvr-empty" style="display:none">No recordings found.</div>
-      <div id="dvrList" class="dvr-list"></div>
-    </div>
-  </section>
-
   <section class="card" id="execCard">
     <h2>/exec — raw runner</h2>
     <div class="body">
@@ -320,6 +320,8 @@ function joinCaps(caps){
 function secsToHhMmSs(secs){ if(!secs&&secs!==0)return'—'; const s=Math.floor(secs); const h=(s/3600)|0,m=((s%3600)/60)|0,ss=s%60; return `${h}h ${m}m ${ss}s`; }
 function tsToAgo(tsSec){ if(!tsSec)return'—'; const now=(Date.now()/1000)|0; const d=Math.max(0,now-tsSec); if(d<60)return`${d|0}s ago`; if(d<3600)return`${(d/60)|0}m ago`; if(d<86400)return`${(d/3600)|0}h ago`; return`${(d/86400)|0}d ago`; }
 function fmtDate(tsSec){ if(!tsSec)return'—'; const d=new Date(tsSec*1000); return d.toISOString().replace('T',' ').replace(/\.\d+Z$/,'Z'); }
+function fmtSizeMb(bytes){ if(typeof bytes!=='number'||!Number.isFinite(bytes)||bytes<0)return'—'; const mb=bytes/1048576; const places=mb>=100?0:(mb>=10?1:2); return `${mb.toFixed(places)} MB`; }
+function fmtLocalDateTime(tsSec){ if(typeof tsSec!=='number'||!Number.isFinite(tsSec)||tsSec<=0)return'—'; const d=new Date(tsSec*1000); if(Number.isNaN(d.getTime()))return'—'; return d.toLocaleString(); }
 
 function makeDebounce(fn, wait){
   let t=null, lastArgs=null;
@@ -462,19 +464,24 @@ function renderNodesCard(state){
   });
 }
 async function fetchNodes(){
+  if (!nodesUI.enabled) return;
   try{
     const r = await fetch('/nodes',{cache:'no-store'});
+    if (!nodesUI.enabled) return;
     const data = await r.json();
+    if (!nodesUI.enabled) return;
     renderNodesCard(data);
     if (data.scanning){ if(!nodesPollTimer){ nodesPollTimer=setInterval(fetchNodes,800); } }
     else { if(nodesPollTimer){ clearInterval(nodesPollTimer); nodesPollTimer=null; } }
   }catch(e){
+    if (!nodesUI.enabled) return;
     renderNodesCard({nodes:[]});
     $('#nodesNotice').textContent = `Failed to load /nodes: ${e.message}`;
     if (nodesPollTimer){ clearInterval(nodesPollTimer); nodesPollTimer = null; }
   }
 }
 async function triggerNodesScan(){
+  if (!nodesUI.enabled) return;
   $('#nodesScanBtn').disabled = true;
   try{ await fetch('/nodes',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}); }
   catch(e){ $('#nodesNotice').textContent = `Failed to POST /nodes: ${e.message}`; }
@@ -856,9 +863,11 @@ function reloadUdpRelayEmbed(){
 
 const linkUI = { help:null };
 
+const nodesUI = { enabled:false };
+
 const pixelpilotMiniRkUI = { initialized:false };
 
-const dvrUI = { initialized:false, hasExec:false };
+const dvrUI = { initialized:false, hasExec:false, entries:[] };
 
 function ensurePixelpilotMiniRkUI(){
   if (pixelpilotMiniRkUI.initialized) return;
@@ -901,19 +910,99 @@ function parseDvrListFromHtml(html){
   }
 }
 
-function renderDvrList(files){
+function renderDvrList(entries){
   const listEl = document.getElementById('dvrList');
   if (!listEl) return;
+  dvrUI.entries = Array.isArray(entries) ? entries : [];
   listEl.innerHTML = '';
-  for (const name of files){
+  for (const entry of dvrUI.entries){
+    if (!entry || typeof entry.name !== 'string') continue;
     const item = document.createElement('div');
     item.className = 'dvr-item';
     const link = document.createElement('a');
-    link.href = `/media/${encodeURIComponent(name)}`;
-    link.textContent = name;
-    link.download = name;
+    const encoded = encodeURIComponent(entry.name);
+    link.href = `/media/${encoded}`;
+    link.textContent = entry.name;
+    link.download = entry.name;
+    link.addEventListener('click', ev => {
+      if (ev.button !== 0 || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) return;
+      ev.preventDefault();
+      downloadDvrRecording(entry);
+    });
     item.appendChild(link);
+    const meta = document.createElement('div');
+    meta.className = 'dvr-meta';
+    const sizeTxt = fmtSizeMb(entry.sizeBytes);
+    const timeTxt = fmtLocalDateTime(entry.mtimeSec);
+    meta.textContent = (sizeTxt === '—' && timeTxt === '—') ? '—' : `${sizeTxt} • ${timeTxt}`;
+    meta.title = (typeof entry.mtimeSec === 'number' && Number.isFinite(entry.mtimeSec) && entry.mtimeSec > 0) ? fmtDate(entry.mtimeSec) : '';
+    item.appendChild(meta);
     listEl.appendChild(item);
+  }
+}
+
+async function enrichDvrEntries(entries){
+  if (!Array.isArray(entries) || !entries.length) return;
+  for (const entry of entries){
+    if (!entry || typeof entry.name !== 'string') continue;
+    const needsSize = !(typeof entry.sizeBytes === 'number' && Number.isFinite(entry.sizeBytes) && entry.sizeBytes >= 0);
+    const needsTime = !(typeof entry.mtimeSec === 'number' && Number.isFinite(entry.mtimeSec) && entry.mtimeSec > 0);
+    if (!needsSize && !needsTime) continue;
+    try{
+      const resp = await fetch(`/media/${encodeURIComponent(entry.name)}`, { method:'HEAD', cache:'no-store' });
+      if (!resp.ok) continue;
+      if (needsSize){
+        const len = resp.headers.get('content-length');
+        if (len){
+          const size = Number(len);
+          if (Number.isFinite(size) && size >= 0) entry.sizeBytes = size;
+        }
+      }
+      if (needsTime){
+        const lm = resp.headers.get('last-modified');
+        if (lm){
+          const ts = Date.parse(lm);
+          if (!Number.isNaN(ts) && Number.isFinite(ts)) entry.mtimeSec = Math.floor(ts/1000);
+        }
+      }
+    }catch{}
+  }
+}
+
+async function downloadDvrRecording(entry){
+  if (!entry || typeof entry.name !== 'string') return;
+  const statusEl = document.getElementById('dvrStatus');
+  const msgEl = document.getElementById('dvrMessage');
+  const previousStatus = statusEl ? statusEl.textContent : '';
+  if (statusEl) statusEl.textContent = `downloading ${entry.name}…`;
+  if (msgEl){
+    msgEl.classList.remove('ok','err');
+    msgEl.textContent = `Preparing download for ${entry.name}…`;
+    msgEl.style.display = 'block';
+  }
+  try{
+    const resp = await fetch(`/media/${encodeURIComponent(entry.name)}`, { cache:'no-store' });
+    if (!resp.ok) throw new Error(`download failed (${resp.status})`);
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = entry.name;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    setTimeout(()=> URL.revokeObjectURL(url), 1000);
+    if (msgEl){
+      msgEl.classList.add('ok');
+      msgEl.textContent = `Download ready for ${entry.name}`;
+    }
+  }catch(e){
+    if (msgEl){
+      msgEl.classList.add('err');
+      msgEl.textContent = e?.message || `Failed to download ${entry.name}`;
+    }
+  }finally{
+    if (statusEl) statusEl.textContent = previousStatus || '';
   }
 }
 
@@ -930,15 +1019,23 @@ async function refreshDvrList(){
   msgEl.textContent = '';
   msgEl.classList.remove('ok','err');
   try{
-    let files = [];
+    let entries = [];
     if (dvrUI.hasExec){
       const res = await postExec({path:'/sys/dvr/list', args:[]}, CMD_TIMEOUT_MS, 'dvr');
       const ok = (res && typeof res.rc === 'number') ? res.rc === 0 : true;
       const stdout = String(res?.stdout ?? '');
-      files = stdout.split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
-      files.sort((a,b)=>a.localeCompare(b,'en',{numeric:true,sensitivity:'base'}));
+      entries = stdout.split(/\r?\n/).map(line => line.trim()).filter(Boolean).map(line => {
+        const parts = line.split('\t');
+        const name = (parts[0] || '').trim();
+        if (!name) return null;
+        const sizeCandidate = parts.length > 1 ? Number(parts[1]) : NaN;
+        const mtimeCandidate = parts.length > 2 ? Number(parts[2]) : NaN;
+        const sizeBytes = (Number.isFinite(sizeCandidate) && sizeCandidate >= 0) ? sizeCandidate : null;
+        const mtimeSec = (Number.isFinite(mtimeCandidate) && mtimeCandidate > 0) ? Math.floor(mtimeCandidate) : null;
+        return { name, sizeBytes, mtimeSec };
+      }).filter(Boolean);
       if (!ok){
-        files = [];
+        entries = [];
         const errMsg = (res?.stderr || res?.stdout || 'failed to list recordings').trim();
         if (errMsg){
           msgEl.textContent = errMsg;
@@ -952,13 +1049,27 @@ async function refreshDvrList(){
         throw new Error(`/media/ responded with ${resp.status}`);
       }
       const text = await resp.text();
-      files = parseDvrListFromHtml(text);
+      const names = parseDvrListFromHtml(text);
+      entries = names.map(name => ({ name, sizeBytes:null, mtimeSec:null }));
     }
-    renderDvrList(files);
-    if (!files.length){
+    if (entries.some(entry => !entry || typeof entry.name !== 'string')){
+      entries = entries.filter(entry => entry && typeof entry.name === 'string');
+    }
+    const needsMeta = entries.some(entry => !(typeof entry.sizeBytes === 'number' && Number.isFinite(entry.sizeBytes) && entry.sizeBytes >= 0) || !(typeof entry.mtimeSec === 'number' && Number.isFinite(entry.mtimeSec) && entry.mtimeSec > 0));
+    if (needsMeta){
+      await enrichDvrEntries(entries);
+    }
+    entries.sort((a,b)=>{
+      const aTs = (typeof a.mtimeSec === 'number' && Number.isFinite(a.mtimeSec)) ? a.mtimeSec : 0;
+      const bTs = (typeof b.mtimeSec === 'number' && Number.isFinite(b.mtimeSec)) ? b.mtimeSec : 0;
+      if (bTs !== aTs) return bTs - aTs;
+      return a.name.localeCompare(b.name,'en',{numeric:true,sensitivity:'base'});
+    });
+    renderDvrList(entries);
+    if (!entries.length){
       emptyEl.style.display = 'block';
     }
-    statusEl.textContent = `${files.length} recording${files.length===1?'':'s'} • ${new Date().toLocaleTimeString()}`;
+    statusEl.textContent = `${entries.length} recording${entries.length===1?'':'s'} • ${new Date().toLocaleTimeString()}`;
   }catch(e){
     statusEl.textContent = `error • ${new Date().toLocaleTimeString()}`;
     msgEl.textContent = e?.message || 'failed to load recordings';
@@ -1157,6 +1268,32 @@ async function loadCaps(){
 
     const capList = Array.isArray(caps.caps) ? caps.caps : [];
     const hasExec = capList.includes('exec');
+
+    const deviceCard = document.getElementById('capsCard');
+    if (deviceCard){
+      deviceCard.style.display = capList.includes('device') ? '' : 'none';
+    }
+
+    const nodesCard = document.getElementById('nodesCard');
+    const nodesEnabled = capList.includes('nodes');
+    nodesUI.enabled = nodesEnabled;
+    if (nodesCard){
+      if (nodesEnabled){
+        nodesCard.style.display = '';
+        fetchNodes();
+      } else {
+        nodesCard.style.display = 'none';
+        $('#nodesStats').textContent = 'cap missing';
+        $('#nodesNotice').textContent = 'cap missing';
+        $('#nodesProgress').style.width = '0%';
+        $('#nodesGrid').innerHTML = '';
+        $('#nodesScanBtn').disabled = true;
+        if (nodesPollTimer){
+          clearInterval(nodesPollTimer);
+          nodesPollTimer = null;
+        }
+      }
+    }
 
     if (capList.includes('pixelpilot')){
       $('#pixelpilotCard').style.display = '';

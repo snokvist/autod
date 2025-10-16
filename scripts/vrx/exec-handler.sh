@@ -266,12 +266,47 @@ dvr_list(){
     echo "media directory not found: $dir" 1>&2
     return 3
   fi
-  for file in "$dir"/*.mp4; do
-    if [ "$file" = "$dir"'/'"*.mp4" ]; then
-      break
+  set -- "$dir"/*.mp4
+  if [ "$1" = "$dir"'/'"*.mp4" ]; then
+    return 0
+  fi
+  tmp="$(mktemp 2>/dev/null)"
+  if [ -z "$tmp" ]; then
+    tmp="/tmp/dvr_list.$$"
+  fi
+  : > "$tmp" 2>/dev/null || { echo "failed to create temp file" 1>&2; return 4; }
+  for file in "$@"; do
+    [ -f "$file" ] || continue
+    name="${file##*/}"
+    size=""
+    mtime=""
+    if have stat; then
+      size="$(stat -c '%s' "$file" 2>/dev/null)"
+      [ -n "$size" ] || size="$(stat -f '%z' "$file" 2>/dev/null)"
+      mtime="$(stat -c '%Y' "$file" 2>/dev/null)"
+      [ -n "$mtime" ] || mtime="$(stat -f '%m' "$file" 2>/dev/null)"
     fi
-    printf '%s\n' "${file##*/}"
+    if [ -z "$size" ]; then
+      size="$(wc -c < "$file" 2>/dev/null)"
+    fi
+    if [ -z "$mtime" ]; then
+      mtime="$(date -r "$file" +%s 2>/dev/null)"
+    fi
+    case "$size" in
+      ''|*[!0-9]*) size=0 ;;
+    esac
+    case "$mtime" in
+      ''|*[!0-9]*) mtime=0 ;;
+    esac
+    printf '%s\t%s\t%s\n' "$mtime" "$size" "$name" >>"$tmp"
   done
+  if [ -s "$tmp" ]; then
+    sort -rn "$tmp" | while IFS="$(printf '\t')" read -r mtime size name; do
+      [ -n "$name" ] || continue
+      printf '%s\t%s\t%s\n' "$name" "$size" "$mtime"
+    done
+  fi
+  rm -f "$tmp"
   return 0
 }
 
