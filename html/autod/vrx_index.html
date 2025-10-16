@@ -214,32 +214,6 @@
           <div class="status-indicator" id="pixelpilotMiniRkStatus" aria-live="polite">Idle</div>
         </div>
       </div>
-      <div class="grid" id="pixelpilotMiniRkGrid">
-        <div class="ctl" id="pixelpilotMiniRkOsdCtl">
-          <div class="lbl">
-            <div class="name">Toggle OSD</div>
-          </div>
-          <div class="desc">Send SIGUSR1 to pixelpilot_mini_rk to toggle the on-screen display.</div>
-        </div>
-        <div class="ctl" id="pixelpilotMiniRkRecordingCtl">
-          <div class="lbl">
-            <div class="name">Toggle Recording</div>
-          </div>
-          <div class="desc">Send SIGUSR1 to pixelpilot_mini_rk to toggle DVR recording.</div>
-        </div>
-        <div class="ctl" id="pixelpilotMiniRkRebootCtl">
-          <div class="lbl">
-            <div class="name">Reboot</div>
-          </div>
-          <div class="desc">Issue <code>reboot now</code> in the background.</div>
-        </div>
-        <div class="ctl" id="pixelpilotMiniRkShutdownCtl">
-          <div class="lbl">
-            <div class="name">Shutdown</div>
-          </div>
-          <div class="desc">Issue <code>shutdown now</code> in the background.</div>
-        </div>
-      </div>
     </div>
   </section>
 
@@ -889,16 +863,15 @@ function ensurePixelpilotMiniRkUI(){
   if (pixelpilotMiniRkUI.initialized) return;
   setMiniRkStatusIdle('Idle');
   const cfg = [
-    { btn:'#pixelpilotMiniRkToggleOsdBtn', ctl:'#pixelpilotMiniRkOsdCtl', path:'/sys/pixelpilot_mini_rk/toggle_osd' },
-    { btn:'#pixelpilotMiniRkToggleRecordingBtn', ctl:'#pixelpilotMiniRkRecordingCtl', path:'/sys/pixelpilot_mini_rk/toggle_recording' },
-    { btn:'#pixelpilotMiniRkRebootBtn', ctl:'#pixelpilotMiniRkRebootCtl', path:'/sys/pixelpilot_mini_rk/reboot' },
-    { btn:'#pixelpilotMiniRkShutdownBtn', ctl:'#pixelpilotMiniRkShutdownCtl', path:'/sys/pixelpilot_mini_rk/shutdown' }
+    { btn:'#pixelpilotMiniRkToggleOsdBtn', path:'/sys/pixelpilot_mini_rk/toggle_osd' },
+    { btn:'#pixelpilotMiniRkToggleRecordingBtn', path:'/sys/pixelpilot_mini_rk/toggle_recording' },
+    { btn:'#pixelpilotMiniRkRebootBtn', path:'/sys/pixelpilot_mini_rk/reboot' },
+    { btn:'#pixelpilotMiniRkShutdownBtn', path:'/sys/pixelpilot_mini_rk/shutdown' }
   ];
-  for (const {btn, ctl, path} of cfg){
+  for (const {btn, path} of cfg){
     const btnEl = document.querySelector(btn);
-    const ctlEl = document.querySelector(ctl);
-    if (!btnEl || !ctlEl) continue;
-    btnEl.addEventListener('click', ()=> runMiniRkCommand(path, ctlEl));
+    if (!btnEl) continue;
+    btnEl.addEventListener('click', ()=> runMiniRkCommand(path));
   }
   pixelpilotMiniRkUI.initialized = true;
 }
