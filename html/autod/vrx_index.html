@@ -150,6 +150,10 @@
       <div class="kv"><div class="mut">Loadavg</div><div id="dev_load">—</div></div>
       <div class="kv"><div class="mut">Capabilities</div><div class="caps" id="dev_caps">—</div></div>
       <div class="kv"><div class="mut">SSE</div><div class="sse" id="dev_sse">—</div></div>
+      <div class="row" id="deviceRuntimeActions" style="display:none">
+        <button id="pixelpilotMiniRkRebootBtn">Reboot device</button>
+        <button id="pixelpilotMiniRkShutdownBtn">Shutdown device</button>
+      </div>
     </div>
   </section>
 
@@ -193,8 +197,9 @@
         <div class="row" id="pixelpilotMiniRkActions">
           <button id="pixelpilotMiniRkToggleOsdBtn">Toggle OSD</button>
           <button id="pixelpilotMiniRkToggleRecordingBtn">Toggle Recording</button>
-          <button id="pixelpilotMiniRkRebootBtn">Reboot device</button>
-          <button id="pixelpilotMiniRkShutdownBtn">Shutdown device</button>
+          <button id="pixelpilotMiniRkRestartServiceBtn">Restart pixelpilot_mini_rk</button>
+          <button id="pixelpilotMiniRkStopServiceBtn">Stop pixelpilot_mini_rk</button>
+          <button id="pixelpilotMiniRkStartServiceBtn">Start pixelpilot_mini_rk</button>
         </div>
         <div class="spacer"></div>
         <div class="mini-status">
@@ -279,6 +284,25 @@
       <textarea id="exec_out" readonly></textarea>
     </div>
   </section>
+  <section class="card" id="remoteExecCard" style="display:none">
+    <h2>Remote /exec — raw runner</h2>
+    <div class="body">
+      <div class="row">
+        <label>target <input id="remoteExec_targetInput" value="http://192.168.2.203:55667/exec" placeholder="http://host:port/exec"></label>
+        <div class="spacer"></div>
+      </div>
+      <div class="row">
+        <label>path <input id="remoteExec_path" value="/sys/help"></label>
+        <label>args (space-separated) <input id="remoteExec_args" placeholder=''></label>
+        <button id="remoteExec_btn">POST remote /exec</button>
+      </div>
+      <div class="mut" id="remoteExec_target">Target: —</div>
+      <div class="mut">Body preview:</div>
+      <pre class="inline" id="remoteExec_body_preview">{}</pre>
+      <div class="mut">Response:</div>
+      <textarea id="remoteExec_out" readonly></textarea>
+    </div>
+  </section>
 </main>
 
 <script>
@@ -286,12 +310,34 @@ const $ = s => document.querySelector(s);
 const fmtOneLine = obj => JSON.stringify(obj);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const clamp = (v,min,max)=>Math.max(min,Math.min(max,v));
+const DEFAULT_REMOTE_EXEC_TARGET = 'http://192.168.2.203:55667/exec';
 
 function joinCaps(caps){
   if (!Array.isArray(caps) || !caps.length) return '—';
   const frag = document.createDocumentFragment();
   caps.forEach(c => { const span = document.createElement('span'); span.className='pill'; span.textContent=c; frag.appendChild(span); });
   return frag;
+}
+
+function normalizeRemoteExecTarget(raw){
+  let next = (raw ?? '').trim();
+  if (!next) return DEFAULT_REMOTE_EXEC_TARGET;
+  if (!/^https?:\/\//i.test(next)){
+    next = 'http://' + next.replace(/^\/+/, '');
+  }
+  return next;
+}
+
+function getRemoteExecTarget(){
+  const input = document.getElementById('remoteExec_targetInput');
+  if (!input) return DEFAULT_REMOTE_EXEC_TARGET;
+  return normalizeRemoteExecTarget(input.value);
+}
+
+function updateRemoteExecTargetDisplay(){
+  const targetEl = document.getElementById('remoteExec_target');
+  if (!targetEl) return;
+  targetEl.textContent = `Target: ${getRemoteExecTarget()}`;
 }
 function secsToHhMmSs(secs){ if(!secs&&secs!==0)return'—'; const s=Math.floor(secs); const h=(s/3600)|0,m=((s%3600)/60)|0,ss=s%60; return `${h}h ${m}m ${ss}s`; }
 function tsToAgo(tsSec){ if(!tsSec)return'—'; const now=(Date.now()/1000)|0; const d=Math.max(0,now-tsSec); if(d<60)return`${d|0}s ago`; if(d<3600)return`${(d/60)|0}m ago`; if(d<86400)return`${(d/3600)|0}h ago`; return`${(d/86400)|0}d ago`; }
@@ -349,23 +395,30 @@ function setMiniRkStatusResult(ok, detail=''){
   el.classList.add('flash');
 }
 
-async function runMiniRkCommand(path, ctl){
+async function runMiniRkCommand(command, btnEl){
+  const payload = typeof command === 'string'
+    ? { path: command, args: [] }
+    : {
+        path: command?.path || '',
+        args: Array.isArray(command?.args) ? command.args : []
+      };
+  if (!payload.path){
+    setMiniRkStatusResult(false, 'invalid command');
+    return;
+  }
   setMiniRkStatusRunning();
+  if (btnEl) btnEl.disabled = true;
   try{
-    const res = await postExec({path, args:[]}, CMD_TIMEOUT_MS, 'pixelpilotMiniRk');
+    const res = await postExec(payload, CMD_TIMEOUT_MS, 'pixelpilotMiniRk');
     const ok = (res && typeof res.rc === 'number') ? res.rc === 0 : true;
     const rawStdout = (res?.stdout ?? '').trim();
     const rawStderr = (res?.stderr ?? '').trim();
     const detail = ok ? (rawStdout.split('\n')[0] || '') : (rawStderr || rawStdout || 'command failed');
     setMiniRkStatusResult(ok, detail);
-    if (ctl){
-      flashCtl(ctl, ok);
-    }
   }catch(e){
     setMiniRkStatusResult(false, e?.message || 'command failed');
-    if (ctl){
-      flashCtl(ctl, false);
-    }
+  }finally{
+    if (btnEl) btnEl.disabled = false;
   }
 }
 
@@ -437,6 +490,27 @@ async function doExec(){
     $('#exec_out').value = txt.replace(/\n/g,'\\n');
   }catch(e){
     $('#exec_out').value = `{"error":"fetch_failed","msg":"${e.message}"}`;
+  }
+}
+
+async function doRemoteExec(){
+  const pathInput = $('#remoteExec_path');
+  const argsInput = $('#remoteExec_args');
+  const previewEl = $('#remoteExec_body_preview');
+  const outEl = $('#remoteExec_out');
+  if (!pathInput || !argsInput || !previewEl || !outEl) return;
+  const path = pathInput.value.trim();
+  const args = parseArgs(argsInput.value);
+  const body = { path, args };
+  previewEl.textContent = fmtOneLine(body);
+  const target = getRemoteExecTarget();
+  updateRemoteExecTargetDisplay();
+  try{
+    const r = await fetch(target,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const txt = await r.text();
+    outEl.value = txt.replace(/\n/g,'\\n');
+  }catch(e){
+    outEl.value = `{"error":"fetch_failed","msg":"${e.message}"}`;
   }
 }
 
@@ -867,15 +941,18 @@ function ensurePixelpilotMiniRkUI(){
   if (pixelpilotMiniRkUI.initialized) return;
   setMiniRkStatusIdle('Idle');
   const cfg = [
-    { btn:'#pixelpilotMiniRkToggleOsdBtn', path:'/sys/pixelpilot_mini_rk/toggle_osd' },
-    { btn:'#pixelpilotMiniRkToggleRecordingBtn', path:'/sys/pixelpilot_mini_rk/toggle_recording' },
-    { btn:'#pixelpilotMiniRkRebootBtn', path:'/sys/pixelpilot_mini_rk/reboot' },
-    { btn:'#pixelpilotMiniRkShutdownBtn', path:'/sys/pixelpilot_mini_rk/shutdown' }
+    { btn:'#pixelpilotMiniRkToggleOsdBtn', command:{ path:'/sys/pixelpilot_mini_rk/toggle_osd' } },
+    { btn:'#pixelpilotMiniRkToggleRecordingBtn', command:{ path:'/sys/pixelpilot_mini_rk/toggle_recording' } },
+    { btn:'#pixelpilotMiniRkRebootBtn', command:{ path:'/sys/reboot' } },
+    { btn:'#pixelpilotMiniRkShutdownBtn', command:{ path:'/sys/shutdown' } },
+    { btn:'#pixelpilotMiniRkRestartServiceBtn', command:{ path:'/sys/pixelpilot_mini_rk/restart' } },
+    { btn:'#pixelpilotMiniRkStopServiceBtn', command:{ path:'/sys/pixelpilot_mini_rk/stop' } },
+    { btn:'#pixelpilotMiniRkStartServiceBtn', command:{ path:'/sys/pixelpilot_mini_rk/start' } }
   ];
-  for (const {btn, path} of cfg){
+  for (const {btn, command} of cfg){
     const btnEl = document.querySelector(btn);
     if (!btnEl) continue;
-    btnEl.addEventListener('click', ()=> runMiniRkCommand(path));
+    btnEl.addEventListener('click', ()=> runMiniRkCommand(command, btnEl));
   }
   pixelpilotMiniRkUI.initialized = true;
 }
@@ -1260,10 +1337,16 @@ async function loadCaps(){
 
     const capList = Array.isArray(caps.caps) ? caps.caps : [];
     const hasExec = capList.includes('exec');
+    const hasPixelpilotMiniRk = capList.includes('pixelpilot_mini_rk');
 
     const deviceCard = document.getElementById('capsCard');
     if (deviceCard){
       deviceCard.style.display = capList.includes('device') ? '' : 'none';
+    }
+
+    const deviceActionsRow = document.getElementById('deviceRuntimeActions');
+    if (deviceActionsRow){
+      deviceActionsRow.style.display = hasPixelpilotMiniRk ? '' : 'none';
     }
 
     const nodesCard = document.getElementById('nodesCard');
@@ -1304,7 +1387,7 @@ async function loadCaps(){
       $('#udpRelayStats').textContent = 'cap missing';
     }
 
-    if (capList.includes('pixelpilot_mini_rk')){
+    if (hasPixelpilotMiniRk){
       $('#pixelpilotMiniRkCard').style.display = '';
       ensurePixelpilotMiniRkUI();
       const statusEl = document.getElementById('pixelpilotMiniRkStatus');
@@ -1346,6 +1429,11 @@ async function loadCaps(){
       execCard.style.display = hasExec ? '' : 'none';
     }
 
+    const remoteExecCard = document.getElementById('remoteExecCard');
+    if (remoteExecCard){
+      remoteExecCard.style.display = hasExec ? '' : 'none';
+    }
+
   }catch(e){
     $('#subtitle').textContent = 'failed to load /caps';
   }
@@ -1358,6 +1446,25 @@ $('#nodesScanBtn').addEventListener('click', triggerNodesScan);
 $('#pixelpilotRefreshBtn').addEventListener('click', ()=> pixelpilotManager.refreshValues());
 $('#udpRelayRefreshBtn').addEventListener('click', ()=> udpRelayManager.refreshValues());
 $('#udpRelayReloadEmbedBtn').addEventListener('click', reloadUdpRelayEmbed);
+
+const remoteExecTargetInput = $('#remoteExec_targetInput');
+if (remoteExecTargetInput){
+  if (!remoteExecTargetInput.value){
+    remoteExecTargetInput.value = DEFAULT_REMOTE_EXEC_TARGET;
+  }
+  remoteExecTargetInput.addEventListener('input', updateRemoteExecTargetDisplay);
+  remoteExecTargetInput.addEventListener('change', updateRemoteExecTargetDisplay);
+  remoteExecTargetInput.addEventListener('keydown', e=>{ if(e.key==='Enter') doRemoteExec(); });
+}
+updateRemoteExecTargetDisplay();
+const remoteExecBtn = $('#remoteExec_btn');
+if (remoteExecBtn){
+  remoteExecBtn.addEventListener('click', doRemoteExec);
+}
+const remoteExecArgs = $('#remoteExec_args');
+if (remoteExecArgs){
+  remoteExecArgs.addEventListener('keydown', e=>{ if(e.key==='Enter') doRemoteExec(); });
+}
 
 loadCaps();
 fetchNodes();
