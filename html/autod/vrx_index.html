@@ -85,8 +85,24 @@
   .embed-frame{width:100%;min-height:320px;border:0;background:#0f1317}
   .embed-note{padding:10px 12px;font-size:12px}
 
-  .ctl.flash-ok .lbl .val{color:var(--ok)!important}
-  .ctl.flash-err .lbl .val{color:var(--err)!important}
+  .mini-status{display:flex;justify-content:flex-end;align-items:center;min-height:26px}
+  .status-indicator{display:inline-flex;align-items:center;gap:6px;font-size:12px;padding:2px 10px;border-radius:999px;border:1px solid var(--line);color:var(--mut);background:#0f1317;transition:color .3s ease,border-color .3s ease,background .3s ease}
+  .status-indicator::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--mut);transition:background .3s ease}
+  .status-indicator.running{color:var(--mut)}
+  .status-indicator.running::before{background:var(--mut)}
+  .status-indicator.ok{color:var(--ok);border-color:rgba(54,194,117,.4);background:rgba(54,194,117,.08)}
+  .status-indicator.ok::before{background:var(--ok)}
+  .status-indicator.err{color:var(--err);border-color:rgba(255,107,107,.4);background:rgba(255,107,107,.08)}
+  .status-indicator.err::before{background:var(--err)}
+  .status-indicator.flash{animation:statusBlink .7s ease-out}
+  .status-indicator.err.flash{animation:statusBlinkErr .7s ease-out}
+  @keyframes statusBlink{0%{box-shadow:0 0 0 0 rgba(54,194,117,.35)}100%{box-shadow:0 0 0 10px rgba(54,194,117,0)}}
+  @keyframes statusBlinkErr{0%{box-shadow:0 0 0 0 rgba(255,107,107,.35)}100%{box-shadow:0 0 0 10px rgba(255,107,107,0)}}
+  @media (prefers-reduced-motion:reduce){
+    .status-indicator.flash,.status-indicator.err.flash{animation:none}
+  }
+  .ctl.flash-ok{border-color:rgba(54,194,117,.4);box-shadow:0 0 0 1px rgba(54,194,117,.3)}
+  .ctl.flash-err{border-color:rgba(255,107,107,.45);box-shadow:0 0 0 1px rgba(255,107,107,.3)}
 
 
 
@@ -194,47 +210,35 @@
           <button id="pixelpilotMiniRkShutdownBtn">Shutdown device</button>
         </div>
         <div class="spacer"></div>
-        <div class="cap-stats" id="pixelpilotMiniRkStats">—</div>
+        <div class="mini-status">
+          <div class="status-indicator" id="pixelpilotMiniRkStatus" aria-live="polite">Idle</div>
+        </div>
       </div>
       <div class="grid" id="pixelpilotMiniRkGrid">
         <div class="ctl" id="pixelpilotMiniRkOsdCtl">
           <div class="lbl">
             <div class="name">Toggle OSD</div>
-            <div class="val">—</div>
           </div>
           <div class="desc">Send SIGUSR1 to pixelpilot_mini_rk to toggle the on-screen display.</div>
-          <div class="errtxt" style="display:none"></div>
         </div>
         <div class="ctl" id="pixelpilotMiniRkRecordingCtl">
           <div class="lbl">
             <div class="name">Toggle Recording</div>
-            <div class="val">—</div>
           </div>
           <div class="desc">Send SIGUSR1 to pixelpilot_mini_rk to toggle DVR recording.</div>
-          <div class="errtxt" style="display:none"></div>
         </div>
         <div class="ctl" id="pixelpilotMiniRkRebootCtl">
           <div class="lbl">
             <div class="name">Reboot</div>
-            <div class="val">—</div>
           </div>
           <div class="desc">Issue <code>reboot now</code> in the background.</div>
-          <div class="errtxt" style="display:none"></div>
         </div>
         <div class="ctl" id="pixelpilotMiniRkShutdownCtl">
           <div class="lbl">
             <div class="name">Shutdown</div>
-            <div class="val">—</div>
           </div>
           <div class="desc">Issue <code>shutdown now</code> in the background.</div>
-          <div class="errtxt" style="display:none"></div>
         </div>
-      </div>
-      <div>
-        <div class="mut">Last request:</div>
-        <pre class="inline" id="pixelpilotMiniRkReqPreview">{}</pre>
-        <div class="mut">Last response:</div>
-        <textarea id="pixelpilotMiniRkResp" readonly></textarea>
       </div>
     </div>
   </section>
@@ -332,39 +336,57 @@ function flashCtl(ctlEl, ok){
   setTimeout(()=> ctlEl.classList.remove(cls), 700);
 }
 
+function miniRkStatusEl(){
+  return document.getElementById('pixelpilotMiniRkStatus');
+}
+
+function setMiniRkStatusIdle(text='Idle'){
+  const el = miniRkStatusEl();
+  if (!el) return;
+  el.classList.remove('running','ok','err','flash');
+  el.textContent = text;
+  el.title = '';
+}
+
+function setMiniRkStatusRunning(){
+  const el = miniRkStatusEl();
+  if (!el) return;
+  el.classList.remove('ok','err','flash');
+  el.classList.add('running');
+  el.textContent = 'Running…';
+  el.title = '';
+}
+
+function setMiniRkStatusResult(ok, detail=''){
+  const el = miniRkStatusEl();
+  if (!el) return;
+  el.classList.remove('running','ok','err','flash');
+  el.classList.add(ok ? 'ok' : 'err');
+  const stamp = new Date().toLocaleTimeString();
+  const label = ok ? 'Success' : 'Error';
+  el.textContent = `${label} • ${stamp}`;
+  el.title = detail || '';
+  // restart animation
+  void el.offsetWidth;
+  el.classList.add('flash');
+}
+
 async function runMiniRkCommand(path, ctl){
-  const statsEl = document.getElementById('pixelpilotMiniRkStats');
-  if (statsEl) statsEl.textContent = 'running…';
+  setMiniRkStatusRunning();
   try{
     const res = await postExec({path, args:[]}, CMD_TIMEOUT_MS, 'pixelpilotMiniRk');
     const ok = (res && typeof res.rc === 'number') ? res.rc === 0 : true;
-    if (statsEl) statsEl.textContent = `${ok ? 'ok' : 'error'} • ${new Date().toLocaleTimeString()}`;
+    const rawStdout = (res?.stdout ?? '').trim();
+    const rawStderr = (res?.stderr ?? '').trim();
+    const detail = ok ? (rawStdout.split('\n')[0] || '') : (rawStderr || rawStdout || 'command failed');
+    setMiniRkStatusResult(ok, detail);
     if (ctl){
-      const valEl = ctl.querySelector('.val');
-      if (valEl){
-        const raw = (res?.stdout ?? '').trim();
-        valEl.textContent = raw ? raw.split('\n')[0] : (ok ? 'ok' : 'error');
-      }
-      const errEl = ctl.querySelector('.errtxt');
-      if (errEl){
-        if (ok){
-          errEl.style.display = 'none';
-        } else {
-          errEl.textContent = (res?.stderr || res?.stdout || 'command failed');
-          errEl.style.display = 'block';
-        }
-      }
       flashCtl(ctl, ok);
     }
   }catch(e){
-    if (statsEl) statsEl.textContent = `error • ${new Date().toLocaleTimeString()}`;
+    setMiniRkStatusResult(false, e?.message || 'command failed');
     if (ctl){
       flashCtl(ctl, false);
-      const errEl = ctl.querySelector('.errtxt');
-      if (errEl){
-        errEl.textContent = e?.message || 'command failed';
-        errEl.style.display = 'block';
-      }
     }
   }
 }
@@ -865,8 +887,7 @@ const dvrUI = { initialized:false, hasExec:false, entries:[] };
 
 function ensurePixelpilotMiniRkUI(){
   if (pixelpilotMiniRkUI.initialized) return;
-  const statsEl = document.getElementById('pixelpilotMiniRkStats');
-  if (statsEl) statsEl.textContent = 'ready';
+  setMiniRkStatusIdle('Idle');
   const cfg = [
     { btn:'#pixelpilotMiniRkToggleOsdBtn', ctl:'#pixelpilotMiniRkOsdCtl', path:'/sys/pixelpilot_mini_rk/toggle_osd' },
     { btn:'#pixelpilotMiniRkToggleRecordingBtn', ctl:'#pixelpilotMiniRkRecordingCtl', path:'/sys/pixelpilot_mini_rk/toggle_recording' },
@@ -1309,9 +1330,11 @@ async function loadCaps(){
     if (capList.includes('pixelpilot_mini_rk')){
       $('#pixelpilotMiniRkCard').style.display = '';
       ensurePixelpilotMiniRkUI();
+      const statusEl = document.getElementById('pixelpilotMiniRkStatus');
+      if (statusEl && statusEl.textContent === 'cap missing') setMiniRkStatusIdle('Idle');
     } else {
       $('#pixelpilotMiniRkCard').style.display = 'none';
-      $('#pixelpilotMiniRkStats').textContent = 'cap missing';
+      setMiniRkStatusIdle('cap missing');
     }
 
     if (capList.includes('link')){
