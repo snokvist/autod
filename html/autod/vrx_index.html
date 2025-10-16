@@ -288,6 +288,10 @@
     <h2>Remote /exec — raw runner</h2>
     <div class="body">
       <div class="row">
+        <label>target <input id="remoteExec_targetInput" value="http://192.168.2.203/exec" placeholder="http://host:port/exec"></label>
+        <div class="spacer"></div>
+      </div>
+      <div class="row">
         <label>path <input id="remoteExec_path" value="/sys/pixelpilot/help"></label>
         <label>args (space-separated) <input id="remoteExec_args" placeholder=''></label>
         <button id="remoteExec_btn">POST remote /exec</button>
@@ -306,14 +310,34 @@ const $ = s => document.querySelector(s);
 const fmtOneLine = obj => JSON.stringify(obj);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const clamp = (v,min,max)=>Math.max(min,Math.min(max,v));
-const REMOTE_EXEC_HOST = '192.168.2.203';
-const REMOTE_EXEC_URL = `http://${REMOTE_EXEC_HOST}/exec`;
+const DEFAULT_REMOTE_EXEC_TARGET = 'http://192.168.2.203/exec';
 
 function joinCaps(caps){
   if (!Array.isArray(caps) || !caps.length) return '—';
   const frag = document.createDocumentFragment();
   caps.forEach(c => { const span = document.createElement('span'); span.className='pill'; span.textContent=c; frag.appendChild(span); });
   return frag;
+}
+
+function normalizeRemoteExecTarget(raw){
+  let next = (raw ?? '').trim();
+  if (!next) return DEFAULT_REMOTE_EXEC_TARGET;
+  if (!/^https?:\/\//i.test(next)){
+    next = 'http://' + next.replace(/^\/+/, '');
+  }
+  return next;
+}
+
+function getRemoteExecTarget(){
+  const input = document.getElementById('remoteExec_targetInput');
+  if (!input) return DEFAULT_REMOTE_EXEC_TARGET;
+  return normalizeRemoteExecTarget(input.value);
+}
+
+function updateRemoteExecTargetDisplay(){
+  const targetEl = document.getElementById('remoteExec_target');
+  if (!targetEl) return;
+  targetEl.textContent = `Target: ${getRemoteExecTarget()}`;
 }
 function secsToHhMmSs(secs){ if(!secs&&secs!==0)return'—'; const s=Math.floor(secs); const h=(s/3600)|0,m=((s%3600)/60)|0,ss=s%60; return `${h}h ${m}m ${ss}s`; }
 function tsToAgo(tsSec){ if(!tsSec)return'—'; const now=(Date.now()/1000)|0; const d=Math.max(0,now-tsSec); if(d<60)return`${d|0}s ago`; if(d<3600)return`${(d/60)|0}m ago`; if(d<86400)return`${(d/3600)|0}h ago`; return`${(d/86400)|0}d ago`; }
@@ -479,8 +503,10 @@ async function doRemoteExec(){
   const args = parseArgs(argsInput.value);
   const body = { path, args };
   previewEl.textContent = fmtOneLine(body);
+  const target = getRemoteExecTarget();
+  updateRemoteExecTargetDisplay();
   try{
-    const r = await fetch(REMOTE_EXEC_URL,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const r = await fetch(target,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     const txt = await r.text();
     outEl.value = txt.replace(/\n/g,'\\n');
   }catch(e){
@@ -919,9 +945,9 @@ function ensurePixelpilotMiniRkUI(){
     { btn:'#pixelpilotMiniRkToggleRecordingBtn', command:{ path:'/sys/pixelpilot_mini_rk/toggle_recording' } },
     { btn:'#pixelpilotMiniRkRebootBtn', command:{ path:'/sys/pixelpilot_mini_rk/reboot' } },
     { btn:'#pixelpilotMiniRkShutdownBtn', command:{ path:'/sys/pixelpilot_mini_rk/shutdown' } },
-    { btn:'#pixelpilotMiniRkRestartServiceBtn', command:{ path:'systemctl', args:['restart','pixelpilot_mini_rk'] } },
-    { btn:'#pixelpilotMiniRkStopServiceBtn', command:{ path:'systemctl', args:['stop','pixelpilot_mini_rk'] } },
-    { btn:'#pixelpilotMiniRkStartServiceBtn', command:{ path:'systemctl', args:['start','pixelpilot_mini_rk'] } }
+    { btn:'#pixelpilotMiniRkRestartServiceBtn', command:{ path:'systemctl', args:['restart','pixelpilot_mini_rk.service'] } },
+    { btn:'#pixelpilotMiniRkStopServiceBtn', command:{ path:'systemctl', args:['stop','pixelpilot_mini_rk.service'] } },
+    { btn:'#pixelpilotMiniRkStartServiceBtn', command:{ path:'systemctl', args:['start','pixelpilot_mini_rk.service'] } }
   ];
   for (const {btn, command} of cfg){
     const btnEl = document.querySelector(btn);
@@ -1421,10 +1447,16 @@ $('#pixelpilotRefreshBtn').addEventListener('click', ()=> pixelpilotManager.refr
 $('#udpRelayRefreshBtn').addEventListener('click', ()=> udpRelayManager.refreshValues());
 $('#udpRelayReloadEmbedBtn').addEventListener('click', reloadUdpRelayEmbed);
 
-const remoteExecTargetEl = $('#remoteExec_target');
-if (remoteExecTargetEl){
-  remoteExecTargetEl.textContent = `Target: ${REMOTE_EXEC_URL}`;
+const remoteExecTargetInput = $('#remoteExec_targetInput');
+if (remoteExecTargetInput){
+  if (!remoteExecTargetInput.value){
+    remoteExecTargetInput.value = DEFAULT_REMOTE_EXEC_TARGET;
+  }
+  remoteExecTargetInput.addEventListener('input', updateRemoteExecTargetDisplay);
+  remoteExecTargetInput.addEventListener('change', updateRemoteExecTargetDisplay);
+  remoteExecTargetInput.addEventListener('keydown', e=>{ if(e.key==='Enter') doRemoteExec(); });
 }
+updateRemoteExecTargetDisplay();
 const remoteExecBtn = $('#remoteExec_btn');
 if (remoteExecBtn){
   remoteExecBtn.addEventListener('click', doRemoteExec);
