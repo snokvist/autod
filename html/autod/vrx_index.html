@@ -604,7 +604,13 @@ function ensureNodeManager(entry){
       gridId: entry.gridId,
       statsId: entry.statsId,
       cmdsId: entry.cmdsId,
-      exec:(body, timeoutMs)=> postExecToNode(entry, body, timeoutMs)
+      exec:(body, timeoutMs)=> postExecToNode(entry, body, timeoutMs),
+      getTimeoutMs: 1200,
+      getRetryDelayMs: 120,
+      getRetries: 4,
+      setTimeoutMs: 5000,
+      helpTimeoutMs: 600,
+      staggerMs: 180
     });
   }
   return entry.manager;
@@ -879,6 +885,13 @@ function createCapManager(config){
     ? config.exec
     : (body, timeoutMs)=> postExec(body, timeoutMs, config.prefix);
 
+  const getTimeoutMs = Math.max(0, config.getTimeoutMs ?? CAP_GET_TIMEOUT_MS);
+  const getRetryDelayMs = Math.max(0, config.getRetryDelayMs ?? 50);
+  const getRetries = Math.max(1, config.getRetries ?? 3);
+  const staggerMs = Math.max(0, config.staggerMs ?? CAP_GET_STAGGER_MS);
+  const setTimeoutMs = Math.max(0, config.setTimeoutMs ?? CMD_TIMEOUT_MS);
+  const helpTimeoutMs = Math.max(0, config.helpTimeoutMs ?? 350);
+
   function parseGetStdoutValue(key, stdout){
     if (stdout==null) return undefined;
     const t = String(stdout).trim();
@@ -935,12 +948,12 @@ function createCapManager(config){
     }
   }
 
-  async function getWithRetries(key, retries){
+  async function getWithRetries(key, retries = getRetries){
     let attempt=0, lastErr='unknown';
     while (attempt<retries){
       try{
         const body = { path:`/sys/${config.cap}/get`, args:[ key ] };
-        const res = await execFn(body, CAP_GET_TIMEOUT_MS);
+        const res = await execFn(body, getTimeoutMs);
         const v = parseGetStdoutValue(key, res.stdout ?? '');
         if (v!==undefined && v!==null && String(v).length){
           return {ok:true, value:v};
@@ -951,7 +964,7 @@ function createCapManager(config){
         lastErr = e.message || 'fetch';
       }
       attempt++;
-      if (attempt<retries) await sleep(50);
+      if (attempt<retries) await sleep(getRetryDelayMs);
     }
     return {ok:false, err:lastErr};
   }
@@ -963,11 +976,11 @@ function createCapManager(config){
       const body = { path:`/sys/${config.cap}/set`, args:[ `${key}=${valStr}` ] };
       try{
         ctl.errEl.style.display='none';
-        const res = await execFn(body, CMD_TIMEOUT_MS);
+        const res = await execFn(body, setTimeoutMs);
         const ok = (res && typeof res.rc === 'number') ? res.rc === 0 : true;
         flashCtl(ctl.el, ok);
         try {
-          const got = await getWithRetries(key, 2);
+          const got = await getWithRetries(key, Math.max(1, Math.min(2, getRetries)));
           if (got.ok) applyValueToUI(meta, got.value);
         } catch {}
       }catch(e){
@@ -1058,10 +1071,10 @@ function createCapManager(config){
     const keys = state.order.slice();
     let idx = 0, ok=0, fail=0;
     for (const key of keys){
-      await sleep(CAP_GET_STAGGER_MS * (idx>0?1:0));
+      if (idx>0) await sleep(staggerMs);
       const meta = state.controls[key]?.meta;
       if (!meta){ idx++; continue; }
-      const got = await getWithRetries(key, 3);
+      const got = await getWithRetries(key, getRetries);
       if (got.ok){ ok++; applyValueToUI(meta, got.value); }
       else { fail++; const ctl = state.controls[key]; if (ctl){ ctl.errEl.textContent = got.err || 'get failed'; ctl.errEl.style.display='block'; } }
       idx++;
@@ -1076,7 +1089,7 @@ function createCapManager(config){
       if (statsEl) statsEl.textContent = 'loading help…';
       let helpRes;
       try {
-        helpRes = await execFn({path:`/sys/${config.cap}/help`, args:[]}, 350);
+        helpRes = await execFn({path:`/sys/${config.cap}/help`, args:[]}, helpTimeoutMs);
       } catch(e){
         if (statsEl) statsEl.textContent = `failed to load help: ${e.message}`;
         return;
