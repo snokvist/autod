@@ -195,6 +195,9 @@
           <button id="pixelpilotMiniRkToggleRecordingBtn">Toggle Recording</button>
           <button id="pixelpilotMiniRkRebootBtn">Reboot device</button>
           <button id="pixelpilotMiniRkShutdownBtn">Shutdown device</button>
+          <button id="pixelpilotMiniRkRestartServiceBtn">Restart pixelpilot_mini_rk</button>
+          <button id="pixelpilotMiniRkStopServiceBtn">Stop pixelpilot_mini_rk</button>
+          <button id="pixelpilotMiniRkStartServiceBtn">Start pixelpilot_mini_rk</button>
         </div>
         <div class="spacer"></div>
         <div class="mini-status">
@@ -349,23 +352,30 @@ function setMiniRkStatusResult(ok, detail=''){
   el.classList.add('flash');
 }
 
-async function runMiniRkCommand(path, ctl){
+async function runMiniRkCommand(command, btnEl){
+  const payload = typeof command === 'string'
+    ? { path: command, args: [] }
+    : {
+        path: command?.path || '',
+        args: Array.isArray(command?.args) ? command.args : []
+      };
+  if (!payload.path){
+    setMiniRkStatusResult(false, 'invalid command');
+    return;
+  }
   setMiniRkStatusRunning();
+  if (btnEl) btnEl.disabled = true;
   try{
-    const res = await postExec({path, args:[]}, CMD_TIMEOUT_MS, 'pixelpilotMiniRk');
+    const res = await postExec(payload, CMD_TIMEOUT_MS, 'pixelpilotMiniRk');
     const ok = (res && typeof res.rc === 'number') ? res.rc === 0 : true;
     const rawStdout = (res?.stdout ?? '').trim();
     const rawStderr = (res?.stderr ?? '').trim();
     const detail = ok ? (rawStdout.split('\n')[0] || '') : (rawStderr || rawStdout || 'command failed');
     setMiniRkStatusResult(ok, detail);
-    if (ctl){
-      flashCtl(ctl, ok);
-    }
   }catch(e){
     setMiniRkStatusResult(false, e?.message || 'command failed');
-    if (ctl){
-      flashCtl(ctl, false);
-    }
+  }finally{
+    if (btnEl) btnEl.disabled = false;
   }
 }
 
@@ -867,15 +877,18 @@ function ensurePixelpilotMiniRkUI(){
   if (pixelpilotMiniRkUI.initialized) return;
   setMiniRkStatusIdle('Idle');
   const cfg = [
-    { btn:'#pixelpilotMiniRkToggleOsdBtn', path:'/sys/pixelpilot_mini_rk/toggle_osd' },
-    { btn:'#pixelpilotMiniRkToggleRecordingBtn', path:'/sys/pixelpilot_mini_rk/toggle_recording' },
-    { btn:'#pixelpilotMiniRkRebootBtn', path:'/sys/pixelpilot_mini_rk/reboot' },
-    { btn:'#pixelpilotMiniRkShutdownBtn', path:'/sys/pixelpilot_mini_rk/shutdown' }
+    { btn:'#pixelpilotMiniRkToggleOsdBtn', command:{ path:'/sys/pixelpilot_mini_rk/toggle_osd' } },
+    { btn:'#pixelpilotMiniRkToggleRecordingBtn', command:{ path:'/sys/pixelpilot_mini_rk/toggle_recording' } },
+    { btn:'#pixelpilotMiniRkRebootBtn', command:{ path:'/sys/pixelpilot_mini_rk/reboot' } },
+    { btn:'#pixelpilotMiniRkShutdownBtn', command:{ path:'/sys/pixelpilot_mini_rk/shutdown' } },
+    { btn:'#pixelpilotMiniRkRestartServiceBtn', command:{ path:'systemctl', args:['restart','pixelpilot_mini_rk'] } },
+    { btn:'#pixelpilotMiniRkStopServiceBtn', command:{ path:'systemctl', args:['stop','pixelpilot_mini_rk'] } },
+    { btn:'#pixelpilotMiniRkStartServiceBtn', command:{ path:'systemctl', args:['start','pixelpilot_mini_rk'] } }
   ];
-  for (const {btn, path} of cfg){
+  for (const {btn, command} of cfg){
     const btnEl = document.querySelector(btn);
     if (!btnEl) continue;
-    btnEl.addEventListener('click', ()=> runMiniRkCommand(path));
+    btnEl.addEventListener('click', ()=> runMiniRkCommand(command, btnEl));
   }
   pixelpilotMiniRkUI.initialized = true;
 }
