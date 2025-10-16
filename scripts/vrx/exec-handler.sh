@@ -6,7 +6,7 @@
 # Implemented:
 #   /sys/reboot                                 (schedule reboot)
 #   /sys/pixelpilot/help|start|stop|toggle_record
-#   /sys/pixelpilot_mini_rk/help|toggle_osd|toggle_recording|reboot
+#   /sys/pixelpilot_mini_rk/help|toggle_osd|toggle_recording|reboot|shutdown
 #   /sys/udp_relay/help|start|stop|status
 #   /sys/link/help|mode|select|start|stop|status
 #   /sys/ping                                    (utility passthrough)
@@ -345,6 +345,12 @@ pixelpilot_mini_rk_reboot(){
   return 0
 }
 
+pixelpilot_mini_rk_shutdown(){
+  ( nohup sh -c 'shutdown now' >/dev/null 2>&1 & )
+  echo "shutdown requested"
+  return 0
+}
+
 # ======================= DISPATCH =======================
 case "$1" in
   # general
@@ -375,6 +381,7 @@ case "$1" in
   /sys/pixelpilot_mini_rk/toggle_osd)       shift; pixelpilot_mini_rk_toggle_osd "$@" ;;
   /sys/pixelpilot_mini_rk/toggle_recording) shift; pixelpilot_mini_rk_toggle_recording "$@" ;;
   /sys/pixelpilot_mini_rk/reboot)           shift; pixelpilot_mini_rk_reboot "$@" ;;
+  /sys/pixelpilot_mini_rk/shutdown)         shift; pixelpilot_mini_rk_shutdown "$@" ;;
 
   # utility
   /sys/ping)               shift; ping -c 1 -W 1 "$1" 2>&1 ;;
