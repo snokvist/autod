@@ -4,9 +4,11 @@
 # Contract: /exec with JSON {"path":"/sys/<cap>/<command>","args":[...]}
 #
 # Implemented:
+#   /sys/help                                   (describe general system commands)
 #   /sys/reboot                                 (schedule reboot)
+#   /sys/shutdown                               (schedule shutdown)
 #   /sys/pixelpilot/help|start|stop|toggle_record
-#   /sys/pixelpilot_mini_rk/help|toggle_osd|toggle_recording|reboot|shutdown
+#   /sys/pixelpilot_mini_rk/help|toggle_osd|toggle_recording|start|stop|restart
 #   /sys/udp_relay/help|start|stop|status
 #   /sys/link/help|mode|select|start|stop|status
 #   /sys/ping                                    (utility passthrough)
@@ -111,6 +113,12 @@ config_set(){
 reboot_cmd(){
   ( nohup sh -c 'sleep 1; reboot now' >/dev/null 2>&1 & )
   echo "reboot scheduled"
+  return 0
+}
+
+shutdown_cmd(){
+  ( nohup sh -c 'shutdown now' >/dev/null 2>&1 & )
+  echo "shutdown scheduled"
   return 0
 }
 
@@ -416,22 +424,84 @@ pixelpilot_mini_rk_signal(){
 pixelpilot_mini_rk_toggle_osd(){ pixelpilot_mini_rk_signal SIGUSR1 "OSD"; }
 pixelpilot_mini_rk_toggle_recording(){ pixelpilot_mini_rk_signal SIGUSR2 "Recording"; }
 
+# legacy aliases that keep older endpoints working; prefer /sys/reboot and /sys/shutdown
 pixelpilot_mini_rk_reboot(){
-  ( nohup sh -c 'reboot now' >/dev/null 2>&1 & )
-  echo "reboot requested"
-  return 0
+  reboot_cmd "$@"
 }
 
 pixelpilot_mini_rk_shutdown(){
-  ( nohup sh -c 'shutdown now' >/dev/null 2>&1 & )
-  echo "shutdown requested"
-  return 0
+  shutdown_cmd "$@"
+}
+
+pixelpilot_mini_rk_unit_candidates(){
+  echo "pixelpilot_mini_rk.service"
+  echo "pixelpilot_mini_rk"
+}
+
+pixelpilot_mini_rk_start(){
+  if have systemctl; then
+    for unit in $(pixelpilot_mini_rk_unit_candidates); do
+      if systemctl start "$unit" >/dev/null 2>&1; then
+        echo "pixelpilot_mini_rk started"
+        return 0
+      fi
+    done
+  fi
+  if have service; then
+    if service pixelpilot_mini_rk start >/dev/null 2>&1; then
+      echo "pixelpilot_mini_rk started"
+      return 0
+    fi
+  fi
+  echo "pixelpilot_mini_rk start unsupported on this device" 1>&2
+  return 3
+}
+
+pixelpilot_mini_rk_stop(){
+  if have systemctl; then
+    for unit in $(pixelpilot_mini_rk_unit_candidates); do
+      if systemctl stop "$unit" >/dev/null 2>&1; then
+        echo "pixelpilot_mini_rk stopped"
+        return 0
+      fi
+    done
+  fi
+  if have service; then
+    if service pixelpilot_mini_rk stop >/dev/null 2>&1; then
+      echo "pixelpilot_mini_rk stopped"
+      return 0
+    fi
+  fi
+  echo "pixelpilot_mini_rk stop unsupported on this device" 1>&2
+  return 3
+}
+
+pixelpilot_mini_rk_restart(){
+  if have systemctl; then
+    for unit in $(pixelpilot_mini_rk_unit_candidates); do
+      if systemctl restart "$unit" >/dev/null 2>&1; then
+        echo "pixelpilot_mini_rk restarted"
+        return 0
+      fi
+    done
+  fi
+  if pixelpilot_mini_rk_stop; then
+    sleep 1
+    if pixelpilot_mini_rk_start; then
+      echo "pixelpilot_mini_rk restarted"
+      return 0
+    fi
+  fi
+  echo "pixelpilot_mini_rk restart unsupported on this device" 1>&2
+  return 3
 }
 
 # ======================= DISPATCH =======================
 case "$1" in
   # general
+  /sys/help)               print_help_msg "sys_help.msg" ;;
   /sys/reboot)             shift; reboot_cmd "$@" ;;
+  /sys/shutdown)           shift; shutdown_cmd "$@" ;;
 
   # pixelpilot
   /sys/pixelpilot/help)           print_help_msg "pixelpilot_help.msg" ;;
@@ -463,6 +533,9 @@ case "$1" in
   /sys/pixelpilot_mini_rk/toggle_recording) shift; pixelpilot_mini_rk_toggle_recording "$@" ;;
   /sys/pixelpilot_mini_rk/reboot)           shift; pixelpilot_mini_rk_reboot "$@" ;;
   /sys/pixelpilot_mini_rk/shutdown)         shift; pixelpilot_mini_rk_shutdown "$@" ;;
+  /sys/pixelpilot_mini_rk/start)            shift; pixelpilot_mini_rk_start "$@" ;;
+  /sys/pixelpilot_mini_rk/stop)             shift; pixelpilot_mini_rk_stop "$@" ;;
+  /sys/pixelpilot_mini_rk/restart)          shift; pixelpilot_mini_rk_restart "$@" ;;
 
   # utility
   /sys/ping)               shift; ping -c 1 -W 1 "$1" 2>&1 ;;
