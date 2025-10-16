@@ -77,6 +77,7 @@ Each flavour drops intermediates under `build/<flavour>/` and strips binaries au
 - `udp_relay` → `$(PREFIX)/bin/udp_relay`.
 - `udp_relay` configuration → `/etc/udp_relay/udp_relay.conf` (existing files are preserved and a `.dist` copy is written instead).
 - `udp_relay` service unit → `/etc/systemd/system/udp_relay.service` which runs the helper as `root` for consistent behaviour with the UI bindings.
+- VRX udp_relay UI asset → `$(PREFIX)/share/autod/udp_relay/vrx_udp_relay.html` (the service runs the binary with `--ui` pointing at this file).
 
 After installation `make install` reloads `systemd` automatically when installing directly on the host (no `DESTDIR`). If you staged into a `DESTDIR`, reload manually once the files land on the target system, then enable the daemon:
 
