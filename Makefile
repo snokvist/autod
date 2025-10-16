@@ -11,6 +11,9 @@ AUTOD_DATADIR ?= $(DATADIR)/$(APP)
 VRXDIR       ?= $(AUTOD_DATADIR)/vrx
 SYSTEMD_DIR  ?= /etc/systemd/system
 UDP_CONFDIR  ?= $(SYSCONFDIR)/$(UDP_APP)
+UDP_HTMLDIR  ?= $(AUTOD_DATADIR)/udp_relay
+UDP_UI_ASSET ?= vrx_udp_relay.html
+UDP_UI_PATH  ?= $(UDP_HTMLDIR)/$(UDP_UI_ASSET)
 
 # Paths
 SRC_DIR      := src
@@ -211,9 +214,12 @@ install: native udp_relay
 		udp_target="$$udp_target.dist"; \
 	fi; \
 	install -m644 configs/$(UDP_APP).conf "$$udp_target";
+	install -d $(DESTDIR)$(UDP_HTMLDIR)
+	install -m644 html/udp_relay/$(UDP_UI_ASSET) $(DESTDIR)$(UDP_UI_PATH)
 	sed \
-		-e 's#@UDP_RELAY_BIN@#$(BINDIR)/$(UDP_APP)#g' \
-		configs/udp_relay.service > $(DESTDIR)$(SYSTEMD_DIR)/$(UDP_APP).service
+                -e 's#@UDP_RELAY_BIN@#$(BINDIR)/$(UDP_APP)#g' \
+                -e 's#@UDP_UI_PATH@#$(UDP_UI_PATH)#g' \
+                configs/udp_relay.service > $(DESTDIR)$(SYSTEMD_DIR)/$(UDP_APP).service
 	chmod 644 $(DESTDIR)$(SYSTEMD_DIR)/$(UDP_APP).service
 	@if command -v systemctl >/dev/null 2>&1 && [ -z "$(DESTDIR)" ]; then \
 		systemctl daemon-reload; \
