@@ -425,7 +425,7 @@ async function runMiniRkCommand(command, btnEl){
 const CAP_GET_STAGGER_MS = 100;
 const CAP_GET_TIMEOUT_MS = 150;
 const CAP_SET_DEBOUNCE_MS = 500;
-const CMD_TIMEOUT_MS = 1500;
+const CMD_TIMEOUT_MS = 3000;
 
 async function fetchWithTimeout(url, opts = {}, ms = 100){
   const ctrl = new AbortController();
