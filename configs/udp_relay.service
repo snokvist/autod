@@ -1,0 +1,15 @@
+[Unit]
+Description=udp_relay fan-out utility
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=@UDP_RELAY_BIN@
+User=root
+Group=root
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

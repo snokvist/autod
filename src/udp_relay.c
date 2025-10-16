@@ -21,7 +21,7 @@
  * Runtime:
  *   ./udp_relay [--ui /path/to/ui.html[.gz]]
  *
- * Config file: /etc/udp_relay.conf
+ * Config file: /etc/udp_relay/udp_relay.conf
  *
  * INI format (no sections; '#' or ';' are comments):
  *   http_bind=127.0.0.1
@@ -75,8 +75,8 @@
 #define MAX_HTTP_CONN   64
 #define HTTP_BUF_MAX    65536
 #define STATUS_CAP      8192
-#define CFG_PATH        "/etc/udp_relay.conf"
-#define CFG_TMP_PATH    "/etc/udp_relay.conf.tmp"
+#define CFG_PATH        "/etc/udp_relay/udp_relay.conf"
+#define CFG_TMP_PATH    "/etc/udp_relay/udp_relay.conf.tmp"
 
 /* Counter roll-over thresholds: when any hits these, all are halved */
 #define PKTS_ROLLOVER_LIMIT  ((uint64_t)1000000000ULL)  /* 1e9 pkts */

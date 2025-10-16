@@ -68,18 +68,23 @@ Each flavour drops intermediates under `build/<flavour>/` and strips binaries au
 
 ### Installing on Debian/`systemd`
 
-`make install` builds the native daemon and stages a simple system-wide layout that targets Debian 11:
+`make install` builds the native daemon and the bundled `udp_relay` helper, then stages a simple system-wide layout that targets Debian 11:
 
 - `autod` → `$(PREFIX)/bin/autod` (default prefix `/usr/local`).
 - VRX web UI and helpers → `$(PREFIX)/share/autod/vrx/` (`vrx_index.html`, `exec-handler.sh`, `*.msg`).
 - Configuration → `/etc/autod/autod.conf` (existing files are preserved and a `.dist` copy is written instead).
 - Service unit → `/etc/systemd/system/autod.service` pointing at the installed binary and config, running as `root` so helper scripts can signal privileged daemons.
+- `udp_relay` → `$(PREFIX)/bin/udp_relay`.
+- `udp_relay` configuration → `/etc/udp_relay/udp_relay.conf` (existing files are preserved and a `.dist` copy is written instead).
+- `udp_relay` service unit → `/etc/systemd/system/udp_relay.service` which runs the helper as `root` for consistent behaviour with the UI bindings.
 
 After installation `make install` reloads `systemd` automatically when installing directly on the host (no `DESTDIR`). If you staged into a `DESTDIR`, reload manually once the files land on the target system, then enable the daemon:
 
 ```bash
 sudo systemctl daemon-reload
 sudo systemctl enable --now autod
+# Optional helper
+sudo systemctl enable --now udp_relay
 ```
 
 The service starts in the VRX data directory so the bundled helper scripts can find their message payloads without additional configuration.
@@ -121,7 +126,7 @@ Static files under `html/` can be served by the daemon (when `serve_ui=1`) or by
 ### Helper Tools
 
 - `sse_tail`: build with `make tools` and run `./sse_tail http://host:port/path` to observe SSE streams announced in the config.
-- `udp_relay`: controlled through its own config file [`configs/udp_relay.conf`](configs/udp_relay.conf); you can run it directly or via UI bindings.
+- `udp_relay`: controlled through its own config file [`configs/udp_relay.conf`](configs/udp_relay.conf). When installed system-wide the default path is `/etc/udp_relay/udp_relay.conf`; you can run it directly or via UI bindings.
 
 ---
 

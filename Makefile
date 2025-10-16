@@ -1,5 +1,6 @@
 # ==== Project ====
 APP          := autod
+UDP_APP      := udp_relay
 
 # Install prefixes (override as needed)
 PREFIX       ?= /usr/local
@@ -9,6 +10,7 @@ DATADIR      ?= $(PREFIX)/share
 AUTOD_DATADIR ?= $(DATADIR)/$(APP)
 VRXDIR       ?= $(AUTOD_DATADIR)/vrx
 SYSTEMD_DIR  ?= /etc/systemd/system
+UDP_CONFDIR  ?= $(SYSCONFDIR)/$(UDP_APP)
 
 # Paths
 SRC_DIR      := src
@@ -171,7 +173,7 @@ strip: ;
 	-@command -v $(STRIP_MUSL)   >/dev/null 2>&1 && $(STRIP_MUSL)   $(APP)-musl sse_tail-musl udp_relay-musl 2>/dev/null || true
 	-@command -v $(STRIP_GNU)    >/dev/null 2>&1 && $(STRIP_GNU)    $(APP)-gnu sse_tail-gnu udp_relay-gnu 2>/dev/null || true
 
-install: native
+install: native udp_relay
 	install -Dm755 $(APP) $(DESTDIR)$(BINDIR)/$(APP)
 	install -d $(DESTDIR)$(VRXDIR)
 	install -m644 html/autod/vrx_index.html $(DESTDIR)$(VRXDIR)/vrx_index.html
@@ -200,6 +202,19 @@ install: native
 		-e 's#@VRX_DIR@#$(VRXDIR)#g' \
 		configs/autod.service > $(DESTDIR)$(SYSTEMD_DIR)/$(APP).service
 	chmod 644 $(DESTDIR)$(SYSTEMD_DIR)/$(APP).service
+	install -Dm755 $(UDP_APP) $(DESTDIR)$(BINDIR)/$(UDP_APP)
+	@set -e; \
+	udp_confdir="$(DESTDIR)$(UDP_CONFDIR)"; \
+	install -d "$$udp_confdir"; \
+	udp_target="$$udp_confdir/$(UDP_APP).conf"; \
+	if [ -f "$$udp_target" ]; then \
+		udp_target="$$udp_target.dist"; \
+	fi; \
+	install -m644 configs/$(UDP_APP).conf "$$udp_target";
+	sed \
+		-e 's#@UDP_RELAY_BIN@#$(BINDIR)/$(UDP_APP)#g' \
+		configs/udp_relay.service > $(DESTDIR)$(SYSTEMD_DIR)/$(UDP_APP).service
+	chmod 644 $(DESTDIR)$(SYSTEMD_DIR)/$(UDP_APP).service
 	@if command -v systemctl >/dev/null 2>&1 && [ -z "$(DESTDIR)" ]; then \
 		systemctl daemon-reload; \
 	fi
