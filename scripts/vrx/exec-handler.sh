@@ -6,7 +6,7 @@
 # Implemented:
 #   /sys/reboot                                 (schedule reboot)
 #   /sys/pixelpilot/help|start|stop|toggle_record
-#   /sys/pixelpilot_mini_rk/help|toggle_osd|toggle_recording|reboot
+#   /sys/pixelpilot_mini_rk/help|toggle_osd|toggle_recording|reboot|shutdown
 #   /sys/udp_relay/help|start|stop|status
 #   /sys/link/help|mode|select|start|stop|status
 #   /sys/ping                                    (utility passthrough)
@@ -19,9 +19,15 @@
 #   control and otherwise return rc=3 to indicate unsupported operations.
 
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
-HELP_DIR="${HELP_DIR:-/etc/autod}"
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
+HELP_DIR="${HELP_DIR:-$SCRIPT_DIR}"
 STATE_DIR="${VRX_STATE_DIR:-/tmp/vrx}"
 LINK_STATE_FILE="$STATE_DIR/link.env"
+
+if [ "$(id -u)" -ne 0 ]; then
+  echo "exec-handler.sh requires root privileges; ensure autod.service runs as root" 1>&2
+  exit 4
+fi
 
 # ======================= Helpers =======================
 die(){ echo "$*" 1>&2; exit 2; }
@@ -31,13 +37,16 @@ ensure_parent_dir(){ dir="$1"; [ -d "$dir" ] || mkdir -p "$dir"; }
 # print external help JSON (fallback to simple error payload)
 print_help_msg(){
   name="$1"
-  file="$HELP_DIR/$name"
-  if [ -r "$file" ]; then
-    cat "$file"
-  else
-    echo "{\"error\":\"help file not found\",\"name\":\"$name\"}"
-    return 4
-  fi
+  for base in "$HELP_DIR" "$SCRIPT_DIR" "/etc/autod"; do
+    [ -n "$base" ] || continue
+    file="$base/$name"
+    if [ -r "$file" ]; then
+      cat "$file"
+      return 0
+    fi
+  done
+  echo "{\"error\":\"help file not found\",\"name\":\"$name\"}"
+  return 4
 }
 
 # kv storage fallbacks when fw_(print|set)env are unavailable
@@ -252,28 +261,93 @@ link_route_status(){
 # ======================= Pixelpilot Mini RK =======================
 pixelpilot_mini_rk_pids(){ pidof pixelpilot_mini_rk 2>/dev/null; }
 
+send_pid_signal(){
+  pid="$1"
+  signal="$2"
+  if kill -"$signal" "$pid" 2>/dev/null; then
+    return 0
+  fi
+  short_sig="$signal"
+  case "$short_sig" in
+    SIG*) short_sig="${short_sig#SIG}" ;;
+  esac
+  if [ "$short_sig" != "$signal" ] && kill -"$short_sig" "$pid" 2>/dev/null; then
+    return 0
+  fi
+  return 1
+}
+
 pixelpilot_mini_rk_signal(){
-  action="$1"
+  signal="$1"
+  action="$2"
+  [ -n "$signal" ] || signal="SIGUSR1"
   [ -n "$action" ] || action="action"
   pids="$(pixelpilot_mini_rk_pids)"
   if [ -z "$pids" ]; then
     echo "pixelpilot_mini_rk not running" 1>&2
     return 3
   fi
-  if kill -SIGUSR1 $pids 2>/dev/null; then
-    echo "$action toggled via SIGUSR1 ($pids)"
+  success_pids=""
+  active_but_failed_pids=""
+  missing_pids=""
+  for pid in $pids; do
+    if send_pid_signal "$pid" "$signal"; then
+      success_pids="$success_pids $pid"
+      continue
+    fi
+    if kill -0 "$pid" 2>/dev/null; then
+      active_but_failed_pids="$active_but_failed_pids $pid"
+      continue
+    fi
+    if [ -d "/proc/$pid" ]; then
+      active_but_failed_pids="$active_but_failed_pids $pid"
+    else
+      missing_pids="$missing_pids $pid"
+    fi
+  done
+
+  success_pids="${success_pids# }"
+  active_but_failed_pids="${active_but_failed_pids# }"
+  missing_pids="${missing_pids# }"
+
+  if [ -n "$success_pids" ]; then
+    echo "$action toggled via $signal ($success_pids)"
+    if [ -n "$active_but_failed_pids" ]; then
+      echo "pixelpilot_mini_rk running but $signal delivery failed (pid $active_but_failed_pids)" 1>&2
+    fi
+    if [ -n "$missing_pids" ]; then
+      echo "pixelpilot_mini_rk pid(s) exited before they could be signalled ($missing_pids)" 1>&2
+    fi
     return 0
   fi
-  echo "failed to signal pixelpilot_mini_rk" 1>&2
+
+  if [ -n "$active_but_failed_pids" ]; then
+    echo "pixelpilot_mini_rk running but $signal delivery failed (pid $active_but_failed_pids)" 1>&2
+    return 4
+  fi
+
+  if [ -n "$missing_pids" ]; then
+    echo "pixelpilot_mini_rk exited before it could be signalled ($missing_pids)" 1>&2
+    echo "failed to signal pixelpilot_mini_rk with $signal" 1>&2
+    return 4
+  fi
+
+  echo "failed to signal pixelpilot_mini_rk with $signal" 1>&2
   return 4
 }
 
-pixelpilot_mini_rk_toggle_osd(){ pixelpilot_mini_rk_signal "OSD"; }
-pixelpilot_mini_rk_toggle_recording(){ pixelpilot_mini_rk_signal "Recording"; }
+pixelpilot_mini_rk_toggle_osd(){ pixelpilot_mini_rk_signal SIGUSR1 "OSD"; }
+pixelpilot_mini_rk_toggle_recording(){ pixelpilot_mini_rk_signal SIGUSR2 "Recording"; }
 
 pixelpilot_mini_rk_reboot(){
   ( nohup sh -c 'reboot now' >/dev/null 2>&1 & )
   echo "reboot requested"
+  return 0
+}
+
+pixelpilot_mini_rk_shutdown(){
+  ( nohup sh -c 'shutdown now' >/dev/null 2>&1 & )
+  echo "shutdown requested"
   return 0
 }
 
@@ -307,6 +381,7 @@ case "$1" in
   /sys/pixelpilot_mini_rk/toggle_osd)       shift; pixelpilot_mini_rk_toggle_osd "$@" ;;
   /sys/pixelpilot_mini_rk/toggle_recording) shift; pixelpilot_mini_rk_toggle_recording "$@" ;;
   /sys/pixelpilot_mini_rk/reboot)           shift; pixelpilot_mini_rk_reboot "$@" ;;
+  /sys/pixelpilot_mini_rk/shutdown)         shift; pixelpilot_mini_rk_shutdown "$@" ;;
 
   # utility
   /sys/ping)               shift; ping -c 1 -W 1 "$1" 2>&1 ;;

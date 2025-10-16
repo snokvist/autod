@@ -199,6 +199,17 @@
           <div class="desc">Issue <code>reboot now</code> in the background.</div>
           <div class="errtxt" style="display:none"></div>
         </div>
+        <div class="ctl" id="pixelpilotMiniRkShutdownCtl">
+          <div class="lbl">
+            <div class="name">Shutdown</div>
+            <div class="val">—</div>
+          </div>
+          <div class="row">
+            <button id="pixelpilotMiniRkShutdownBtn">Shutdown device</button>
+          </div>
+          <div class="desc">Issue <code>shutdown now</code> in the background.</div>
+          <div class="errtxt" style="display:none"></div>
+        </div>
       </div>
       <div>
         <div class="mut">Last request:</div>
@@ -830,7 +841,8 @@ function ensurePixelpilotMiniRkUI(){
   const cfg = [
     { btn:'#pixelpilotMiniRkToggleOsdBtn', ctl:'#pixelpilotMiniRkOsdCtl', path:'/sys/pixelpilot_mini_rk/toggle_osd' },
     { btn:'#pixelpilotMiniRkToggleRecordingBtn', ctl:'#pixelpilotMiniRkRecordingCtl', path:'/sys/pixelpilot_mini_rk/toggle_recording' },
-    { btn:'#pixelpilotMiniRkRebootBtn', ctl:'#pixelpilotMiniRkRebootCtl', path:'/sys/pixelpilot_mini_rk/reboot' }
+    { btn:'#pixelpilotMiniRkRebootBtn', ctl:'#pixelpilotMiniRkRebootCtl', path:'/sys/pixelpilot_mini_rk/reboot' },
+    { btn:'#pixelpilotMiniRkShutdownBtn', ctl:'#pixelpilotMiniRkShutdownCtl', path:'/sys/pixelpilot_mini_rk/shutdown' }
   ];
   for (const {btn, ctl, path} of cfg){
     const btnEl = document.querySelector(btn);

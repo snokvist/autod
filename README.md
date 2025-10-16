@@ -66,6 +66,26 @@ All commands are run from the repository root.
 
 Each flavour drops intermediates under `build/<flavour>/` and strips binaries automatically when the matching `strip` tool is found.
 
+### Installing on Debian/`systemd`
+
+`make install` builds the native daemon and stages a simple system-wide layout that targets Debian 11:
+
+- `autod` → `$(PREFIX)/bin/autod` (default prefix `/usr/local`).
+- VRX web UI and helpers → `$(PREFIX)/share/autod/vrx/` (`vrx_index.html`, `exec-handler.sh`, `*.msg`).
+- Configuration → `/etc/autod/autod.conf` (existing files are preserved and a `.dist` copy is written instead).
+- Service unit → `/etc/systemd/system/autod.service` pointing at the installed binary and config, running as `root` so helper scripts can signal privileged daemons.
+
+After installation `make install` reloads `systemd` automatically when installing directly on the host (no `DESTDIR`). If you staged into a `DESTDIR`, reload manually once the files land on the target system, then enable the daemon:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now autod
+```
+
+The service starts in the VRX data directory so the bundled helper scripts can find their message payloads without additional configuration.
+
+Pixelpilot Mini RK actions (`toggle_osd`, `toggle_recording`) signal the `pixelpilot_mini_rk` process directly (`SIGUSR1` for the OSD overlay, `SIGUSR2` for recording), while the `reboot` and `shutdown` commands launch `reboot now`/`shutdown now` in the background. The installed service runs as `root`, and the bundled `exec-handler.sh` now exits with a clear error when invoked without elevated privileges. If you run the daemon manually, mimic that setup so the helper can send the required signals; otherwise the UI will report `failed to signal pixelpilot_mini_rk`.
+
 If you prefer direct compiler invocation, consult the comment at the top of [`src/autod.c`](src/autod.c), but using the provided `Makefile` keeps flags consistent.
 
 ---

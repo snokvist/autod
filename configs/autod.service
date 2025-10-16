@@ -1,0 +1,16 @@
+[Unit]
+Description=autod control daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=@AUTOD_BIN@ @AUTOD_CONF@
+WorkingDirectory=@VRX_DIR@
+User=root
+Group=root
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
