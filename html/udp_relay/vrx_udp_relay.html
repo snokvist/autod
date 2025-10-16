@@ -1,0 +1,580 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"/>
+<title>UDP Relay Manager</title>
+<style>
+  :root {
+    /* Match the existing console theme */
+    --bg:#0b0d10; --fg:#e8e8ea; --mut:#9aa1a6;
+    --panel:#12161a; --card:#151a1f; --line:#21262c;
+    --ok:#36c275; --warn:#e7b75f; --err:#ff6b6b;
+    --scroll-track:#0f1317; --scroll-thumb:#2a3139; --scroll-thumb-hover:#36404a;
+
+    /* Category tints */
+    --g-bg:#132217; --g-br:#1d412a; /* GREEN (exclusive) */
+    --b-bg:#121e28; --b-br:#263f53; /* BLUE (many→1)    */
+    --y-bg:#2a2212; --y-br:#4b3c1a; /* YELLOW (1→many)  */
+  }
+  *{box-sizing:border-box;min-width:0;scrollbar-width:thin;scrollbar-color:var(--scroll-thumb) var(--scroll-track);-webkit-tap-highlight-color:transparent}
+  *::-webkit-scrollbar{width:10px;height:10px}
+  *::-webkit-scrollbar-track{background:var(--scroll-track)}
+  *::-webkit-scrollbar-thumb{background:var(--scroll-thumb);border-radius:999px;border:2px solid transparent;background-clip:content-box}
+  *::-webkit-scrollbar-thumb:hover{background:var(--scroll-thumb-hover);background-clip:content-box}
+
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);font:14px/1.4 system-ui,Segoe UI,Roboto,Inter,sans-serif;overflow-wrap:anywhere;word-break:break-word}
+  header{padding:14px 16px;border-bottom:1px solid var(--line);background:var(--panel);display:flex;justify-content:space-between;align-items:center;gap:12px;position:sticky;top:0;z-index:2}
+  header .title{font-weight:700}
+  header .sub{color:var(--mut);font-size:12px}
+  main{padding:14px;max-width:1200px;margin:0 auto;display:grid;gap:12px;grid-template-columns:1.1fr .9fr}
+  @media (max-width:980px){ main{grid-template-columns:1fr} }
+
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:hidden}
+  .card h2{margin:0;padding:12px 14px;border-bottom:1px solid var(--line);font-size:14px}
+  .card .body{padding:12px 14px;display:grid;gap:10px}
+
+  button,input,select{font:inherit}
+  button{
+    cursor:pointer;background:#0f1317;color:var(--fg);border:1px solid var(--line);
+    border-radius:10px;padding:8px 12px;min-height:36px
+  }
+  .pill{border-radius:999px;padding:6px 12px}
+  .primary{background:linear-gradient(180deg,#1f6b43,#165538);border-color:#1f6b43}
+  .danger{background:#2a1212;border-color:#4a1d1d}
+
+  .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .mut{color:var(--mut);font-size:12px}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+
+  /* Chips (bind sources) */
+  .chips{display:flex;flex-wrap:wrap;gap:10px}
+  .chip{
+    background:#0f1317;border:1px dashed #2a3240;border-radius:12px;padding:10px 12px;
+    display:flex;gap:10px;align-items:center;user-select:none;min-height:40px;min-width:120px
+  }
+  .chip[draggable="true"]{cursor:grab}
+  .chip.dragging{opacity:.7}
+  .chip.selected{outline:2px solid #4ea2ff}
+  .chip .tag{opacity:.7;font-size:12px}
+
+  /* Target cards */
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px}
+  .tcard{border:1px solid var(--line);border-radius:12px;padding:10px;display:grid;gap:8px}
+  .tcard.g{background:var(--g-bg);border-color:var(--g-br)}
+  .tcard.b{background:var(--b-bg);border-color:var(--b-br)}
+  .tcard.y{background:var(--y-bg);border-color:var(--y-br)}
+  .tcard .head{display:flex;justify-content:space-between;align-items:center;gap:8px}
+  .badge{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:999px;padding:2px 8px;font-size:12px;color:var(--mut)}
+  .drop{
+    min-height:64px;border:2px dashed rgba(255,255,255,.15);border-radius:10px;padding:10px;
+    display:flex;align-items:center;justify-content:center;color:var(--mut);font-size:12px
+  }
+  .drop.drag-over{outline:3px solid rgba(255,255,255,.18)}
+  .bindlist{display:flex;flex-wrap:wrap;gap:8px}
+  .bindpill{background:rgba(0,0,0,.18);border:1px solid rgba(255,255,255,.18);padding:6px 10px;border-radius:999px;display:flex;align-items:center;gap:8px}
+  .bindpill .rm{border:none;background:transparent;color:#ffd0d0;font-weight:700;cursor:pointer;padding:0 6px;border-radius:6px}
+  .bindpill .rm:hover{background:#2a0f0f}
+
+  /* Unmapped */
+  .empty{color:var(--mut);font-size:12px}
+
+  /* Log */
+  .log{height:160px;overflow:auto;background:#0f1317;border:1px solid var(--line);border-radius:12px;padding:10px}
+  .ok{color:var(--ok)} .warn{color:var(--warn)} .err{color:var(--err)}
+
+  /* Flash feedback on success/failure */
+  .flash-ok{box-shadow:0 0 0 9999px rgba(54,194,117,.0) inset}
+  .flash-err{box-shadow:0 0 0 9999px rgba(255,107,107,.0) inset}
+  .flash-ok, .flash-err{animation:flash 700ms ease}
+  @keyframes flash { 0%{box-shadow:0 0 0 9999px rgba(255,255,255,.0) inset}
+                     20%{box-shadow:0 0 0 9999px rgba(255,255,255,.10) inset}
+                     100%{box-shadow:0 0 0 9999px rgba(255,255,255,.0) inset} }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <div class="title">UDP Relay Manager</div>
+    <div class="sub">drag & drop or tap → tap • tip: <span class="mono">Shift</span>-click Reload for sync</div>
+  </div>
+  <div class="row">
+    <button id="reload" class="pill primary" title="POST /api/v1/reload  •  Shift+Click = sync">Reload</button>
+    <button id="refresh" class="pill primary" title="Reload config & status">Refresh</button>
+    <button id="clearAll" class="pill danger" title="Clear all mappings">Clear ALL</button>
+  </div>
+</header>
+
+<main>
+  <section class="card">
+    <h2>Sources (Binds)</h2>
+    <div class="body">
+      <div id="bindChips" class="chips" aria-label="Bind ports list"></div>
+      <div class="mut">Tip: drag a bind onto a target, or tap a bind then tap a target.</div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Targets (Destinations & Groups)</h2>
+    <div class="body">
+      <div class="mut">Drop a bind on a card. Green = 1→1 (exclusive), Blue = many→1 (append), Yellow = 1→many (group replace).</div>
+      <div id="gridG" class="grid" style="margin-top:6px"></div>
+      <div id="gridB" class="grid"></div>
+      <div id="gridY" class="grid"></div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Unmapped Binds</h2>
+    <div class="body">
+      <div id="unmapped" class="chips"></div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Log</h2>
+    <div class="body">
+      <div id="log" class="log mono" aria-live="polite"></div>
+    </div>
+  </section>
+</main>
+
+<script>
+(function(){
+  const $ = s => document.querySelector(s);
+  const $$ = s => Array.from(document.querySelectorAll(s));
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+  const log = (m,c='')=>{
+    const el = $('#log');
+    const d = document.createElement('div');
+    if(c) d.className=c;
+    d.textContent = `[${new Date().toLocaleTimeString()}] ${m}`;
+    el.prepend(d);
+    while (el.childElementCount > 300) el.lastElementChild?.remove();
+  };
+
+  /* ---------------- Backend calls (unchanged) ---------------- */
+  const GET  = p => fetch(p).then(r=>{if(!r.ok) throw new Error(r.statusText); return p.includes('/status')?r.json():r.text()});
+  const POST = (p,b)=> fetch(p,{method:'POST',headers:{'Content-Type':'application/json'},body:b})
+                        .then(async r=>{if(!r.ok) throw new Error(await r.text()); try{return await r.json()}catch{return await r.text()}});
+  const action = (v,o)=>POST(`/api/v1/action/${v}`, JSON.stringify(o||{}));
+
+  /* ---------------- State ---------------- */
+  const state = {
+    status:null,    // { relays: [...] }
+    cfgText:'',
+    greens:[],      // ["ip:port", ...]
+    blues:[],       // ["ip:port", ...]
+    groups:[],      // [{name, members:[...]}]
+    selected:null   // selected bind port (number)
+  };
+
+  /* ---------------- Helpers ---------------- */
+  const normDest = (s)=>{
+    s = String(s||'').trim();
+    const m = s.match(/^([^:\s]+):(\d{1,5})$/);
+    return m ? `${m[1]}:${m[2]}` : null;
+  };
+
+  function parseConfig(txt){
+    const greens = [], blues = [], groups = [];
+    for(const raw of String(txt||'').replace(/\r/g,'').split(/\n/)){
+      const ln = raw.replace(/[;#].*$/,'').trim(); if(!ln) continue;
+      let m;
+      if((m = ln.match(/^\s*dest_green\s*=\s*(\S+)\s*$/))){
+        const d = normDest(m[1]); if(d && !greens.includes(d)) greens.push(d); continue;
+      }
+      if((m = ln.match(/^\s*dest_blue\s*=\s*(\S+)\s*$/))){
+        const d = normDest(m[1]); if(d && !blues.includes(d)) blues.push(d); continue;
+      }
+      if((m = ln.match(/^\s*group_yellow\s*=\s*([^|]+)\|(.+)\s*$/))){
+        const name = m[1].trim(); const members = [];
+        for(const t of m[2].split(',')){ const d = normDest(t); if(d && !members.includes(d)) members.push(d); }
+        if(name && members.length) groups.push({name, members});
+        continue;
+      }
+    }
+    return {greens,blues,groups};
+  }
+
+  const relays = ()=> (state.status && Array.isArray(state.status.relays)) ? state.status.relays : [];
+  const listTokens = r => (r.dests||[]).map(d=>`${d.ip}:${d.port}`);
+
+  function buildDestIndex(){
+    const idx = new Map();
+    for(const r of relays()){
+      for(const d of (r.dests||[])){
+        const token = `${d.ip}:${d.port}`;
+        if(!idx.has(token)) idx.set(token, []);
+        idx.get(token).push({port:r.port, pkts:d.pkts||0, in:r.pkts_in||0});
+      }
+    }
+    return idx;
+  }
+  function buildGroupIndex(groups){
+    const gidx = new Map();
+    for(const g of groups) gidx.set(g.name, []);
+    for(const r of relays()){
+      const tokens = listTokens(r).sort();
+      for(const g of groups){
+        const gm = [...g.members].sort();
+        if(tokens.length === gm.length && tokens.every((t,i)=>t===gm[i])){
+          let outSum = 0;
+          for(const d of (r.dests||[])){ if(g.members.includes(`${d.ip}:${d.port}`)) outSum += (d.pkts||0); }
+          gidx.get(g.name).push({port:r.port, in:r.pkts_in||0, out:outSum});
+          break;
+        }
+      }
+    }
+    return gidx;
+  }
+
+  /* ---------------- Actions (unchanged endpoints) ---------------- */
+  async function removeDestFromPort(port, dest){ await action('clear_to', {port, dest}); }
+  async function clearDestinationEverywhere(dest){
+    for(const r of relays()){ if(listTokens(r).includes(dest)) await removeDestFromPort(r.port, dest); }
+  }
+  async function clearGroupFromPort(port, members){
+    for(const d of members) await removeDestFromPort(port, d);
+  }
+  async function clearGroupEverywhere(members){
+    for(const r of relays()){
+      const tokens = listTokens(r);
+      let hasAny = members.some(d=>tokens.includes(d));
+      if(hasAny){ for(const d of members) await removeDestFromPort(r.port, d); }
+    }
+  }
+  async function clearAll(){ for(const r of relays()) await action('clear',{port:r.port}); }
+
+  // feedback flash
+  function flash(el, ok=true){
+    if(!el) return;
+    el.classList.remove('flash-ok','flash-err');
+    void el.offsetWidth;
+    el.classList.add(ok ? 'flash-ok' : 'flash-err');
+    setTimeout(()=>el.classList.remove('flash-ok','flash-err'), 750);
+  }
+
+  async function dropGreen(srcPort, dest, cardEl){
+    try{
+      await clearDestinationEverywhere(dest);
+      await action('set', {port:srcPort, dests:[dest]});
+      log(`bind ${srcPort} → ${dest} (exclusive)`,'ok');
+      flash(cardEl, true);
+      await refresh();
+    }catch(e){ flash(cardEl,false); log(e,'err'); }
+  }
+  async function dropBlue(srcPort, dest, cardEl){
+    try{
+      const r = relays().find(x=>x.port===srcPort);
+      if(!r) return;
+      if(!listTokens(r).includes(dest)){
+        await action('append',{port:srcPort, dests:[dest]});
+        log(`bind ${srcPort} +→ ${dest}`,'ok');
+        flash(cardEl, true);
+        await refresh();
+      } else {
+        log(`bind ${srcPort} already has ${dest}`,'warn');
+        flash(cardEl, true);
+      }
+    }catch(e){ flash(cardEl,false); log(e,'err'); }
+  }
+  async function dropYellow(srcPort, groupMembers, cardEl){
+    try{
+      await action('set', {port:srcPort, dests:[...groupMembers]});
+      log(`bind ${srcPort} → [${groupMembers.join(', ')}] (group)`, 'ok');
+      flash(cardEl, true);
+      await refresh();
+    }catch(e){ flash(cardEl,false); log(e,'err'); }
+  }
+
+  /* ---------------- Drag / Tap wiring ---------------- */
+  function setSelected(port){
+    state.selected = port;
+    $$('.chip').forEach(c => c.classList.toggle('selected', Number(c.dataset.port)===port));
+  }
+
+  function wireChip(el, port){
+    el.setAttribute('draggable','true');
+    el.setAttribute('tabindex','0');
+    el.dataset.port = String(port);
+    el.addEventListener('dragstart', e=>{
+      el.classList.add('dragging');
+      try {
+        e.dataTransfer.setData('text/plain', String(port));
+        e.dataTransfer.setData('application/x-bind-port', String(port));
+        e.dataTransfer.effectAllowed = 'copy';
+      }catch{}
+    });
+    el.addEventListener('dragend', ()=> el.classList.remove('dragging'));
+    el.addEventListener('click', ()=>{
+      setSelected(state.selected===port ? null : port);
+    });
+    el.addEventListener('keydown', (e)=>{
+      if(e.key==='Enter' || e.key===' '){ e.preventDefault(); setSelected(state.selected===port ? null : port); }
+    });
+  }
+
+  function wireDropZone(el, onDo){
+    const allow = e => { e.preventDefault(); e.stopPropagation(); };
+    el.addEventListener('dragenter', allow);
+    el.addEventListener('dragover', e=>{ allow(e); try{ e.dataTransfer.dropEffect='copy'; }catch{}; el.classList.add('drag-over'); });
+    el.addEventListener('dragleave', ()=> el.classList.remove('drag-over'));
+    el.addEventListener('drop', e=>{
+      allow(e); el.classList.remove('drag-over');
+      let txt = '';
+      try{ txt = e.dataTransfer.getData('application/x-bind-port') || e.dataTransfer.getData('text/plain') || ''; }catch{}
+      const p = parseInt(txt,10);
+      if(!Number.isFinite(p)) return;
+      onDo(p);
+    });
+    el.addEventListener('click', ()=>{
+      if(state.selected) onDo(state.selected);
+    });
+    el.setAttribute('tabindex','0');
+    el.addEventListener('keydown', (e)=>{ if((e.key==='Enter'||e.key===' ') && state.selected){ e.preventDefault(); onDo(state.selected); } });
+  }
+
+  /* ---------------- Rendering ---------------- */
+  function renderBinds(){
+    const wrap = $('#bindChips');
+    const frag = document.createDocumentFragment();
+    const rel = [...relays()].sort((a,b)=>a.port-b.port);
+    for(const r of rel){
+      const el = document.createElement('div');
+      el.className = 'chip';
+      el.innerHTML = `<strong>bind ${r.port}</strong> <span class="tag">in:${r.pkts_in||0}</span>`;
+      wireChip(el, r.port);
+      if (state.selected === r.port) el.classList.add('selected');
+      frag.appendChild(el);
+    }
+    wrap.innerHTML = ''; wrap.appendChild(frag);
+  }
+
+  function mkBindPill(port, info, remover){
+    const p = document.createElement('span');
+    p.className = 'bindpill small mono';
+    const pk = (info && typeof info.pkts!=='undefined') ? ` · pkts:${info.pkts}` : '';
+    const inpk = (info && typeof info.in!=='undefined') ? ` · in:${info.in}` : '';
+    p.innerHTML = `bind ${port}<span class="mut">${inpk}${pk}</span>`;
+    const x = document.createElement('button');
+    x.className = 'rm';
+    x.title = 'Remove mapping';
+    x.textContent = '×';
+    x.onclick = remover;
+    p.appendChild(x);
+    return p;
+  }
+
+  function renderTargets(){
+    const gridG = $('#gridG'), gridB = $('#gridB'), gridY = $('#gridY');
+    gridG.innerHTML = ''; gridB.innerHTML = ''; gridY.innerHTML = '';
+
+    const dIdx = buildDestIndex();
+    const gIdx = buildGroupIndex(state.groups);
+
+    // Greens (exclusive)
+    for(const d of state.greens){
+      const card = document.createElement('div');
+      card.className = 'tcard g';
+      card.innerHTML = `
+        <div class="head">
+          <div class="row"><span class="badge">GREEN</span><span class="mono">${d}</span></div>
+          <div class="row"><button class="small" data-clear>Clear this dest</button></div>
+        </div>
+        <div class="drop" aria-label="Drop bind here">Drop a bind here (exclusive 1→1)</div>
+        <div class="mut">Mapped binds:</div>
+        <div class="bindlist"></div>
+      `;
+      const drop = card.querySelector('.drop');
+      wireDropZone(drop, (src)=>dropGreen(src, d, card));
+
+      const list = card.querySelector('.bindlist');
+      const arr = dIdx.get(d)||[];
+      if(arr.length===0){
+        const m = document.createElement('div'); m.className='empty'; m.textContent='(none)'; list.appendChild(m);
+      }else{
+        for(const it of arr){
+          const pill = mkBindPill(it.port, {pkts:it.pkts, in:it.in}, async ()=>{
+            try{ await removeDestFromPort(it.port, d); log(`Removed bind ${it.port} → ${d}`,'ok'); await refresh(); }
+            catch(e){ log(e,'err'); }
+          });
+          list.appendChild(pill);
+        }
+      }
+
+      card.querySelector('[data-clear]')?.addEventListener('click', async ()=>{
+        try{ await clearDestinationEverywhere(d); log(`Cleared all binds from ${d}`,'ok'); await refresh(); }
+        catch(e){ log(e,'err'); }
+      });
+
+      gridG.appendChild(card);
+    }
+
+    // Blues (many→1)
+    for(const d of state.blues){
+      const card = document.createElement('div');
+      card.className = 'tcard b';
+      card.innerHTML = `
+        <div class="head">
+          <div class="row"><span class="badge">BLUE</span><span class="mono">${d}</span></div>
+          <div class="row"><button class="small" data-clear>Clear this dest</button></div>
+        </div>
+        <div class="drop" aria-label="Drop bind here">Drop a bind here (append many→1)</div>
+        <div class="mut">Mapped binds:</div>
+        <div class="bindlist"></div>
+      `;
+      const drop = card.querySelector('.drop');
+      wireDropZone(drop, (src)=>dropBlue(src, d, card));
+
+      const list = card.querySelector('.bindlist');
+      const arr = dIdx.get(d)||[];
+      if(arr.length===0){
+        const m = document.createElement('div'); m.className='empty'; m.textContent='(none)'; list.appendChild(m);
+      }else{
+        for(const it of arr){
+          const pill = mkBindPill(it.port, {pkts:it.pkts, in:it.in}, async ()=>{
+            try{ await removeDestFromPort(it.port, d); log(`Removed bind ${it.port} → ${d}`,'ok'); await refresh(); }
+            catch(e){ log(e,'err'); }
+          });
+          list.appendChild(pill);
+        }
+      }
+
+      card.querySelector('[data-clear]')?.addEventListener('click', async ()=>{
+        try{ await clearDestinationEverywhere(d); log(`Cleared all binds from ${d}`,'ok'); await refresh(); }
+        catch(e){ log(e,'err'); }
+      });
+
+      gridB.appendChild(card);
+    }
+
+    // Yellows (groups)
+    for(const g of state.groups){
+      const card = document.createElement('div');
+      card.className = 'tcard y';
+      const members = g.members.join(', ');
+      card.innerHTML = `
+        <div class="head">
+          <div class="row"><span class="badge">YELLOW</span><span class="mono">${g.name}</span></div>
+          <div class="row"><button class="small" data-clear>Clear this group</button></div>
+        </div>
+        <div class="mut">Members: <span class="mono">${members}</span></div>
+        <div class="drop" aria-label="Drop bind here">Drop a bind here (replace with group 1→many)</div>
+        <div class="mut">Mapped binds:</div>
+        <div class="bindlist"></div>
+      `;
+      const drop = card.querySelector('.drop');
+      wireDropZone(drop, (src)=>dropYellow(src, g.members, card));
+
+      const list = card.querySelector('.bindlist');
+      const arr = gIdx.get(g.name) || [];
+      if(arr.length===0){
+        const m = document.createElement('div'); m.className='empty'; m.textContent='(none)'; list.appendChild(m);
+      }else{
+        for(const it of arr){
+          const pill = mkBindPill(it.port, {in:it.in}, async ()=>{
+            try{ await clearGroupFromPort(it.port, g.members); log(`Removed bind ${it.port} from group ${g.name}`,'ok'); await refresh(); }
+            catch(e){ log(e,'err'); }
+          });
+          list.appendChild(pill);
+        }
+      }
+
+      card.querySelector('[data-clear]')?.addEventListener('click', async ()=>{
+        try{ await clearGroupEverywhere(g.members); log(`Cleared group ${g.name} from all binds`,'ok'); await refresh(); }
+        catch(e){ log(e,'err'); }
+      });
+
+      gridY.appendChild(card);
+    }
+  }
+
+  function renderUnmapped(){
+    const box = $('#unmapped');
+    box.innerHTML = '';
+    const frag = document.createDocumentFragment();
+    const items = [];
+    for(const r of relays()){
+      const hasAny = (r.dests||[]).length>0;
+      if(!hasAny){
+        const el = document.createElement('div');
+        el.className='chip';
+        el.innerHTML = `<strong>bind ${r.port}</strong> <span class="tag">in:${r.pkts_in||0}</span>`;
+        wireChip(el, r.port);
+        items.push(el);
+      }
+    }
+    if(items.length===0){
+      const m = document.createElement('div'); m.className='empty'; m.textContent='(none)'; frag.appendChild(m);
+    }else{
+      for(const el of items.sort((a,b)=>Number(a.dataset.port)-Number(b.dataset.port))) frag.appendChild(el);
+    }
+    box.appendChild(frag);
+  }
+
+  /* ---------------- Loaders & refresh ---------------- */
+  async function loadConfig(){
+    const t = await GET('/api/v1/config');
+    state.cfgText = t;
+    const {greens,blues,groups} = parseConfig(t);
+    state.greens = greens; state.blues = blues; state.groups = groups;
+  }
+  async function loadStatus(){ state.status = await GET('/api/v1/status'); }
+
+  async function refresh(){
+    const sel = state.selected; // keep selection
+    await Promise.all([loadConfig(), loadStatus()]);
+    renderBinds(); renderTargets(); renderUnmapped();
+    if (sel){ state.selected = sel; const chip = document.querySelector(`.chip[data-port="${sel}"]`); if(chip) chip.classList.add('selected'); }
+  }
+
+  /* ---------------- Header buttons ---------------- */
+  $('#reload').onclick = async (e)=>{
+    const btn = e.currentTarget;
+    const sync = e.shiftKey === true;
+    btn.disabled = true;
+    try{
+      if(sync){
+        const res = await POST('/api/v1/reload', JSON.stringify({sync:true}));
+        flash(btn, true);
+        log('Reloaded (sync) ' + (typeof res==='string'?res:JSON.stringify(res)), 'ok');
+        await refresh();
+      }else{
+        const res = await POST('/api/v1/reload', '{}');
+        flash(btn, true);
+        log('Reload queued ' + (typeof res==='string'?res:JSON.stringify(res)), 'ok');
+        // small delay to let daemon enqueue before we poll
+        await sleep(250);
+        await refresh();
+      }
+    }catch(err){
+      flash(btn, false);
+      log('Reload failed: ' + (err?.message || String(err)), 'err');
+    }finally{
+      btn.disabled = false;
+    }
+  };
+
+  $('#refresh').onclick = ()=> refresh().catch(e=>log(e,'err'));
+  $('#clearAll').onclick = async ()=>{
+    if(!confirm('Clear ALL mappings from all binds?')) return;
+    try{ await clearAll(); log('Cleared all mappings','ok'); await refresh(); }
+    catch(e){ log(e,'err'); }
+  };
+
+  /* ---------------- Init & periodic ---------------- */
+  refresh().catch(e=>log(e,'err'));
+  setInterval(async ()=>{
+    try{
+      await loadStatus();
+      const sel = state.selected;
+      renderBinds(); renderTargets(); renderUnmapped();
+      if (sel){ state.selected = sel; const chip = document.querySelector(`.chip[data-port="${sel}"]`); if(chip) chip.classList.add('selected'); }
+    }catch(_){}
+  }, 1500);
+})();
+</script>
+</body>
+</html>
