@@ -801,7 +801,7 @@ function coerceForKey(meta, raw){
   return String(raw);
 }
 function valueToString(meta, v){
-  if (meta.type==='bool') return v ? 'true' : 'false';
+  if (meta.type==='bool') return v ? '1' : '0';
   if (typeof v === 'number') return (Number.isFinite(v)? String(v) : '');
   return String(v ?? '');
 }
@@ -912,6 +912,16 @@ function createCapManager(config){
     return stderr || stdout || '';
   }
 
+  function combineMessages(...parts){
+    const uniq = [];
+    for (const part of parts){
+      const text = (part ?? '').toString().trim();
+      if (!text) continue;
+      if (!uniq.includes(text)) uniq.push(text);
+    }
+    return uniq.join('\n');
+  }
+
   async function execSetCommand(key, valStr){
     const path = `/sys/${config.cap}/set`;
     const run = async (args)=> execFn({ path, args }, setTimeoutMs);
@@ -1019,8 +1029,11 @@ function createCapManager(config){
         const { ok, res, prev } = await execSetCommand(key, String(valStr ?? ''));
         flashCtl(ctl.el, ok);
         if (!ok){
-          const detail = responseMessage(res) || responseMessage(prev) || 'command failed';
-          ctl.errEl.textContent = `set failed: ${detail}`;
+          const detail = combineMessages(responseMessage(res), responseMessage(prev));
+          const label = detail
+            ? (/set failed/i.test(detail) ? detail : `set failed: ${detail}`)
+            : 'set failed: command failed';
+          ctl.errEl.textContent = label;
           ctl.errEl.style.display='block';
         }
         try {
