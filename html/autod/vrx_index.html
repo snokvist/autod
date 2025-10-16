@@ -39,6 +39,15 @@
   .mut{color:var(--mut)}
   .sse a{color:inherit;text-decoration:underline dotted;word-break:break-all}
 
+  .dvr-list{display:grid;gap:6px}
+  .dvr-item{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 10px;border:1px solid var(--line);border-radius:10px;background:#0f1317}
+  .dvr-item a{color:inherit;text-decoration:none}
+  .dvr-item a:hover{text-decoration:underline}
+  .dvr-message{font-size:12px}
+  .dvr-message.ok{color:var(--ok)}
+  .dvr-message.err{color:var(--err)}
+  .dvr-empty{color:var(--mut);font-size:12px}
+
   .nodes-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px}
   .node{border:1px solid var(--line);background:#0f1317;border-radius:12px;padding:10px;display:grid;gap:6px}
   .node .top{display:flex;align-items:center;justify-content:space-between;gap:6px}
@@ -265,7 +274,22 @@
     </div>
   </section>
 
-  <section class="card">
+  <section class="card" id="dvrCard" style="display:none">
+    <h2>DVR recordings</h2>
+    <div class="body grid">
+      <div class="row">
+        <button id="dvrRefreshBtn">Refresh list</button>
+        <button id="dvrDeleteAllBtn">Delete all</button>
+        <div class="spacer"></div>
+        <div class="mut" id="dvrStatus">—</div>
+      </div>
+      <div id="dvrMessage" class="dvr-message" style="display:none"></div>
+      <div id="dvrEmptyState" class="dvr-empty" style="display:none">No recordings found.</div>
+      <div id="dvrList" class="dvr-list"></div>
+    </div>
+  </section>
+
+  <section class="card" id="execCard">
     <h2>/exec — raw runner</h2>
     <div class="body">
       <div class="row">
@@ -834,6 +858,8 @@ const linkUI = { help:null };
 
 const pixelpilotMiniRkUI = { initialized:false };
 
+const dvrUI = { initialized:false, hasExec:false };
+
 function ensurePixelpilotMiniRkUI(){
   if (pixelpilotMiniRkUI.initialized) return;
   const statsEl = document.getElementById('pixelpilotMiniRkStats');
@@ -851,6 +877,144 @@ function ensurePixelpilotMiniRkUI(){
     btnEl.addEventListener('click', ()=> runMiniRkCommand(path, ctlEl));
   }
   pixelpilotMiniRkUI.initialized = true;
+}
+
+function parseDvrListFromHtml(html){
+  if (typeof DOMParser !== 'function') return [];
+  try{
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const anchors = Array.from(doc.querySelectorAll('a'));
+    const files = [];
+    for (const a of anchors){
+      const raw = a.getAttribute('href') || '';
+      if (!raw || raw === '../') continue;
+      const cleaned = raw.split('#')[0].split('?')[0].replace(/^\/+|\/+$/g,'');
+      if (!cleaned || cleaned === '..') continue;
+      let decoded = cleaned;
+      try{ decoded = decodeURIComponent(cleaned); }catch{}
+      if (decoded.toLowerCase().endsWith('.mp4')) files.push(decoded);
+    }
+    files.sort((a,b)=>a.localeCompare(b,'en',{numeric:true,sensitivity:'base'}));
+    return files;
+  }catch{
+    return [];
+  }
+}
+
+function renderDvrList(files){
+  const listEl = document.getElementById('dvrList');
+  if (!listEl) return;
+  listEl.innerHTML = '';
+  for (const name of files){
+    const item = document.createElement('div');
+    item.className = 'dvr-item';
+    const link = document.createElement('a');
+    link.href = `/media/${encodeURIComponent(name)}`;
+    link.textContent = name;
+    link.download = name;
+    item.appendChild(link);
+    listEl.appendChild(item);
+  }
+}
+
+async function refreshDvrList(){
+  const statusEl = document.getElementById('dvrStatus');
+  const listEl = document.getElementById('dvrList');
+  const emptyEl = document.getElementById('dvrEmptyState');
+  const msgEl = document.getElementById('dvrMessage');
+  if (!statusEl || !listEl || !emptyEl || !msgEl) return;
+  statusEl.textContent = 'loading…';
+  listEl.innerHTML = '';
+  emptyEl.style.display = 'none';
+  msgEl.style.display = 'none';
+  msgEl.textContent = '';
+  msgEl.classList.remove('ok','err');
+  try{
+    let files = [];
+    if (dvrUI.hasExec){
+      const res = await postExec({path:'/sys/dvr/list', args:[]}, CMD_TIMEOUT_MS, 'dvr');
+      const ok = (res && typeof res.rc === 'number') ? res.rc === 0 : true;
+      const stdout = String(res?.stdout ?? '');
+      files = stdout.split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
+      files.sort((a,b)=>a.localeCompare(b,'en',{numeric:true,sensitivity:'base'}));
+      if (!ok){
+        files = [];
+        const errMsg = (res?.stderr || res?.stdout || 'failed to list recordings').trim();
+        if (errMsg){
+          msgEl.textContent = errMsg;
+          msgEl.classList.add('err');
+          msgEl.style.display = 'block';
+        }
+      }
+    } else {
+      const resp = await fetch('/media/', {cache:'no-store'});
+      if (!resp.ok){
+        throw new Error(`/media/ responded with ${resp.status}`);
+      }
+      const text = await resp.text();
+      files = parseDvrListFromHtml(text);
+    }
+    renderDvrList(files);
+    if (!files.length){
+      emptyEl.style.display = 'block';
+    }
+    statusEl.textContent = `${files.length} recording${files.length===1?'':'s'} • ${new Date().toLocaleTimeString()}`;
+  }catch(e){
+    statusEl.textContent = `error • ${new Date().toLocaleTimeString()}`;
+    msgEl.textContent = e?.message || 'failed to load recordings';
+    msgEl.classList.add('err');
+    msgEl.style.display = 'block';
+  }
+}
+
+async function deleteAllDvrRecordings(){
+  if (!dvrUI.hasExec) return;
+  if (!confirm('Delete all DVR recordings? This cannot be undone.')) return;
+  const deleteBtn = document.getElementById('dvrDeleteAllBtn');
+  const statusEl = document.getElementById('dvrStatus');
+  const msgEl = document.getElementById('dvrMessage');
+  if (deleteBtn) deleteBtn.disabled = true;
+  if (msgEl){
+    msgEl.style.display = 'none';
+    msgEl.textContent = '';
+    msgEl.classList.remove('ok','err');
+  }
+  if (statusEl) statusEl.textContent = 'deleting…';
+  let finalMsg = '';
+  let finalClass = '';
+  try{
+    const res = await postExec({path:'/sys/dvr/delete_all', args:[]}, CMD_TIMEOUT_MS, 'dvr');
+    const ok = (res && typeof res.rc === 'number') ? res.rc === 0 : true;
+    const stdout = (res?.stdout || '').trim();
+    const stderr = (res?.stderr || '').trim();
+    finalMsg = ok ? stdout : (stderr || stdout || 'failed to delete recordings');
+    finalClass = ok ? 'ok' : 'err';
+  }catch(e){
+    finalMsg = e?.message || 'failed to delete recordings';
+    finalClass = 'err';
+  }
+  await refreshDvrList();
+  if (deleteBtn) deleteBtn.disabled = false;
+  if (msgEl && finalMsg){
+    msgEl.textContent = finalMsg;
+    msgEl.classList.add(finalClass);
+    msgEl.style.display = 'block';
+  }
+}
+
+function ensureDvrUI(hasExec){
+  dvrUI.hasExec = !!hasExec;
+  const refreshBtn = document.getElementById('dvrRefreshBtn');
+  const deleteBtn = document.getElementById('dvrDeleteAllBtn');
+  if (!refreshBtn || !deleteBtn) return;
+  if (!dvrUI.initialized){
+    refreshBtn.addEventListener('click', refreshDvrList);
+    deleteBtn.addEventListener('click', deleteAllDvrRecordings);
+    dvrUI.initialized = true;
+  }
+  deleteBtn.disabled = !dvrUI.hasExec;
+  deleteBtn.title = dvrUI.hasExec ? '' : 'Requires exec capability';
+  refreshDvrList();
 }
 
 function buildLinkButtonsFromHelp(help){
@@ -992,6 +1156,7 @@ async function loadCaps(){
     $('#subtitle').textContent = `${caps.device||'device'} ${caps.version?('v'+caps.version):''}`;
 
     const capList = Array.isArray(caps.caps) ? caps.caps : [];
+    const hasExec = capList.includes('exec');
 
     if (capList.includes('pixelpilot')){
       $('#pixelpilotCard').style.display = '';
@@ -1024,6 +1189,30 @@ async function loadCaps(){
     } else {
       $('#linkCard').style.display = 'none';
       $('#linkStats').textContent = 'cap missing';
+    }
+
+    if (capList.includes('dvr')){
+      $('#dvrCard').style.display = '';
+      ensureDvrUI(hasExec);
+    } else {
+      $('#dvrCard').style.display = 'none';
+      const statusEl = document.getElementById('dvrStatus');
+      const listEl = document.getElementById('dvrList');
+      const emptyEl = document.getElementById('dvrEmptyState');
+      const msgEl = document.getElementById('dvrMessage');
+      if (statusEl) statusEl.textContent = 'cap missing';
+      if (listEl) listEl.innerHTML = '';
+      if (emptyEl) emptyEl.style.display = 'none';
+      if (msgEl){
+        msgEl.style.display = 'none';
+        msgEl.textContent = '';
+        msgEl.classList.remove('ok','err');
+      }
+    }
+
+    const execCard = document.getElementById('execCard');
+    if (execCard){
+      execCard.style.display = hasExec ? '' : 'none';
     }
 
   }catch(e){

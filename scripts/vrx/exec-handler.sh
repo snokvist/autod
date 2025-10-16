@@ -23,6 +23,7 @@ SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
 HELP_DIR="${HELP_DIR:-$SCRIPT_DIR}"
 STATE_DIR="${VRX_STATE_DIR:-/tmp/vrx}"
 LINK_STATE_FILE="$STATE_DIR/link.env"
+DVR_MEDIA_DIR="${DVR_MEDIA_DIR:-/media}"
 
 if [ "$(id -u)" -ne 0 ]; then
   echo "exec-handler.sh requires root privileges; ensure autod.service runs as root" 1>&2
@@ -258,6 +259,47 @@ link_route_status(){
   esac
 }
 
+# ======================= DVR recordings =======================
+dvr_list(){
+  dir="$DVR_MEDIA_DIR"
+  if [ ! -d "$dir" ]; then
+    echo "media directory not found: $dir" 1>&2
+    return 3
+  fi
+  for file in "$dir"/*.mp4; do
+    if [ "$file" = "$dir"'/'"*.mp4" ]; then
+      break
+    fi
+    printf '%s\n' "${file##*/}"
+  done
+  return 0
+}
+
+dvr_delete_all(){
+  dir="$DVR_MEDIA_DIR"
+  if [ ! -d "$dir" ]; then
+    echo "media directory not found: $dir" 1>&2
+    return 3
+  fi
+  count=0
+  for file in "$dir"/*.mp4; do
+    if [ "$file" = "$dir"'/'"*.mp4" ]; then
+      break
+    fi
+    count=$((count + 1))
+  done
+  if [ "$count" -eq 0 ]; then
+    echo "no recordings to delete"
+    return 0
+  fi
+  if find "$dir" -maxdepth 1 -type f -name '*.mp4' -exec rm -f -- {} \;; then
+    echo "deleted $count recording(s)"
+    return 0
+  fi
+  echo "failed to delete recordings" 1>&2
+  return 4
+}
+
 # ======================= Pixelpilot Mini RK =======================
 pixelpilot_mini_rk_pids(){ pidof pixelpilot_mini_rk 2>/dev/null; }
 
@@ -375,6 +417,10 @@ case "$1" in
   /sys/link/start)         shift; link_route_start "$@" ;;
   /sys/link/stop)          shift; link_route_stop "$@" ;;
   /sys/link/status)        shift; link_route_status "$@" ;;
+
+  # dvr recordings
+  /sys/dvr/list)           shift; dvr_list "$@" ;;
+  /sys/dvr/delete_all)     shift; dvr_delete_all "$@" ;;
 
   # pixelpilot mini rk
   /sys/pixelpilot_mini_rk/help)             print_help_msg "pixelpilot_mini_rk_help.msg" ;;
