@@ -288,11 +288,11 @@
     <h2>Remote /exec — raw runner</h2>
     <div class="body">
       <div class="row">
-        <label>target <input id="remoteExec_targetInput" value="http://192.168.2.203/exec" placeholder="http://host:port/exec"></label>
+        <label>target <input id="remoteExec_targetInput" value="http://192.168.2.203:55667/exec" placeholder="http://host:port/exec"></label>
         <div class="spacer"></div>
       </div>
       <div class="row">
-        <label>path <input id="remoteExec_path" value="/sys/pixelpilot/help"></label>
+        <label>path <input id="remoteExec_path" value="/sys/help"></label>
         <label>args (space-separated) <input id="remoteExec_args" placeholder=''></label>
         <button id="remoteExec_btn">POST remote /exec</button>
       </div>
@@ -310,7 +310,7 @@ const $ = s => document.querySelector(s);
 const fmtOneLine = obj => JSON.stringify(obj);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const clamp = (v,min,max)=>Math.max(min,Math.min(max,v));
-const DEFAULT_REMOTE_EXEC_TARGET = 'http://192.168.2.203/exec';
+const DEFAULT_REMOTE_EXEC_TARGET = 'http://192.168.2.203:55667/exec';
 
 function joinCaps(caps){
   if (!Array.isArray(caps) || !caps.length) return '—';
@@ -943,8 +943,8 @@ function ensurePixelpilotMiniRkUI(){
   const cfg = [
     { btn:'#pixelpilotMiniRkToggleOsdBtn', command:{ path:'/sys/pixelpilot_mini_rk/toggle_osd' } },
     { btn:'#pixelpilotMiniRkToggleRecordingBtn', command:{ path:'/sys/pixelpilot_mini_rk/toggle_recording' } },
-    { btn:'#pixelpilotMiniRkRebootBtn', command:{ path:'/sys/pixelpilot_mini_rk/reboot' } },
-    { btn:'#pixelpilotMiniRkShutdownBtn', command:{ path:'/sys/pixelpilot_mini_rk/shutdown' } },
+    { btn:'#pixelpilotMiniRkRebootBtn', command:{ path:'/sys/reboot' } },
+    { btn:'#pixelpilotMiniRkShutdownBtn', command:{ path:'/sys/shutdown' } },
     { btn:'#pixelpilotMiniRkRestartServiceBtn', command:{ path:'/sys/pixelpilot_mini_rk/restart' } },
     { btn:'#pixelpilotMiniRkStopServiceBtn', command:{ path:'/sys/pixelpilot_mini_rk/stop' } },
     { btn:'#pixelpilotMiniRkStartServiceBtn', command:{ path:'/sys/pixelpilot_mini_rk/start' } }
