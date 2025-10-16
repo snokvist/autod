@@ -268,8 +268,20 @@ link_route_status(){
   esac
 }
 
+# system helpers
+sys_help_json(){ emit_msg "sys_help.msg"; }
+
+sys_shutdown_cmd(){ shutdown now; }
+
+sys_restart_cmd(){ reboot now; }
+
 # ======================= DISPATCH =======================
 case "$1" in
+  # system
+  /sys/help)            sys_help_json ;;
+  /sys/shutdown)        shift; sys_shutdown_cmd "$@" ;;
+  /sys/restart)         shift; sys_restart_cmd "$@" ;;
+
   # video
   /sys/video/help)      video_help_json ;;
   /sys/video/get)       shift; video_get "$1" ;;
