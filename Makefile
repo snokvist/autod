@@ -177,6 +177,10 @@ strip: ;
 	-@command -v $(STRIP_GNU)    >/dev/null 2>&1 && $(STRIP_GNU)    $(APP)-gnu sse_tail-gnu udp_relay-gnu 2>/dev/null || true
 
 install: native udp_relay
+	@if command -v systemctl >/dev/null 2>&1 && [ -z "$(DESTDIR)" ]; then \
+		systemctl stop $(APP).service 2>/dev/null || true; \
+		systemctl stop $(UDP_APP).service 2>/dev/null || true; \
+	fi
 	install -Dm755 $(APP) $(DESTDIR)$(BINDIR)/$(APP)
 	install -d $(DESTDIR)$(VRXDIR)
 	install -m644 html/autod/vrx_index.html $(DESTDIR)$(VRXDIR)/vrx_index.html
@@ -190,9 +194,6 @@ install: native udp_relay
 	confdir="$(DESTDIR)$(SYSCONFDIR)/$(APP)"; \
 	install -d "$$confdir"; \
 	target="$$confdir/autod.conf"; \
-	if [ -f "$$target" ]; then \
-		target="$$target.dist"; \
-	fi; \
 	install -m644 configs/autod.conf "$$target"; \
 	sed -i \
 		-e 's#^interpreter=.*#interpreter=$(VRXDIR)/exec-handler.sh#' \
@@ -210,19 +211,18 @@ install: native udp_relay
 	udp_confdir="$(DESTDIR)$(UDP_CONFDIR)"; \
 	install -d "$$udp_confdir"; \
 	udp_target="$$udp_confdir/$(UDP_APP).conf"; \
-	if [ -f "$$udp_target" ]; then \
-		udp_target="$$udp_target.dist"; \
-	fi; \
 	install -m644 configs/$(UDP_APP).conf "$$udp_target";
 	install -d $(DESTDIR)$(UDP_HTMLDIR)
 	install -m644 html/udp_relay/$(UDP_UI_ASSET) $(DESTDIR)$(UDP_UI_PATH)
 	sed \
-                -e 's#@UDP_RELAY_BIN@#$(BINDIR)/$(UDP_APP)#g' \
-                -e 's#@UDP_UI_PATH@#$(UDP_UI_PATH)#g' \
-                configs/udp_relay.service > $(DESTDIR)$(SYSTEMD_DIR)/$(UDP_APP).service
+		-e 's#@UDP_RELAY_BIN@#$(BINDIR)/$(UDP_APP)#g' \
+		-e 's#@UDP_UI_PATH@#$(UDP_UI_PATH)#g' \
+		configs/udp_relay.service > $(DESTDIR)$(SYSTEMD_DIR)/$(UDP_APP).service
 	chmod 644 $(DESTDIR)$(SYSTEMD_DIR)/$(UDP_APP).service
 	@if command -v systemctl >/dev/null 2>&1 && [ -z "$(DESTDIR)" ]; then \
 		systemctl daemon-reload; \
+		systemctl start $(APP).service 2>/dev/null || true; \
+		systemctl start $(UDP_APP).service 2>/dev/null || true; \
 	fi
 
 help:

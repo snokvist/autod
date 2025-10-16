@@ -72,14 +72,14 @@ Each flavour drops intermediates under `build/<flavour>/` and strips binaries au
 
 - `autod` → `$(PREFIX)/bin/autod` (default prefix `/usr/local`).
 - VRX web UI and helpers → `$(PREFIX)/share/autod/vrx/` (`vrx_index.html`, `exec-handler.sh`, `*.msg`).
-- Configuration → `/etc/autod/autod.conf` (existing files are preserved and a `.dist` copy is written instead).
+- Configuration → `/etc/autod/autod.conf` (the shipped version overwrites any existing file so updates land immediately).
 - Service unit → `/etc/systemd/system/autod.service` pointing at the installed binary and config, running as `root` so helper scripts can signal privileged daemons.
 - `udp_relay` → `$(PREFIX)/bin/udp_relay`.
-- `udp_relay` configuration → `/etc/udp_relay/udp_relay.conf` (existing files are preserved and a `.dist` copy is written instead).
+- `udp_relay` configuration → `/etc/udp_relay/udp_relay.conf` (overwritten in-place during each install).
 - `udp_relay` service unit → `/etc/systemd/system/udp_relay.service` which runs the helper as `root` for consistent behaviour with the UI bindings.
 - VRX udp_relay UI asset → `$(PREFIX)/share/autod/udp_relay/vrx_udp_relay.html` (the service runs the binary with `--ui` pointing at this file).
 
-After installation `make install` reloads `systemd` automatically when installing directly on the host (no `DESTDIR`). If you staged into a `DESTDIR`, reload manually once the files land on the target system, then enable the daemon:
+During installation on a host with `systemctl` available (and no `DESTDIR`), the recipe stops any running `autod`/`udp_relay` services, installs the new assets and configuration in place, reloads `systemd`, and starts the services again without enabling them. If you staged into a `DESTDIR`, reload manually once the files land on the target system, then enable the daemon:
 
 ```bash
 sudo systemctl daemon-reload
