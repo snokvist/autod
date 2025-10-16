@@ -1,6 +1,13 @@
 {
   "cap":"sys",
   "contract_version":"0.1",
+  "help_endpoints":[
+    "/sys/help",
+    "/sys/pixelpilot/help",
+    "/sys/udp_relay/help",
+    "/sys/link/help",
+    "/sys/pixelpilot_mini_rk/help"
+  ],
   "commands":[
     {"name":"help","description":"Describe general system commands","args":[]},
     {"name":"reboot","description":"Schedule a device reboot (background)","args":[]},
