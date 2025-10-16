@@ -187,6 +187,12 @@
     <h2>Pixelpilot Mini RK</h2>
     <div class="body grid">
       <div class="cap-toolbar">
+        <div class="row" id="pixelpilotMiniRkActions">
+          <button id="pixelpilotMiniRkToggleOsdBtn">Toggle OSD</button>
+          <button id="pixelpilotMiniRkToggleRecordingBtn">Toggle Recording</button>
+          <button id="pixelpilotMiniRkRebootBtn">Reboot device</button>
+          <button id="pixelpilotMiniRkShutdownBtn">Shutdown device</button>
+        </div>
         <div class="spacer"></div>
         <div class="cap-stats" id="pixelpilotMiniRkStats">—</div>
       </div>
@@ -196,9 +202,6 @@
             <div class="name">Toggle OSD</div>
             <div class="val">—</div>
           </div>
-          <div class="row">
-            <button id="pixelpilotMiniRkToggleOsdBtn">Toggle OSD</button>
-          </div>
           <div class="desc">Send SIGUSR1 to pixelpilot_mini_rk to toggle the on-screen display.</div>
           <div class="errtxt" style="display:none"></div>
         </div>
@@ -206,9 +209,6 @@
           <div class="lbl">
             <div class="name">Toggle Recording</div>
             <div class="val">—</div>
-          </div>
-          <div class="row">
-            <button id="pixelpilotMiniRkToggleRecordingBtn">Toggle Recording</button>
           </div>
           <div class="desc">Send SIGUSR1 to pixelpilot_mini_rk to toggle DVR recording.</div>
           <div class="errtxt" style="display:none"></div>
@@ -218,9 +218,6 @@
             <div class="name">Reboot</div>
             <div class="val">—</div>
           </div>
-          <div class="row">
-            <button id="pixelpilotMiniRkRebootBtn">Reboot device</button>
-          </div>
           <div class="desc">Issue <code>reboot now</code> in the background.</div>
           <div class="errtxt" style="display:none"></div>
         </div>
@@ -228,9 +225,6 @@
           <div class="lbl">
             <div class="name">Shutdown</div>
             <div class="val">—</div>
-          </div>
-          <div class="row">
-            <button id="pixelpilotMiniRkShutdownBtn">Shutdown device</button>
           </div>
           <div class="desc">Issue <code>shutdown now</code> in the background.</div>
           <div class="errtxt" style="display:none"></div>

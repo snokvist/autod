@@ -45,6 +45,10 @@ strip autod
 #include "parson.h"
 #include "scan.h"        // <— NEW
 
+#if !defined(_WIN32)
+extern char *realpath(const char *path, char *resolved_path);
+#endif
+
 #ifdef USE_SDL2_GUI
 #include "autod_gui.h"
 #endif
@@ -470,8 +474,8 @@ static const char *reason_phrase_for_status(int code) {
     }
 }
 
-static void add_common_headers(struct mg_connection *c, int code, const char *ctype,
-                               size_t clen, int cors_public) {
+static void add_common_headers_extra(struct mg_connection *c, int code, const char *ctype,
+                                     size_t clen, int cors_public, const char *extra) {
     const char *reason = reason_phrase_for_status(code);
     if (reason) {
         mg_printf(c, "HTTP/1.1 %d %s\r\n", code, reason);
@@ -484,8 +488,16 @@ static void add_common_headers(struct mg_connection *c, int code, const char *ct
         mg_printf(c, "Access-Control-Allow-Origin: *\r\n");
         mg_printf(c, "Vary: Origin\r\n");
     }
+    if (extra && *extra) {
+        mg_printf(c, "%s", extra);
+    }
     mg_printf(c, "Cache-Control: no-store\r\n");
     mg_printf(c, "Connection: close\r\n\r\n");
+}
+
+static void add_common_headers(struct mg_connection *c, int code, const char *ctype,
+                               size_t clen, int cors_public) {
+    add_common_headers_extra(c, code, ctype, clen, cors_public, NULL);
 }
 
 static void add_cors_options(struct mg_connection *c) {
@@ -539,6 +551,18 @@ static void send_plain(struct mg_connection *c, int code, const char *msg, int c
     if (n) mg_write(c, text, (int)n);
 }
 
+static int format_http_date(time_t when, char *buf, size_t buf_sz) {
+    if (!buf || buf_sz == 0) return -1;
+#if defined(_WIN32)
+    struct tm tmp;
+    if (gmtime_s(&tmp, &when) != 0) return -1;
+#else
+    struct tm tmp;
+    if (!gmtime_r(&when, &tmp)) return -1;
+#endif
+    return strftime(buf, buf_sz, "%a, %d %b %Y %H:%M:%S GMT", &tmp) ? 0 : -1;
+}
+
 /* ----------------------- HTTP Handlers ----------------------- */
 typedef struct { config_t cfg; struct mg_context *ctx; } app_t;
 
@@ -590,7 +614,10 @@ static int h_media(struct mg_connection *c, void *ud) {
     }
 
     const struct mg_request_info *ri = mg_get_request_info(c);
-    if (!ri || strcmp(ri->request_method, "GET") != 0) {
+    if (!ri || !ri->request_method) return 0;
+
+    int is_head = (strcmp(ri->request_method, "HEAD") == 0);
+    if (!is_head && strcmp(ri->request_method, "GET") != 0) {
         send_plain(c, 405, "method_not_allowed", cfg->ui_public);
         return 1;
     }
@@ -670,7 +697,21 @@ static int h_media(struct mg_connection *c, void *ud) {
         ctype = "video/mp4";
     }
 
-    add_common_headers(c, 200, ctype, (size_t)st.st_size, cfg->ui_public);
+    char extra[192];
+    extra[0] = '\0';
+    char http_date[64];
+    if (format_http_date(st.st_mtime, http_date, sizeof(http_date)) == 0) {
+        int n = snprintf(extra, sizeof(extra), "Last-Modified: %s\r\n", http_date);
+        if (n < 0 || n >= (int)sizeof(extra)) extra[0] = '\0';
+    }
+
+    add_common_headers_extra(c, 200, ctype, (size_t)st.st_size, cfg->ui_public,
+                             extra[0] ? extra : NULL);
+
+    if (is_head) {
+        close(fd);
+        return 1;
+    }
 
     off_t off = 0;
     char buf[64 * 1024];
