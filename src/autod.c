@@ -192,6 +192,20 @@ static int parse_ini(const char *path, config_t *cfg) {
     return 0;
 }
 
+static int log_civet_message(const struct mg_connection *conn, const char *message) {
+    (void)conn;
+    if (message && *message) {
+        size_t len = strlen(message);
+        if (len && message[len - 1] == '\n') {
+            fprintf(stderr, "civetweb: %s", message);
+        } else {
+            fprintf(stderr, "civetweb: %s\n", message);
+        }
+        fflush(stderr);
+    }
+    return 1;
+}
+
 /* ----------------------- Runtime helpers ----------------------- */
 static void get_request_host_only(struct mg_connection *c, char *out, size_t outlen) {
     const char *host = mg_get_header(c, "Host");
@@ -971,8 +985,28 @@ int main(int argc, char **argv){
     };
 
     struct mg_callbacks cbs; memset(&cbs, 0, sizeof(cbs));
-    app.ctx = mg_start(&cbs, &app, options);
-    if(!app.ctx){ fprintf(stderr,"ERROR: mg_start failed\n"); return 1; }
+    cbs.log_message = log_civet_message;
+    struct mg_init_data init = {0};
+    init.callbacks = &cbs;
+    init.user_data = &app;
+    init.configuration_options = options;
+
+    struct mg_error_data err = {0};
+    char errbuf[256];
+    err.text = errbuf;
+    err.text_buffer_size = sizeof(errbuf);
+    errbuf[0] = '\0';
+
+    app.ctx = mg_start2(&init, &err);
+    if(!app.ctx){
+        if (err.code != MG_ERROR_DATA_CODE_OK) {
+            fprintf(stderr,"ERROR: mg_start failed: %s (code=%u sub=%u)\n",
+                    errbuf[0] ? errbuf : "unknown error", err.code, err.code_sub);
+        } else {
+            fprintf(stderr,"ERROR: mg_start failed\n");
+        }
+        return 1;
+    }
 
     /* Install handlers */
     mg_set_request_handler(app.ctx, "/health",  h_health,  &app);
