@@ -303,7 +303,7 @@
       </div>
       <div class="row">
         <label>path <input id="remoteExec_path" value="/sys/help"></label>
-        <label>args (space-separated) <input id="remoteExec_args" placeholder=''></label>
+        <label>args (space-separated; use key=value for setters) <input id="remoteExec_args" placeholder='bitrate=8192'></label>
         <button id="remoteExec_btn">POST remote /exec</button>
       </div>
       <div class="mut" id="remoteExec_target">Target: —</div>
@@ -892,6 +892,46 @@ function createCapManager(config){
   const setTimeoutMs = Math.max(0, config.setTimeoutMs ?? CMD_TIMEOUT_MS);
   const helpTimeoutMs = Math.max(0, config.helpTimeoutMs ?? 350);
 
+  const pairErrRe = /(missing (?:key|value) in pair|usage:[^\n]*key=value)/i;
+
+  function responseOk(res){
+    if (!res) return false;
+    if (typeof res.rc === 'number') return res.rc === 0;
+    if (res.rc !== undefined){
+      const num = Number(res.rc);
+      if (Number.isFinite(num)) return num === 0;
+      return false;
+    }
+    return true;
+  }
+
+  function responseMessage(res){
+    if (!res || typeof res !== 'object') return '';
+    const stderr = (res.stderr ?? '').toString().trim();
+    const stdout = (res.stdout ?? '').toString().trim();
+    return stderr || stdout || '';
+  }
+
+  async function execSetCommand(key, valStr){
+    const path = `/sys/${config.cap}/set`;
+    const run = async (args)=> execFn({ path, args }, setTimeoutMs);
+    const firstArgs = [`${key}=${valStr}`];
+    const firstRes = await run(firstArgs);
+    if (responseOk(firstRes)){
+      return { ok:true, res:firstRes };
+    }
+    const firstMsg = responseMessage(firstRes);
+    if (!pairErrRe.test(firstMsg)){
+      return { ok:false, res:firstRes };
+    }
+    const secondArgs = [key, valStr];
+    const secondRes = await run(secondArgs);
+    if (responseOk(secondRes)){
+      return { ok:true, res:secondRes, prev:firstRes };
+    }
+    return { ok:false, res:secondRes, prev:firstRes };
+  }
+
   function parseGetStdoutValue(key, stdout){
     if (stdout==null) return undefined;
     const t = String(stdout).trim();
@@ -972,13 +1012,17 @@ function createCapManager(config){
   function attachImmediateApply(meta, ctl){
     const key = meta.key;
     const apply = async (nextVal)=>{
-      const valStr = valueToString(meta, nextVal);
-      const body = { path:`/sys/${config.cap}/set`, args:[ `${key}=${valStr}` ] };
+      const rawStr = valueToString(meta, nextVal);
+      const valStr = (typeof rawStr === 'string') ? rawStr.trim() : rawStr;
       try{
         ctl.errEl.style.display='none';
-        const res = await execFn(body, setTimeoutMs);
-        const ok = (res && typeof res.rc === 'number') ? res.rc === 0 : true;
+        const { ok, res, prev } = await execSetCommand(key, String(valStr ?? ''));
         flashCtl(ctl.el, ok);
+        if (!ok){
+          const detail = responseMessage(res) || responseMessage(prev) || 'command failed';
+          ctl.errEl.textContent = `set failed: ${detail}`;
+          ctl.errEl.style.display='block';
+        }
         try {
           const got = await getWithRetries(key, Math.max(1, Math.min(2, getRetries)));
           if (got.ok) applyValueToUI(meta, got.value);
