@@ -30,6 +30,11 @@ strip autod
 #include <sys/stat.h>
 #include <sys/resource.h>
 #include <fcntl.h>
+#include <limits.h>
+#ifndef PATH_MAX
+#define PATH_MAX 4096
+#endif
+#include <strings.h>
 #include <poll.h>
 #include <ifaddrs.h>
 #include <netinet/in.h>
@@ -114,6 +119,19 @@ static void cfg_defaults(config_t *c) {
     c->sse_count = 0;
     c->serve_ui = 0;
     c->ui_public = 1;
+}
+
+static int cfg_has_cap(const config_t *cfg, const char *cap) {
+    if (!cfg || !cap || !*cap || !cfg->caps[0]) return 0;
+    char tmp[sizeof(cfg->caps)];
+    strncpy(tmp, cfg->caps, sizeof(tmp) - 1);
+    tmp[sizeof(tmp) - 1] = '\0';
+    char *save = NULL;
+    for (char *tok = strtok_r(tmp, ",", &save); tok; tok = strtok_r(NULL, ",", &save)) {
+        trim(tok);
+        if (*tok && strcasecmp(tok, cap) == 0) return 1;
+    }
+    return 0;
 }
 
 static int parse_ini(const char *path, config_t *cfg) {
@@ -514,6 +532,13 @@ static void send_json(struct mg_connection *c, JSON_Value *v, int code, int cors
     if (s) json_free_serialized_string(s);
 }
 
+static void send_plain(struct mg_connection *c, int code, const char *msg, int cors_public) {
+    const char *text = msg ? msg : "";
+    size_t n = strlen(text);
+    add_common_headers(c, code, "text/plain; charset=utf-8", n, cors_public);
+    if (n) mg_write(c, text, (int)n);
+}
+
 /* ----------------------- HTTP Handlers ----------------------- */
 typedef struct { config_t cfg; struct mg_context *ctx; } app_t;
 
@@ -546,6 +571,109 @@ static int stream_file(struct mg_connection *c, const char *path, int cors_publi
     struct stat st; if (fstat(fd,&st)!=0){ close(fd); return 0; }
     add_common_headers(c, 200, "text/html; charset=utf-8", (size_t)st.st_size, cors_public);
     off_t off=0; char buf[64*1024];
+    while (off < st.st_size) {
+        ssize_t r = read(fd, buf, sizeof(buf));
+        if (r <= 0) break;
+        mg_write(c, buf, (size_t)r);
+        off += r;
+    }
+    close(fd);
+    return 1;
+}
+
+static int h_media(struct mg_connection *c, void *ud) {
+    app_t *app = (app_t *)ud;
+    const config_t *cfg = &app->cfg;
+    if (!cfg_has_cap(cfg, "dvr")) {
+        send_plain(c, 404, "not_found", cfg->ui_public);
+        return 1;
+    }
+
+    const struct mg_request_info *ri = mg_get_request_info(c);
+    if (!ri || strcmp(ri->request_method, "GET") != 0) {
+        send_plain(c, 405, "method_not_allowed", cfg->ui_public);
+        return 1;
+    }
+
+    const char *uri = ri->local_uri ? ri->local_uri : ri->request_uri;
+    if (!uri) return 0;
+
+    const char *prefix = "/media/";
+    size_t prefix_len = strlen(prefix);
+    if (strncmp(uri, prefix, prefix_len) != 0) {
+        if (!strcmp(uri, "/media") || !strcmp(uri, "/media/")) {
+            send_plain(c, 404, "not_found", cfg->ui_public);
+            return 1;
+        }
+        return 0;
+    }
+
+    const char *rel = uri + prefix_len;
+    while (*rel == '/') rel++;
+    if (!*rel) {
+        send_plain(c, 404, "not_found", cfg->ui_public);
+        return 1;
+    }
+
+    char decoded[PATH_MAX];
+    int dec_len = mg_url_decode(rel, (int)strlen(rel), decoded, (int)sizeof(decoded), 0);
+    if (dec_len <= 0 || dec_len >= (int)sizeof(decoded)) {
+        send_plain(c, 400, "bad_request", cfg->ui_public);
+        return 1;
+    }
+    decoded[dec_len] = '\0';
+
+    const char *base = getenv("DVR_MEDIA_DIR");
+    if (!base || !*base) base = "/media";
+
+    char base_real[PATH_MAX];
+    if (!realpath(base, base_real)) {
+        send_plain(c, 404, "media_unavailable", cfg->ui_public);
+        return 1;
+    }
+
+    char joined[PATH_MAX];
+    if (snprintf(joined, sizeof(joined), "%s/%s", base_real, decoded) >= (int)sizeof(joined)) {
+        send_plain(c, 400, "path_too_long", cfg->ui_public);
+        return 1;
+    }
+
+    char resolved[PATH_MAX];
+    if (!realpath(joined, resolved)) {
+        send_plain(c, 404, "not_found", cfg->ui_public);
+        return 1;
+    }
+
+    size_t base_len = strlen(base_real);
+    if (strncmp(resolved, base_real, base_len) != 0 ||
+        (resolved[base_len] != '\0' && resolved[base_len] != '/')) {
+        send_plain(c, 403, "forbidden", cfg->ui_public);
+        return 1;
+    }
+
+    int fd = open(resolved, O_RDONLY);
+    if (fd < 0) {
+        send_plain(c, 404, "not_found", cfg->ui_public);
+        return 1;
+    }
+
+    struct stat st;
+    if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode)) {
+        close(fd);
+        send_plain(c, 404, "not_found", cfg->ui_public);
+        return 1;
+    }
+
+    const char *ctype = "application/octet-stream";
+    const char *dot = strrchr(resolved, '.');
+    if (dot && (!strcasecmp(dot, ".mp4") || !strcasecmp(dot, ".m4v"))) {
+        ctype = "video/mp4";
+    }
+
+    add_common_headers(c, 200, ctype, (size_t)st.st_size, cfg->ui_public);
+
+    off_t off = 0;
+    char buf[64 * 1024];
     while (off < st.st_size) {
         ssize_t r = read(fd, buf, sizeof(buf));
         if (r <= 0) break;
@@ -810,6 +938,7 @@ int main(int argc, char **argv){
     mg_set_request_handler(app.ctx, "/caps",    h_caps,    &app);
     mg_set_request_handler(app.ctx, "/exec",    h_exec,    &app);
     mg_set_request_handler(app.ctx, "/nodes",   h_nodes,   &app);
+    mg_set_request_handler(app.ctx, "/media",   h_media,   &app);
     mg_set_request_handler(app.ctx, "/",        h_root,    &app);
 
     /* CORS preflight */
