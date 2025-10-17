@@ -75,6 +75,7 @@ $1_OBJ_GUION := $$($1_OBJ_CORE) $$($1_OBJ_GUI)
 # Tools (single-file utilities)
 $1_OBJ_SSE   := $$($1_BUILD)/sse_tail.o
 $1_OBJ_UDP   := $$($1_BUILD)/udp_relay.o
+$1_OBJ_AOSD  := $$($1_BUILD)/antenna_osd.o
 
 # CivetWeb per-file tweak
 $1_CFLAGS_CIVETWEB := $$($1_CFLAGS) -Wno-unused-variable
@@ -86,9 +87,10 @@ $1_BIN_GUI   := $$($1_OUTBASE)-gui
 # Tool output names (use explicit suffix)
 $1_BIN_SSE   := sse_tail$$($1_SUFFIX)
 $1_BIN_UDP   := udp_relay$$($1_SUFFIX)
+$1_BIN_AOSD  := antenna_osd$$($1_SUFFIX)
 
 # Phony targets for this flavor
-.PHONY: $1 $1-gui $1-sse_tail $1-udp_relay
+.PHONY: $1 $1-gui $1-sse_tail $1-udp_relay $1-antenna_osd
 
 $1: $$($1_BIN_NOGUI)
 $1-gui: GUI=1
@@ -96,6 +98,7 @@ $1-gui: $$($1_BIN_GUI)
 
 $1-sse_tail: $$($1_BIN_SSE)
 $1-udp_relay: $$($1_BIN_UDP)
+$1-antenna_osd: $$($1_BIN_AOSD)
 
 # Link rules (strip output if strip tool exists)
 $$($1_BIN_NOGUI): $$($1_OBJ_NOGUI)
@@ -112,6 +115,10 @@ $$($1_BIN_SSE): $$($1_OBJ_SSE)
 
 $$($1_BIN_UDP): $$($1_OBJ_UDP)
 	$$($1_CC) $$^ -o $$@
+	@command -v $$($1_STRIP) >/dev/null 2>&1 && $$($1_STRIP) $$@ || true
+
+$$($1_BIN_AOSD): $$($1_OBJ_AOSD)
+	$$($1_CC) $$($1_CPPFLAGS) $$($1_CFLAGS) $$^ $$($1_LDFLAGS) $$($1_LDLIBS) -o $$@
 	@command -v $$($1_STRIP) >/dev/null 2>&1 && $$($1_STRIP) $$@ || true
 
 # Compile rules
@@ -142,6 +149,7 @@ $$($1_BUILD):
 -include $$($1_OBJ_GUION:.o=.d)
 -include $$($1_OBJ_SSE:.o=.d)
 -include $$($1_OBJ_UDP:.o=.d)
+-include $$($1_OBJ_AOSD:.o=.d)
 
 endef
 
@@ -160,21 +168,22 @@ all: native
 gui: native-gui
 
 # Utilities (native by default)
-tools: sse_tail udp_relay
-tools-musl: sse_tail-musl udp_relay-musl
-tools-gnu: sse_tail-gnu udp_relay-gnu
+tools: sse_tail udp_relay antenna_osd
+tools-musl: sse_tail-musl udp_relay-musl antenna_osd-musl
+tools-gnu: sse_tail-gnu udp_relay-gnu antenna_osd-gnu
 
 clean:
 	rm -rf build \
-	       $(APP) $(APP)-gui $(APP)-musl $(APP)-musl-gui $(APP)-gnu $(APP)-gnu-gui \
-	       sse_tail sse_tail-musl sse_tail-gnu \
-	       udp_relay udp_relay-musl udp_relay-gnu
+               $(APP) $(APP)-gui $(APP)-musl $(APP)-musl-gui $(APP)-gnu $(APP)-gnu-gui \
+               sse_tail sse_tail-musl sse_tail-gnu \
+               udp_relay udp_relay-musl udp_relay-gnu \
+               antenna_osd antenna_osd-musl antenna_osd-gnu
 
 # Strip whatever exists (no-op if strip tools missing)
 strip: ;
-	-@command -v $(STRIP_NATIVE) >/dev/null 2>&1 && $(STRIP_NATIVE) $(APP) sse_tail udp_relay 2>/dev/null || true
-	-@command -v $(STRIP_MUSL)   >/dev/null 2>&1 && $(STRIP_MUSL)   $(APP)-musl sse_tail-musl udp_relay-musl 2>/dev/null || true
-	-@command -v $(STRIP_GNU)    >/dev/null 2>&1 && $(STRIP_GNU)    $(APP)-gnu sse_tail-gnu udp_relay-gnu 2>/dev/null || true
+	-@command -v $(STRIP_NATIVE) >/dev/null 2>&1 && $(STRIP_NATIVE) $(APP) sse_tail udp_relay antenna_osd 2>/dev/null || true
+	-@command -v $(STRIP_MUSL)   >/dev/null 2>&1 && $(STRIP_MUSL)   $(APP)-musl sse_tail-musl udp_relay-musl antenna_osd-musl 2>/dev/null || true
+	-@command -v $(STRIP_GNU)    >/dev/null 2>&1 && $(STRIP_GNU)    $(APP)-gnu sse_tail-gnu udp_relay-gnu antenna_osd-gnu 2>/dev/null || true
 
 install: native udp_relay
 	@if command -v systemctl >/dev/null 2>&1 && [ -z "$(DESTDIR)" ]; then \

@@ -4,14 +4,9 @@
  * - Endpoints:
  *     GET  /api/v1/status           -> JSON live status
  *     GET  /api/v1/osd_last         -> latest rendered OSD text (plain)
- *     GET  /api/v1/config           -> current config (INI text)
- *     POST /api/v1/config           -> replace config; apply & persist
- *     GET  /api/v1/get?key=K        -> value of cfg key
- *     POST /api/v1/set?key=K&value=V -> set key at runtime (+persist)
- *     POST /api/v1/action/reload    -> soft reload (SIGHUP semantics)
  * - One hot select() loop; all sockets O_NONBLOCK
  * - Keeps last OSD render in memory for /api/v1/osd_last
- * - Maintains existing behavior, file wildcards, SIGHUP live reload
+ * - Maintains existing behavior, file wildcards
  *
  * antenna_osd.c  (v2.x — previous)
  * - RSSI bar OSD, UDP/RSSI optional 2nd bar, system msg timeout, globbed input
@@ -24,7 +19,6 @@
 #include <getopt.h>
 #include <glob.h>
 #include <netinet/ip_icmp.h>
-#include <signal.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -44,7 +38,6 @@ static char *info_buf=NULL; static size_t info_size=0; static time_t last_info_a
 static int rssi_hist[3]={-1,-1,-1}, udp_hist[3]={-1,-1,-1};
 static char *last_osd_text=NULL; static size_t last_osd_len=0;
 
-#define DEF_CFG_FILE        "/etc/antenna_osd.conf"
 #define DEF_INFO_FILE       "/proc/net/*8*/wlan0/trx_info_debug"
 #define DEF_OUT_FILE        "/tmp/MSPOSD.msg"
 #define DEF_INTERVAL        0.10
@@ -89,7 +82,6 @@ static inline int64_t sec_to_ms(double s){ return (int64_t)(s*1000.0 + 0.5); }
 static inline int64_t clamp_min(int64_t x, int64_t mn){ return x < mn ? mn : x; }
 
 
-static const char *GL_ANT="\uF012";
 static const char *FULL="\u2588";
 static const char *PART[7]={"\u2581","\u2582","\u2583","\u2584","\u2585","\u2586","\u2587"};
 
@@ -131,108 +123,6 @@ static cfg_t cfg = {
     .curr_tx_rate_key=DEF_CURR_TX_RATE_KEY, .curr_tx_bw_key=DEF_CURR_TX_BW_KEY, .rssi_udp_enable=DEF_RSSI_UDP_ENABLE, .rssi_udp_key=DEF_RSSI_UDP_KEY, .tx_power_key=DEF_TX_POWER_KEY,
     .http_addr=DEF_HTTP_ADDR, .http_port=DEF_HTTP_PORT, .http_max_clients=DEF_HTTP_CLIENTS
 };
-
-static volatile sig_atomic_t reload_cfg=0; static const char *cfg_path=DEF_CFG_FILE;
-static void hup_handler(int s){(void)s; reload_cfg=1;}
-
-static void set_cfg_field(const char *k,const char *v){
-#define EQ(a,b) (strcmp((a),(b))==0)
-    if(EQ(k,"info_file")) cfg.info_file=strdup(v);
-    else if(EQ(k,"out_file")) cfg.out_file=strdup(v);
-    else if(EQ(k,"interval")) cfg.interval=atof(v);
-    else if(EQ(k,"bar_width")) cfg.bar_width=atoi(v);
-    else if(EQ(k,"top")) cfg.top=atoi(v);
-    else if(EQ(k,"bottom")) cfg.bottom=atoi(v);
-    else if(EQ(k,"osd_hdr")) cfg.osd_hdr=strdup(v);
-    else if(EQ(k,"osd_hdr2")) cfg.osd_hdr2=strdup(v);
-    else if(EQ(k,"sys_msg_hdr")) cfg.sys_msg_hdr=strdup(v);
-    else if(EQ(k,"show_stats_line")) {
-        if (!strcasecmp(v,"true"))      cfg.show_stats_line = 3;   /* old style → full */
-        else if (!strcasecmp(v,"false"))cfg.show_stats_line = 0;
-        else {
-            int x = atoi(v);
-            if (x < 0) x = 0; if (x > 3) x = 3;
-            cfg.show_stats_line = x;
-        }
-    }
-    else if(EQ(k,"sys_msg_timeout")) cfg.sys_msg_timeout=atoi(v);
-    else if(EQ(k,"rssi_control")) cfg.rssi_control=atoi(v)!=0;
-    else if(EQ(k,"rssi_range0_hdr")) cfg.rssi_hdr[0]=strdup(v);
-    else if(EQ(k,"rssi_range1_hdr")) cfg.rssi_hdr[1]=strdup(v);
-    else if(EQ(k,"rssi_range2_hdr")) cfg.rssi_hdr[2]=strdup(v);
-    else if(EQ(k,"rssi_range3_hdr")) cfg.rssi_hdr[3]=strdup(v);
-    else if(EQ(k,"rssi_range4_hdr")) cfg.rssi_hdr[4]=strdup(v);
-    else if(EQ(k,"rssi_range5_hdr")) cfg.rssi_hdr[5]=strdup(v);
-    else if(EQ(k,"ping_ip")) cfg.ping_ip=strdup(v);
-    else if(EQ(k,"start_sym")) cfg.start_sym=strdup(v);
-    else if(EQ(k,"end_sym")) cfg.end_sym=strdup(v);
-    else if(EQ(k,"empty_sym")) cfg.empty_sym=strdup(v);
-    else if(EQ(k,"rssi_key")) cfg.rssi_key=strdup(v);
-    else if(EQ(k,"curr_tx_rate_key")) cfg.curr_tx_rate_key=strdup(v);
-    else if(EQ(k,"curr_tx_bw_key")) cfg.curr_tx_bw_key=strdup(v);
-    else if(EQ(k,"rssi_udp_enable")) cfg.rssi_udp_enable=atoi(v)!=0;
-    else if(EQ(k,"rssi_udp_key")) cfg.rssi_udp_key=strdup(v);
-    else if(EQ(k,"tx_power_key")) cfg.tx_power_key=strdup(v);
-    else if(EQ(k,"http_addr")) cfg.http_addr=strdup(v);
-    else if(EQ(k,"http_port")) cfg.http_port=atoi(v);
-    else if(EQ(k,"http_max_clients")) cfg.http_max_clients=atoi(v);
-#undef EQ
-}
-
-static void load_config(const char *path){
-    FILE *fp=fopen(path,"r");
-    if(!fp){fprintf(stderr,"[antenna_osd] config \"%s\" not found – defaults in use\n",path);return;}
-    char *line=NULL; size_t len=0;
-    while(getline(&line,&len,fp)!=-1){
-        char *s=line; while(*s==' '||*s=='\t') ++s;
-        if(*s=='#'||*s=='\n'||*s=='\0') continue;
-        char *eq=strchr(s,'='); if(!eq) continue; *eq='\0';
-        char *k=s,*v=eq+1;
-        char *ke=k+strlen(k); while(ke>k&&(ke[-1]==' '||ke[-1]=='\t')) *--ke='\0';
-        while(*v==' '||*v=='\t') ++v;
-        char *ve=v+strlen(v); while(ve>v&&(ve[-1]==' '||ve[-1]=='\t'||ve[-1]=='\n')) *--ve='\0';
-        set_cfg_field(k,v);
-    }
-    free(line); fclose(fp);
-}
-
-static int save_config(const char *path){
-    FILE *fp=fopen(path,"w"); if(!fp) return -1;
-    fprintf(fp,"# antenna_osd.conf\n");
-    fprintf(fp,"out_file=%s\n",cfg.out_file);
-    fprintf(fp,"interval=%g\n",cfg.interval);
-    fprintf(fp,"bar_width=%d\n",cfg.bar_width);
-    fprintf(fp,"top=%d\n",cfg.top);
-    fprintf(fp,"bottom=%d\n",cfg.bottom);
-    fprintf(fp,"osd_hdr=%s\n",cfg.osd_hdr);
-    fprintf(fp,"rssi_control=%d\n",cfg.rssi_control?1:0);
-    fprintf(fp,"rssi_range0_hdr=%s\n",cfg.rssi_hdr[0]);
-    fprintf(fp,"rssi_range1_hdr=%s\n",cfg.rssi_hdr[1]);
-    fprintf(fp,"rssi_range2_hdr=%s\n",cfg.rssi_hdr[2]);
-    fprintf(fp,"rssi_range3_hdr=%s\n",cfg.rssi_hdr[3]);
-    fprintf(fp,"rssi_range4_hdr=%s\n",cfg.rssi_hdr[4]);
-    fprintf(fp,"rssi_range5_hdr=%s\n",cfg.rssi_hdr[5]);
-    fprintf(fp,"show_stats_line=%d\n",cfg.show_stats_line);
-    fprintf(fp,"osd_hdr2=%s\n",cfg.osd_hdr2);
-    fprintf(fp,"sys_msg_hdr=%s\n",cfg.sys_msg_hdr);
-    fprintf(fp,"sys_msg_timeout=%d\n",cfg.sys_msg_timeout);
-    fprintf(fp,"tx_power_key=%s\n",cfg.tx_power_key);
-    fprintf(fp,"ping_ip=%s\n",cfg.ping_ip);
-    fprintf(fp,"start_sym=%s\n",cfg.start_sym);
-    fprintf(fp,"end_sym=%s\n",cfg.end_sym);
-    fprintf(fp,"empty_sym=%s\n",cfg.empty_sym);
-    fprintf(fp,"info_file=%s\n",cfg.info_file);
-    fprintf(fp,"rssi_key=%s\n",cfg.rssi_key);
-    fprintf(fp,"curr_tx_rate_key=%s\n",cfg.curr_tx_rate_key);
-    fprintf(fp,"curr_tx_bw_key=%s\n",cfg.curr_tx_bw_key);
-    fprintf(fp,"rssi_udp_enable=%d\n",cfg.rssi_udp_enable?1:0);
-    fprintf(fp,"rssi_udp_key=%s\n",cfg.rssi_udp_key?cfg.rssi_udp_key:"");
-    fprintf(fp,"http_addr=%s\n",cfg.http_addr);
-    fprintf(fp,"http_port=%d\n",cfg.http_port);
-    fprintf(fp,"http_max_clients=%d\n",cfg.http_max_clients);
-    fclose(fp);
-    return 0;
-}
 
 static time_t sys_msg_last_update=0;
 static void read_system_msg(void){
@@ -413,8 +303,6 @@ typedef struct {
     char *outbuf;
     size_t outlen, outpos, outcap;
     bool headers_parsed;
-    size_t content_length;
-    bool is_post;
     char method[8];
     char path[256];
 } client_t;
@@ -438,7 +326,7 @@ static client_t* http_alloc_client(int fd){
     for(int i=0;i<max_clients;i++) if(!clients[i].used){clients[i].used=true; clients[i].fd=fd; clients[i].want_close=false;
         clients[i].inbuf=NULL; clients[i].inlen=0; clients[i].incap=0;
         clients[i].outbuf=NULL; clients[i].outlen=0; clients[i].outpos=0; clients[i].outcap=0;
-        clients[i].headers_parsed=false; clients[i].content_length=0; clients[i].is_post=false; clients[i].method[0]=0; clients[i].path[0]=0; return &clients[i];}
+        clients[i].headers_parsed=false; clients[i].method[0]=0; clients[i].path[0]=0; return &clients[i];}
     return NULL;
 }
 static void http_free_client(client_t *c){
@@ -454,7 +342,8 @@ static void buf_append(char **buf,size_t *len,size_t *cap,const void *data,size_
 }
 static void out_printf(client_t *c,const char *fmt,...){
     char tmp[4096]; va_list ap; va_start(ap,fmt); int n=vsnprintf(tmp,sizeof(tmp),fmt,ap); va_end(ap);
-    if(n<0) return; if((size_t)n>=sizeof(tmp)) n=sizeof(tmp)-1;
+    if(n<0) return;
+    if((size_t)n>=sizeof(tmp)) n=sizeof(tmp)-1;
     buf_append(&c->outbuf,&c->outlen,&c->outcap,tmp,n);
 }
 static void http_send(client_t *c,int code,const char *ctype,const char *body,size_t blen,bool keep){
@@ -477,33 +366,6 @@ static void json_escape_append(client_t *c,const char *s){
         else out_printf(c,"\\u00%c%c",hex2((*p>>4)&0xF),hex2((*p)&0xF));
     }
 }
-static void url_decode(char *s){
-    char *o=s;
-    for(char *p=s;*p;p++){
-        if(*p=='%'){ if(p[1]&&p[2]){int hi=(p[1]>='a'?p[1]-'a'+10:p[1]>='A'?p[1]-'A'+10:p[1]-'0'); int lo=(p[2]>='a'?p[2]-'a'+10:p[2]>='A'?p[2]-'A'+10:p[2]-'0'); *o++=(char)((hi<<4)|lo); p+=2;} }
-        else if(*p=='+'){ *o++=' '; }
-        else *o++=*p;
-    }
-    *o='\0';
-}
-static const char* qparam(const char *qs,const char *key, char *out,size_t outsz){
-    if(!qs) return NULL;
-    size_t klen=strlen(key);
-    const char *p=qs;
-    while(p&&*p){
-        const char *amp=strchr(p,'&'); size_t seglen=amp?(size_t)(amp-p):strlen(p);
-        const char *eq=memchr(p,'=',seglen);
-        if(eq){
-            if((size_t)(eq-p)==klen && strncasecmp(p,key,klen)==0){
-                size_t vlen=seglen-(eq-p)-1; if(vlen>=outsz) vlen=outsz-1;
-                memcpy(out,eq+1,vlen); out[vlen]='\0'; url_decode(out); return out;
-            }
-        }
-        p=amp?amp+1:NULL;
-    }
-    return NULL;
-}
-
 static void api_status(client_t *c,int last_rssi,int last_udp,const char *mcs,const char *bw,const char *txp){
     out_printf(c,"HTTP/1.1 200\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n");
     out_printf(c,"{");
@@ -519,95 +381,9 @@ static void api_status(client_t *c,int last_rssi,int last_udp,const char *mcs,co
     out_printf(c,"}\n");
     c->want_close=true;
 }
-
-static void api_config_get(client_t *c){
-    char *tmp=NULL; size_t len=0, cap=0;
-    FILE *fp=fopen(cfg_path,"r");
-    if(fp){
-        char buf[1024]; size_t n;
-        while((n=fread(buf,1,sizeof(buf),fp))>0) buf_append(&tmp,&len,&cap,buf,n);
-        fclose(fp);
-    } else {
-        save_config("/tmp/antenna_osd.rendered.conf");
-        fp=fopen("/tmp/antenna_osd.rendered.conf","r");
-        if(fp){ char buf[1024]; size_t n; while((n=fread(buf,1,sizeof(buf),fp))>0) buf_append(&tmp,&len,&cap,buf,n); fclose(fp); }
-    }
-    if(!tmp){ tmp=strdup(""); len=0; }
-    http_send(c,200,"text/plain",tmp,len,false);
-    free(tmp);
-}
-
-static int apply_set_kv(const char *k,const char *v){
-    set_cfg_field(k,v);
-    return save_config(cfg_path);
-}
-
-static void api_get_key(client_t *c,const char *qs){
-    char key[128]; if(!qparam(qs,"key",key,sizeof(key))){ http_send_text(c,400,"text/plain","missing key\n",false); return;}
-    const char *val=NULL;
-#define RETK(name,fmt,field) if(strcasecmp(key,name)==0){ char buf[256]; snprintf(buf,sizeof(buf),fmt,field); http_send_text(c,200,"text/plain",buf,false); return; }
-    RETK("info_file","%s\n",cfg.info_file)
-    RETK("out_file","%s\n",cfg.out_file)
-    RETK("interval","%g\n",cfg.interval)
-    RETK("bar_width","%d\n",cfg.bar_width)
-    RETK("top","%d\n",cfg.top)
-    RETK("bottom","%d\n",cfg.bottom)
-    RETK("osd_hdr","%s\n",cfg.osd_hdr)
-    RETK("osd_hdr2","%s\n",cfg.osd_hdr2)
-    RETK("sys_msg_hdr","%s\n",cfg.sys_msg_hdr)
-    RETK("show_stats_line","%d\n",cfg.show_stats_line)
-    RETK("sys_msg_timeout","%d\n",cfg.sys_msg_timeout)
-    RETK("rssi_control","%d\n",cfg.rssi_control?1:0)
-    RETK("rssi_range0_hdr","%s\n",cfg.rssi_hdr[0])
-    RETK("rssi_range1_hdr","%s\n",cfg.rssi_hdr[1])
-    RETK("rssi_range2_hdr","%s\n",cfg.rssi_hdr[2])
-    RETK("rssi_range3_hdr","%s\n",cfg.rssi_hdr[3])
-    RETK("rssi_range4_hdr","%s\n",cfg.rssi_hdr[4])
-    RETK("rssi_range5_hdr","%s\n",cfg.rssi_hdr[5])
-    RETK("ping_ip","%s\n",cfg.ping_ip)
-    RETK("start_sym","%s\n",cfg.start_sym)
-    RETK("end_sym","%s\n",cfg.end_sym)
-    RETK("empty_sym","%s\n",cfg.empty_sym)
-    RETK("rssi_key","%s\n",cfg.rssi_key)
-    RETK("curr_tx_rate_key","%s\n",cfg.curr_tx_rate_key)
-    RETK("curr_tx_bw_key","%s\n",cfg.curr_tx_bw_key)
-    RETK("rssi_udp_enable","%d\n",cfg.rssi_udp_enable?1:0)
-    RETK("rssi_udp_key","%s\n",cfg.rssi_udp_key?cfg.rssi_udp_key:"")
-    RETK("tx_power_key","%s\n",cfg.tx_power_key)
-    RETK("http_addr","%s\n",cfg.http_addr)
-    RETK("http_port","%d\n",cfg.http_port)
-    RETK("http_max_clients","%d\n",cfg.http_max_clients)
-#undef RETK
-    http_send_text(c,404,"text/plain","unknown key\n",false);
-}
-
-static void api_set_kv(client_t *c,const char *qs){
-    char key[128], val[512];
-    if(!qparam(qs,"key",key,sizeof(key))||!qparam(qs,"value",val,sizeof(val))){ http_send_text(c,400,"text/plain","missing key/value\n",false); return;}
-    if(apply_set_kv(key,val)<0){ http_send_text(c,500,"text/plain","persist failed\n",false); return;}
-    reload_cfg=1;
-    http_send_text(c,200,"text/plain","OK\n",false);
-}
-
-static void api_action_reload(client_t *c){
-    reload_cfg=1;
-    http_send_text(c,200,"text/plain","reloading\n",false);
-}
-
 static void api_osd_last(client_t *c){
     const char *s=last_osd_text?last_osd_text:"";
     http_send(c,200,"text/plain",s,strlen(s),false);
-}
-
-static void api_config_post(client_t *c){
-    if(!c->headers_parsed || c->content_length==0){ http_send_text(c,400,"text/plain","no body\n",false); return;}
-    char *body=c->inbuf + (strstr(c->inbuf,"\r\n\r\n") - c->inbuf) + 4;
-    size_t blen=c->inlen - (body - c->inbuf);
-    FILE *fp=fopen(cfg_path,"w");
-    if(!fp){ http_send_text(c,500,"text/plain","write fail\n",false); return;}
-    fwrite(body,1,blen,fp); fclose(fp);
-    reload_cfg=1;
-    http_send_text(c,200,"text/plain","OK\n",false);
 }
 
 static void handle_http_request(client_t *c){
@@ -619,17 +395,13 @@ static void handle_http_request(client_t *c){
     size_t mlen=(size_t)(sp1-first); if(mlen>=sizeof(c->method)) mlen=sizeof(c->method)-1; memcpy(c->method,first,mlen); c->method[mlen]='\0';
     char *sp2=strchr(sp1+1,' '); if(!sp2){ c->want_close=true; return; }
     size_t plen=(size_t)(sp2-(sp1+1)); if(plen>=sizeof(c->path)) plen=sizeof(c->path)-1; memcpy(c->path,sp1+1,plen); c->path[plen]='\0';
-    c->is_post=(strcasecmp(c->method,"POST")==0);
-    char *h=hdr_end+4;
-    char *cl=strcasestr(first,"Content-Length:"); if(cl){ cl+=15; while(*cl==' '||*cl=='\t') cl++; c->content_length=(size_t)strtoul(cl,NULL,10); }
-    if(c->is_post){
-        size_t have=c->inlen - (h - c->inbuf);
-        if(have < c->content_length) return;
+    if(strcasecmp(c->method,"GET")!=0){
+        http_send_text(c,405,"text/plain","method not allowed\n",false);
+        return;
     }
     const char *qs=strchr(c->path,'?'); char pure[256];
     if(qs){ size_t n=(size_t)(qs-c->path); if(n>=sizeof(pure)) n=sizeof(pure)-1; memcpy(pure,c->path,n); pure[n]='\0'; }
     else { strncpy(pure,c->path,sizeof(pure)); pure[sizeof(pure)-1]='\0'; }
-    const char *qsp = qs ? qs+1 : NULL;
 
     if(strcmp(pure,"/api/v1/status")==0){
         char mcs[32],bw[32],txs[32]; int rr=-1,uu=-1;
@@ -639,11 +411,6 @@ static void handle_http_request(client_t *c){
         api_status(c,rr,uu,mcs,bw,txs); return;
     }
     if(strcmp(pure,"/api/v1/osd_last")==0){ api_osd_last(c); return; }
-    if(strcmp(pure,"/api/v1/config")==0 && !c->is_post){ api_config_get(c); return; }
-    if(strcmp(pure,"/api/v1/config")==0 && c->is_post){ api_config_post(c); return; }
-    if(strcmp(pure,"/api/v1/get")==0){ api_get_key(c,qsp); return; }
-    if(strcmp(pure,"/api/v1/set")==0 && c->is_post){ api_set_kv(c,qsp); return; }
-    if(strcmp(pure,"/api/v1/action/reload")==0 && c->is_post){ api_action_reload(c); return; }
     http_send_text(c,404,"text/plain","not found\n",false);
 }
 
@@ -651,15 +418,14 @@ int main(int argc, char **argv){
     if(getuid()!=0){ fprintf(stderr,"antenna_osd: need root (raw ICMP)\n"); return 1; }
 
     /* args */
-    static const struct option optv[]={{"config",required_argument,NULL,'c'},{"help",no_argument,NULL,'h'},{0,0,0,0}};
-    int opt; while((opt=getopt_long(argc,argv,"c:h",optv,NULL))!=-1){
-        if(opt=='c') cfg_path=optarg;
-        else { printf("Usage: %s [--config <file>]\n",argv[0]); return 0; }
+    static const struct option optv[]={{"help",no_argument,NULL,'h'},{0,0,0,0}};
+    int opt; while((opt=getopt_long(argc,argv,"h",optv,NULL))!=-1){
+        if(opt=='h'){
+            printf("Usage: %s [--help]\n",argv[0]);
+            return 0;
+        }
+        return 1;
     }
-
-    /* config + SIGHUP */
-    load_config(cfg_path);
-    struct sigaction sa={.sa_handler=hup_handler}; sigemptyset(&sa.sa_mask); sa.sa_flags=SA_RESTART; sigaction(SIGHUP,&sa,NULL);
 
     /* ping socket (disabled if no/empty IP or socket fails) */
     bool ping_en = (cfg.ping_ip && *cfg.ping_ip);
@@ -801,50 +567,33 @@ int main(int argc, char **argv){
                 do next_osd_ms += osd_period_ms; while (next_osd_ms <= t_now_ms);
             } else {
                 if (should_load){
-                    if (!load_info_buffer()){ info_buf_valid=false; last_info_attempt=time(NULL); }
+                    if (!load_info_buffer()){
+                        info_buf_valid=false;
+                        last_info_attempt=time(NULL);
+                    }
                 }
-                int raw_rssi = parse_int_from_buf(info_buf,cfg.rssi_key);
-                int raw_udp  = cfg.rssi_udp_enable ? parse_int_from_buf(info_buf,cfg.rssi_udp_key) : -1;
 
-                int disp_rssi = get_display_rssi(raw_rssi); disp_rssi = smooth_rssi_sample(rssi_hist, disp_rssi);
-                int disp_udp  = get_display_udp(raw_udp);   disp_udp  = smooth_rssi_sample(udp_hist,  disp_udp);
+                if (!info_buf_valid || !info_buf){
+                    strcpy(last_mcs,"NA"); strcpy(last_bw,"NA"); strcpy(last_tx,"NA");
+                    int disp_rssi = smooth_rssi_sample(rssi_hist, get_display_rssi(-1));
+                    int disp_udp  = cfg.rssi_udp_enable ? smooth_rssi_sample(udp_hist, get_display_udp(-1)) : -1;
+                    write_osd(disp_rssi, disp_udp, last_mcs, last_bw, last_tx);
+                } else {
+                    int raw_rssi = parse_int_from_buf(info_buf,cfg.rssi_key);
+                    int raw_udp  = cfg.rssi_udp_enable ? parse_int_from_buf(info_buf,cfg.rssi_udp_key) : -1;
 
-                parse_value_from_buf(info_buf,cfg.curr_tx_rate_key,last_mcs,sizeof(last_mcs));
-                parse_value_from_buf(info_buf,cfg.curr_tx_bw_key,  last_bw, sizeof(last_bw));
-                parse_value_from_buf(info_buf,cfg.tx_power_key,    last_tx, sizeof(last_tx));
+                    int disp_rssi = get_display_rssi(raw_rssi); disp_rssi = smooth_rssi_sample(rssi_hist, disp_rssi);
+                    int disp_udp  = get_display_udp(raw_udp);   disp_udp  = smooth_rssi_sample(udp_hist,  disp_udp);
 
-                write_osd(disp_rssi, disp_udp, last_mcs, last_bw, last_tx);
+                    parse_value_from_buf(info_buf,cfg.curr_tx_rate_key,last_mcs,sizeof(last_mcs));
+                    parse_value_from_buf(info_buf,cfg.curr_tx_bw_key,  last_bw, sizeof(last_bw));
+                    parse_value_from_buf(info_buf,cfg.tx_power_key,    last_tx, sizeof(last_tx));
+
+                    write_osd(disp_rssi, disp_udp, last_mcs, last_bw, last_tx);
+                }
 
                 do next_osd_ms += osd_period_ms; while (next_osd_ms <= t_now_ms);
             }
-        }
-
-        /* ---- reload handling (HTTP /action/reload or SIGHUP) ---- */
-        if (reload_cfg){
-            reload_cfg = 0;
-            load_config(cfg_path);
-
-            if (cfg.interval < 0.02) cfg.interval = 0.02;
-            osd_period_ms  = (int64_t)(cfg.interval*1000.0 + 0.5);
-            ping_period_ms = (int64_t)((cfg.interval/3.0)*1000.0 + 0.5);
-
-            clock_gettime(CLOCK_MONOTONIC,&ts);
-            t_now_ms     = (int64_t)ts.tv_sec*1000 + ts.tv_nsec/1000000;
-            next_osd_ms  = t_now_ms + osd_period_ms;   /* reset OSD cadence */
-            next_ping_ms = t_now_ms + ping_period_ms;
-
-            /* Re-evaluate ping enablement if IP changed/cleared */
-            if (!(cfg.ping_ip && *cfg.ping_ip)) {
-                ping_en=false;
-                if (icmp_sock>=0){ close(icmp_sock); icmp_sock=-1; }
-            } else if (!ping_en) {
-                icmp_sock = init_icmp_socket(cfg.ping_ip,&dst);
-                ping_en = (icmp_sock>=0);
-            }
-
-            /* reset change-tracking for info_file (path may have changed) */
-            info_has_wild = (strpbrk(cfg.info_file,"*?[") != NULL);
-            last_info_mtime = 0; last_info_size = -1;
         }
 
         /* ---- close clients that finished sending ---- */
