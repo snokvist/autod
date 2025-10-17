@@ -38,6 +38,7 @@ static char *info_buf=NULL; static size_t info_size=0; static time_t last_info_a
 static int rssi_hist[3]={-1,-1,-1}, udp_hist[3]={-1,-1,-1};
 static char *last_osd_text=NULL; static size_t last_osd_len=0;
 
+#define DEF_CFG_FILE        "/etc/antenna_osd.conf"
 #define DEF_INFO_FILE       "/proc/net/*8*/wlan0/trx_info_debug"
 #define DEF_OUT_FILE        "/tmp/MSPOSD.msg"
 #define DEF_INTERVAL        0.10
@@ -123,6 +124,86 @@ static cfg_t cfg = {
     .curr_tx_rate_key=DEF_CURR_TX_RATE_KEY, .curr_tx_bw_key=DEF_CURR_TX_BW_KEY, .rssi_udp_enable=DEF_RSSI_UDP_ENABLE, .rssi_udp_key=DEF_RSSI_UDP_KEY, .tx_power_key=DEF_TX_POWER_KEY,
     .http_addr=DEF_HTTP_ADDR, .http_port=DEF_HTTP_PORT, .http_max_clients=DEF_HTTP_CLIENTS
 };
+
+static void set_cfg_field(const char *k, const char *v)
+{
+#define EQ(a,b) (strcmp((a),(b))==0)
+    if (EQ(k, "info_file")) cfg.info_file = strdup(v);
+    else if (EQ(k, "out_file")) cfg.out_file = strdup(v);
+    else if (EQ(k, "interval")) cfg.interval = atof(v);
+    else if (EQ(k, "bar_width")) cfg.bar_width = atoi(v);
+    else if (EQ(k, "top")) cfg.top = atoi(v);
+    else if (EQ(k, "bottom")) cfg.bottom = atoi(v);
+    else if (EQ(k, "osd_hdr")) cfg.osd_hdr = strdup(v);
+    else if (EQ(k, "osd_hdr2")) cfg.osd_hdr2 = strdup(v);
+    else if (EQ(k, "sys_msg_hdr")) cfg.sys_msg_hdr = strdup(v);
+    else if (EQ(k, "show_stats_line")) {
+        if (!strcasecmp(v, "true")) cfg.show_stats_line = 3;
+        else if (!strcasecmp(v, "false")) cfg.show_stats_line = 0;
+        else {
+            int lvl = atoi(v);
+            if (lvl < 0) lvl = 0;
+            if (lvl > 3) lvl = 3;
+            cfg.show_stats_line = lvl;
+        }
+    }
+    else if (EQ(k, "sys_msg_timeout")) cfg.sys_msg_timeout = atoi(v);
+    else if (EQ(k, "rssi_control")) cfg.rssi_control = atoi(v) != 0;
+    else if (EQ(k, "rssi_range0_hdr")) cfg.rssi_hdr[0] = strdup(v);
+    else if (EQ(k, "rssi_range1_hdr")) cfg.rssi_hdr[1] = strdup(v);
+    else if (EQ(k, "rssi_range2_hdr")) cfg.rssi_hdr[2] = strdup(v);
+    else if (EQ(k, "rssi_range3_hdr")) cfg.rssi_hdr[3] = strdup(v);
+    else if (EQ(k, "rssi_range4_hdr")) cfg.rssi_hdr[4] = strdup(v);
+    else if (EQ(k, "rssi_range5_hdr")) cfg.rssi_hdr[5] = strdup(v);
+    else if (EQ(k, "ping_ip")) cfg.ping_ip = strdup(v);
+    else if (EQ(k, "start_sym")) cfg.start_sym = strdup(v);
+    else if (EQ(k, "end_sym")) cfg.end_sym = strdup(v);
+    else if (EQ(k, "empty_sym")) cfg.empty_sym = strdup(v);
+    else if (EQ(k, "rssi_key")) cfg.rssi_key = strdup(v);
+    else if (EQ(k, "curr_tx_rate_key")) cfg.curr_tx_rate_key = strdup(v);
+    else if (EQ(k, "curr_tx_bw_key")) cfg.curr_tx_bw_key = strdup(v);
+    else if (EQ(k, "rssi_udp_enable")) cfg.rssi_udp_enable = atoi(v) != 0;
+    else if (EQ(k, "rssi_udp_key")) cfg.rssi_udp_key = strdup(v);
+    else if (EQ(k, "tx_power_key")) cfg.tx_power_key = strdup(v);
+    else if (EQ(k, "http_addr")) cfg.http_addr = strdup(v);
+    else if (EQ(k, "http_port")) cfg.http_port = atoi(v);
+    else if (EQ(k, "http_max_clients")) cfg.http_max_clients = atoi(v);
+#undef EQ
+}
+
+static void load_config(const char *path)
+{
+    FILE *fp = fopen(path, "r");
+    if (!fp) {
+        fprintf(stderr, "[antenna_osd] config \"%s\" not found – defaults in use\n", path);
+        return;
+    }
+
+    char *line = NULL;
+    size_t len = 0;
+    while (getline(&line, &len, fp) != -1) {
+        char *s = line;
+        while (*s == ' ' || *s == '\t') s++;
+        if (*s == '#' || *s == '\n' || *s == '\0') continue;
+
+        char *eq = strchr(s, '=');
+        if (!eq) continue;
+        *eq = '\0';
+        char *k = s;
+        char *v = eq + 1;
+
+        char *ke = k + strlen(k);
+        while (ke > k && (ke[-1] == ' ' || ke[-1] == '\t')) *--ke = '\0';
+
+        while (*v == ' ' || *v == '\t') v++;
+        char *ve = v + strlen(v);
+        while (ve > v && (ve[-1] == ' ' || ve[-1] == '\t' || ve[-1] == '\n' || ve[-1] == '\r')) *--ve = '\0';
+
+        if (*k) set_cfg_field(k, v);
+    }
+    free(line);
+    fclose(fp);
+}
 
 static time_t sys_msg_last_update=0;
 static void read_system_msg(void){
@@ -421,11 +502,22 @@ int main(int argc, char **argv){
     static const struct option optv[]={{"help",no_argument,NULL,'h'},{0,0,0,0}};
     int opt; while((opt=getopt_long(argc,argv,"h",optv,NULL))!=-1){
         if(opt=='h'){
-            printf("Usage: %s [--help]\n",argv[0]);
+            printf("Usage: %s [--help] [config_path]\n",argv[0]);
             return 0;
         }
         return 1;
     }
+
+    const char *cfg_path = DEF_CFG_FILE;
+    if(optind < argc){
+        if(optind + 1 < argc){
+            fprintf(stderr,"Usage: %s [--help] [config_path]\n",argv[0]);
+            return 1;
+        }
+        cfg_path = argv[optind];
+    }
+
+    load_config(cfg_path);
 
     /* ping socket (disabled if no/empty IP or socket fails) */
     bool ping_en = (cfg.ping_ip && *cfg.ping_ip);
