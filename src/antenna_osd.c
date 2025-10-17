@@ -268,15 +268,6 @@ static bool load_info_buffer(void){
     fclose(fp); return true;
 }
 
-static bool try_initial_load_info(void){
-    time_t now=time(NULL);
-    if(info_buf_valid) return true;
-    if(now-last_info_attempt<3) return false;
-    last_info_attempt=now;
-    if(load_info_buffer()){info_buf_valid=true; return true;}
-    return false;
-}
-
 static int parse_int_from_buf(const char *buf,const char *key){
     const char *p=buf;
     while((p=strcasestr(p,key))!=NULL){
@@ -545,11 +536,6 @@ int main(int argc, char **argv){
     /* last-known strings for status */
     char last_mcs[32]="NA", last_bw[32]="NA", last_tx[32]="NA";
 
-    /* reload-on-change support (only when no wildcard) */
-    bool info_has_wild = (strpbrk(cfg.info_file,"*?[") != NULL);
-    time_t last_info_mtime = 0;
-    off_t  last_info_size  = -1;
-
     for(;;){
         fd_set rfds,wfds; FD_ZERO(&rfds); FD_ZERO(&wfds);
         int maxfd = -1;
@@ -643,49 +629,45 @@ int main(int argc, char **argv){
 
         /* ---- periodic OSD render/write ---- */
         if (t_now_ms >= next_osd_ms) {
-            bool should_load = true;
-            if (!info_has_wild){
-                struct stat st;
-                if (stat(cfg.info_file, &st)==0){
-                    if (st.st_mtime == last_info_mtime && st.st_size == last_info_size){
-                        should_load = false;  /* unchanged; skip re-parse */
-                    } else {
-                        last_info_mtime = st.st_mtime; last_info_size = st.st_size;
-                    }
-                }
-            }
-            if (!try_initial_load_info()){
-                /* advance anyway to avoid hot loop when file unavailable */
-                do next_osd_ms += osd_period_ms; while (next_osd_ms <= t_now_ms);
-            } else {
-                if (should_load){
-                    if (!load_info_buffer()){
-                        info_buf_valid=false;
-                        last_info_attempt=time(NULL);
-                    }
-                }
+            time_t now_sec = time(NULL);
 
-                if (!info_buf_valid || !info_buf){
-                    strcpy(last_mcs,"NA"); strcpy(last_bw,"NA"); strcpy(last_tx,"NA");
-                    int disp_rssi = smooth_rssi_sample(rssi_hist, get_display_rssi(-1));
-                    int disp_udp  = cfg.rssi_udp_enable ? smooth_rssi_sample(udp_hist, get_display_udp(-1)) : -1;
-                    write_osd(disp_rssi, disp_udp, last_mcs, last_bw, last_tx);
+            bool have_info = info_buf_valid;
+            if (info_buf_valid) {
+                if (load_info_buffer()) {
+                    last_info_attempt = now_sec;
                 } else {
-                    int raw_rssi = parse_int_from_buf(info_buf,cfg.rssi_key);
-                    int raw_udp  = cfg.rssi_udp_enable ? parse_int_from_buf(info_buf,cfg.rssi_udp_key) : -1;
-
-                    int disp_rssi = get_display_rssi(raw_rssi); disp_rssi = smooth_rssi_sample(rssi_hist, disp_rssi);
-                    int disp_udp  = get_display_udp(raw_udp);   disp_udp  = smooth_rssi_sample(udp_hist,  disp_udp);
-
-                    parse_value_from_buf(info_buf,cfg.curr_tx_rate_key,last_mcs,sizeof(last_mcs));
-                    parse_value_from_buf(info_buf,cfg.curr_tx_bw_key,  last_bw, sizeof(last_bw));
-                    parse_value_from_buf(info_buf,cfg.tx_power_key,    last_tx, sizeof(last_tx));
-
-                    write_osd(disp_rssi, disp_udp, last_mcs, last_bw, last_tx);
+                    info_buf_valid = false;
+                    have_info = false;
+                    last_info_attempt = now_sec;
                 }
-
-                do next_osd_ms += osd_period_ms; while (next_osd_ms <= t_now_ms);
+            } else if (now_sec - last_info_attempt >= 3) {
+                if (load_info_buffer()) {
+                    info_buf_valid = true;
+                    have_info = true;
+                }
+                last_info_attempt = now_sec;
             }
+
+            if (!have_info || !info_buf){
+                strcpy(last_mcs,"NA"); strcpy(last_bw,"NA"); strcpy(last_tx,"NA");
+                int disp_rssi = smooth_rssi_sample(rssi_hist, get_display_rssi(-1));
+                int disp_udp  = cfg.rssi_udp_enable ? smooth_rssi_sample(udp_hist, get_display_udp(-1)) : -1;
+                write_osd(disp_rssi, disp_udp, last_mcs, last_bw, last_tx);
+            } else {
+                int raw_rssi = parse_int_from_buf(info_buf,cfg.rssi_key);
+                int raw_udp  = cfg.rssi_udp_enable ? parse_int_from_buf(info_buf,cfg.rssi_udp_key) : -1;
+
+                int disp_rssi = get_display_rssi(raw_rssi); disp_rssi = smooth_rssi_sample(rssi_hist, disp_rssi);
+                int disp_udp  = get_display_udp(raw_udp);   disp_udp  = smooth_rssi_sample(udp_hist,  disp_udp);
+
+                parse_value_from_buf(info_buf,cfg.curr_tx_rate_key,last_mcs,sizeof(last_mcs));
+                parse_value_from_buf(info_buf,cfg.curr_tx_bw_key,  last_bw, sizeof(last_bw));
+                parse_value_from_buf(info_buf,cfg.tx_power_key,    last_tx, sizeof(last_tx));
+
+                write_osd(disp_rssi, disp_udp, last_mcs, last_bw, last_tx);
+            }
+
+            do next_osd_ms += osd_period_ms; while (next_osd_ms <= t_now_ms);
         }
 
         /* ---- close clients that finished sending ---- */
