@@ -288,7 +288,7 @@
         </div>
         <div class="udp-roi-meta">
           <div><strong>Size</strong> <span class="udp-value" data-udp-value="xsize">50</span>% × <span class="udp-value" data-udp-value="ysize">50</span>%</div>
-          <div><strong>Origin</strong> X <span class="udp-value" data-udp-value="xpos">50</span>% · Y <span class="udp-value" data-udp-value="ypos">50</span>%</div>
+          <div><strong>Center</strong> X <span class="udp-value" data-udp-value="xpos">50</span>% · Y <span class="udp-value" data-udp-value="ypos">50</span>%</div>
         </div>
       </div>
       <div class="row">
@@ -1289,7 +1289,7 @@ const udpSenderState = { initialized:false, values:{ ...udpSenderDefaults } };
 
 const UDP_SENDER_ROI_KEYS = ['xsize','ysize','xpos','ypos'];
 const UDP_SENDER_ROI_LIMITS = Object.freeze({
-  xsize:{ min:20, max:100 },
+  xsize:{ min:25, max:100 },
   ysize:{ min:25, max:100 },
   xpos:{ min:0, max:100 },
   ypos:{ min:0, max:100 }
@@ -1297,12 +1297,23 @@ const UDP_SENDER_ROI_LIMITS = Object.freeze({
 
 function clampUdpSenderValue(key, raw){
   const limits = UDP_SENDER_ROI_LIMITS[key] || {};
-  let next = Math.round(Number(raw));
+  let next = Number(raw);
   if (!Number.isFinite(next)){
-    next = udpSenderState.values[key] ?? udpSenderDefaults[key] ?? 0;
+    const fallback = udpSenderState.values[key];
+    if (Number.isFinite(fallback)){
+      next = fallback;
+    } else {
+      const def = udpSenderDefaults[key];
+      next = Number.isFinite(def) ? def : 0;
+    }
   }
   if (limits.min !== undefined && next < limits.min) next = limits.min;
   if (limits.max !== undefined && next > limits.max) next = limits.max;
+  if (key === 'xpos' || key === 'ypos'){
+    next = Math.round(next * 10) / 10;
+  } else {
+    next = Math.round(next);
+  }
   return next;
 }
 
@@ -1318,24 +1329,44 @@ function enforceUdpSenderRoiBounds(){
   const minY = UDP_SENDER_ROI_LIMITS.ysize?.min ?? 0;
   udpSenderState.values.xsize = clampUdpSenderValue('xsize', udpSenderState.values.xsize);
   udpSenderState.values.ysize = clampUdpSenderValue('ysize', udpSenderState.values.ysize);
-  const maxX = Math.max(0, 100 - (udpSenderState.values.xsize ?? minX));
-  const maxY = Math.max(0, 100 - (udpSenderState.values.ysize ?? minY));
-  udpSenderState.values.xpos = clampRange(udpSenderState.values.xpos, 0, maxX, udpSenderDefaults.xpos);
-  udpSenderState.values.ypos = clampRange(udpSenderState.values.ypos, 0, maxY, udpSenderDefaults.ypos);
+  const width = udpSenderState.values.xsize ?? minX;
+  const height = udpSenderState.values.ysize ?? minY;
+
+  function clampCenter(key, halfSize, fallback){
+    let next = Number(udpSenderState.values[key]);
+    if (!Number.isFinite(next)){
+      const fb = Number(fallback);
+      next = Number.isFinite(fb) ? fb : 50;
+    }
+    const min = Math.max(0, halfSize);
+    const max = Math.min(100, 100 - halfSize);
+    if (min > max){
+      const fb = Number(fallback);
+      next = Number.isFinite(fb) ? Math.min(100, Math.max(0, fb)) : 50;
+    } else {
+      if (next < min) next = min;
+      if (next > max) next = max;
+    }
+    udpSenderState.values[key] = Math.round(next * 10) / 10;
+  }
+
+  clampCenter('xpos', width / 2, udpSenderDefaults.xpos);
+  clampCenter('ypos', height / 2, udpSenderDefaults.ypos);
 }
 
-function clampRange(raw, min, max, fallback){
-  let next = Math.round(Number(raw));
-  if (!Number.isFinite(next)) next = Math.round(Number(fallback ?? min)) || 0;
-  if (next < min) next = min;
-  if (next > max) next = max;
-  return next;
+function formatUdpSenderNumber(value){
+  if (!Number.isFinite(value)) return '0';
+  const rounded = Math.round(value * 10) / 10;
+  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
 }
 
 function updateUdpSenderDisplays(){
   for (const key of UDP_SENDER_ROI_KEYS){
     const nodes = document.querySelectorAll(`[data-udp-value="${key}"]`);
-    nodes.forEach(node => { node.textContent = udpSenderState.values[key]; });
+    nodes.forEach(node => {
+      const val = udpSenderState.values[key];
+      node.textContent = formatUdpSenderNumber(val);
+    });
   }
   updateUdpSenderRoi();
 }
@@ -1344,8 +1375,12 @@ function updateUdpSenderRoi(){
   const roi = document.getElementById('udpSenderRoi');
   if (!roi) return;
   const { xpos = 0, ypos = 0, xsize = 0, ysize = 0 } = udpSenderState.values;
-  roi.style.left = `${xpos}%`;
-  roi.style.top = `${ypos}%`;
+  const halfWidth = xsize / 2;
+  const halfHeight = ysize / 2;
+  const left = Math.max(0, Math.min(100 - xsize, xpos - halfWidth));
+  const top = Math.max(0, Math.min(100 - ysize, ypos - halfHeight));
+  roi.style.left = `${left}%`;
+  roi.style.top = `${top}%`;
   roi.style.width = `${xsize}%`;
   roi.style.height = `${ysize}%`;
 }
@@ -1369,13 +1404,37 @@ function setUdpSenderRoi(partial){
 
 function buildRoiFromDrag(start, current){
   if (!start || !current) return null;
-  const minX = UDP_SENDER_ROI_LIMITS.xsize?.min ?? 0;
-  const minY = UDP_SENDER_ROI_LIMITS.ysize?.min ?? 0;
-  const width = Math.max(minX, Math.min(100, Math.round(Math.abs((current.x - start.x) * 100))));
-  const height = Math.max(minY, Math.min(100, Math.round(Math.abs((current.y - start.y) * 100))));
-  const left = Math.round(Math.min(start.x, current.x) * 100);
-  const top = Math.round(Math.min(start.y, current.y) * 100);
-  return { xsize: width, ysize: height, xpos: left, ypos: top };
+  const minWidthPct = UDP_SENDER_ROI_LIMITS.xsize?.min ?? 0;
+  const minHeightPct = UDP_SENDER_ROI_LIMITS.ysize?.min ?? 0;
+  const minWidthFrac = minWidthPct / 100;
+  const minHeightFrac = minHeightPct / 100;
+  const widthFracRaw = Math.abs(current.x - start.x);
+  const heightFracRaw = Math.abs(current.y - start.y);
+  const widthFrac = Math.max(minWidthFrac, Math.min(1, widthFracRaw));
+  const heightFrac = Math.max(minHeightFrac, Math.min(1, heightFracRaw));
+  const halfWidth = widthFrac / 2;
+  const halfHeight = heightFrac / 2;
+  const minX = Math.min(start.x, current.x);
+  const maxX = Math.max(start.x, current.x);
+  const minY = Math.min(start.y, current.y);
+  const maxY = Math.max(start.y, current.y);
+  const baseCenterX = widthFracRaw >= minWidthFrac ? (minX + maxX) / 2 : current.x;
+  const baseCenterY = heightFracRaw >= minHeightFrac ? (minY + maxY) / 2 : current.y;
+  const clampCenterFrac = (center, half) => {
+    if (!Number.isFinite(center)) return 0.5;
+    if (half >= 0.5) return 0.5;
+    if (center < half) return half;
+    if (center > 1 - half) return 1 - half;
+    return center;
+  };
+  const centerX = clampCenterFrac(baseCenterX, halfWidth);
+  const centerY = clampCenterFrac(baseCenterY, halfHeight);
+  return {
+    xsize: Math.round(widthFrac * 100),
+    ysize: Math.round(heightFrac * 100),
+    xpos: Math.round(centerX * 1000) / 10,
+    ypos: Math.round(centerY * 1000) / 10
+  };
 }
 
 function configureUdpSenderScreen(){
@@ -1511,7 +1570,8 @@ function collectUdpSenderValues(opts = {}){
 }
 
 function buildUdpSenderPayloadString(values){
-  const zoom = `zoom=${values.xsize},${values.ysize},${values.xpos},${values.ypos}`;
+  const parts = ['xsize','ysize','xpos','ypos'].map(key => formatUdpSenderNumber(values[key]));
+  const zoom = `zoom=${parts.join(',')}`;
   return `{"text":["","","","","","","","${zoom}"], "ttl_ms": ${values.ttl}}`;
 }
 
