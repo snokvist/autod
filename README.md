@@ -109,6 +109,7 @@ The daemon looks for `./autod.conf` by default. You can provide an alternate pat
 Important sections inside [`configs/autod.conf`](configs/autod.conf):
 
 - `[server]` – HTTP bind address/port and whether the LAN scanner starts automatically.
+- `[scan]` – Optional list of additional CIDR blocks that should be probed every sweep.
 - `[exec]` – Interpreter invoked for `/exec` requests, plus timeout and output limits.
 - `[caps]` – Device identity metadata and optional capability list exposed at `/caps`.
 - `[announce]` – List of Server-Sent Event (SSE) streams advertised to clients.
@@ -118,7 +119,7 @@ The execution plane contract (`/exec` requests and handler expectations) is docu
 
 ### Optional LAN Scanner
 
-When `[server] enable_scan = 1`, the daemon seeds itself into the scan database and launches background probing via functions in [`src/scan.c`](src/scan.c). Clients can poll `/nodes` for progress and discovered peers.
+When `[server] enable_scan = 1`, the daemon seeds itself into the scan database and launches background probing via functions in [`src/scan.c`](src/scan.c). Clients can poll `/nodes` for progress and discovered peers. If you also define one or more `extra_subnet = 10.10.10.0/24` lines inside a `[scan]` section, the scanner will include those CIDR blocks alongside any directly detected interfaces. `/32` entries are treated as single hosts.
 
 ### Bundled UI
 

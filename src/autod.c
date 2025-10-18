@@ -78,6 +78,10 @@ typedef struct {
     char bind_addr[64];
     int  enable_scan;      /* 0/1 — default off */
 
+    /* scan */
+    scan_extra_subnet_t extra_subnets[SCAN_MAX_EXTRA_SUBNETS];
+    unsigned            extra_subnet_count;
+
     /* exec */
     char interpreter[128];
     int  exec_timeout_ms;
@@ -114,6 +118,7 @@ static void cfg_defaults(config_t *c) {
     c->port = 8080;
     strncpy(c->bind_addr, "0.0.0.0", sizeof(c->bind_addr)-1);
     c->enable_scan = 0;
+    c->extra_subnet_count = 0;
 
     strncpy(c->interpreter, "/usr/bin/exec-handler.sh", sizeof(c->interpreter)-1);
     c->exec_timeout_ms = 5000;
@@ -135,6 +140,37 @@ static int cfg_has_cap(const config_t *cfg, const char *cap) {
         trim(tok);
         if (*tok && strcasecmp(tok, cap) == 0) return 1;
     }
+    return 0;
+}
+
+static int parse_extra_subnet(const char *value, scan_extra_subnet_t *out) {
+    if (!value || !*value || !out) return -1;
+    char copy[64];
+    strncpy(copy, value, sizeof(copy) - 1);
+    copy[sizeof(copy) - 1] = '\0';
+
+    char *slash = strchr(copy, '/');
+    if (!slash) return -1;
+    *slash = '\0';
+
+    char *ip = copy;
+    char *prefix = slash + 1;
+    trim(ip);
+    trim(prefix);
+    if (!*ip || !*prefix) return -1;
+
+    char *end = NULL;
+    long pre = strtol(prefix, &end, 10);
+    if (!end || *end != '\0' || pre < 0 || pre > 32) return -1;
+    if (pre == 0) return -1; // avoid scanning entire IPv4 space
+
+    struct in_addr ip4;
+    if (inet_pton(AF_INET, ip, &ip4) != 1) return -1;
+
+    uint32_t addr = ntohl(ip4.s_addr);
+    uint32_t mask = (pre == 0) ? 0u : (pre == 32 ? 0xffffffffu : (uint32_t)(0xffffffffu << (32 - pre)));
+    out->netmask = mask;
+    out->network = (mask == 0xffffffffu) ? addr : (addr & mask);
     return 0;
 }
 
@@ -182,6 +218,18 @@ static int parse_ini(const char *path, config_t *cfg) {
                 cfg->sse_count++;
             }
 
+        } else if (strcmp(sect,"scan")==0) {
+            if ((!strcmp(k,"extra_subnet") || !strcmp(k,"subnet")) && cfg->extra_subnet_count < SCAN_MAX_EXTRA_SUBNETS) {
+                scan_extra_subnet_t sn = {0};
+                if (parse_extra_subnet(v, &sn) == 0) {
+                    cfg->extra_subnets[cfg->extra_subnet_count++] = sn;
+                } else {
+                    fprintf(stderr, "WARN: ignoring invalid extra_subnet '%s'\n", v);
+                }
+            } else if (!strcmp(k,"extra_subnet") || !strcmp(k,"subnet")) {
+                fprintf(stderr, "WARN: extra_subnet capacity reached (%u)\n", SCAN_MAX_EXTRA_SUBNETS);
+            }
+
         } else if (strcmp(sect,"ui")==0) {
             if (!strcmp(k,"ui_path"))   strncpy(cfg->ui_path,v,sizeof(cfg->ui_path)-1);
             else if (!strcmp(k,"serve_ui"))  cfg->serve_ui=atoi(v);
@@ -190,6 +238,22 @@ static int parse_ini(const char *path, config_t *cfg) {
     }
     fclose(f);
     return 0;
+}
+
+static void fill_scan_config(const config_t *cfg, scan_config_t *scfg) {
+    if (!cfg || !scfg) return;
+    memset(scfg, 0, sizeof(*scfg));
+    scfg->port = cfg->port;
+    if (cfg->role[0])    strncpy(scfg->role,    cfg->role,    sizeof(scfg->role)-1);
+    if (cfg->device[0])  strncpy(scfg->device,  cfg->device,  sizeof(scfg->device)-1);
+    if (cfg->version[0]) strncpy(scfg->version, cfg->version, sizeof(scfg->version)-1);
+    scfg->extra_subnet_count = cfg->extra_subnet_count;
+    if (scfg->extra_subnet_count > SCAN_MAX_EXTRA_SUBNETS)
+        scfg->extra_subnet_count = SCAN_MAX_EXTRA_SUBNETS;
+    if (scfg->extra_subnet_count > 0) {
+        memcpy(scfg->extra_subnets, cfg->extra_subnets,
+               scfg->extra_subnet_count * sizeof(scan_extra_subnet_t));
+    }
 }
 
 static int log_civet_message(const struct mg_connection *conn, const char *message) {
@@ -871,12 +935,7 @@ static int h_nodes(struct mg_connection *c, void *ud){
             send_json(c, v, 202, 1); json_value_free(v); return 1;
         }
 
-        scan_config_t scfg = {0};
-        scfg.port = app->cfg.port;
-        if (app->cfg.role[0])    strncpy(scfg.role,    app->cfg.role,    sizeof(scfg.role)-1);
-        if (app->cfg.device[0])  strncpy(scfg.device,  app->cfg.device,  sizeof(scfg.device)-1);
-        if (app->cfg.version[0]) strncpy(scfg.version, app->cfg.version, sizeof(scfg.version)-1);
-
+        scan_config_t scfg; fill_scan_config(&app->cfg, &scfg);
         (void)scan_start_async(&scfg);
 
         scan_status_t st; scan_get_status(&st);
@@ -1024,13 +1083,7 @@ int main(int argc, char **argv){
 
     // ---- Scanner: seed + optional autostart
     scan_init();
-    scan_config_t scfg = {0};
-    scfg.port = app.cfg.port;
-    if (app.cfg.role[0])    strncpy(scfg.role,    app.cfg.role,    sizeof(scfg.role)-1);
-    if (app.cfg.device[0])  strncpy(scfg.device,  app.cfg.device,  sizeof(scfg.device)-1);
-    if (app.cfg.version[0]) strncpy(scfg.version, app.cfg.version, sizeof(scfg.version)-1);
-
-
+    scan_config_t scfg; fill_scan_config(&app.cfg, &scfg);
     scan_seed_self_nodes(&scfg);
     if (app.cfg.enable_scan) (void)scan_start_async(&scfg);
 
