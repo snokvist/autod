@@ -117,6 +117,15 @@
   .ctl.flash-ok{border-color:rgba(54,194,117,.4);box-shadow:0 0 0 1px rgba(54,194,117,.3)}
   .ctl.flash-err{border-color:rgba(255,107,107,.45);box-shadow:0 0 0 1px rgba(255,107,107,.3)}
 
+  .udp-dpad-wrap{display:grid;gap:6px}
+  .udp-dpad-header{display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:12px;color:var(--mut)}
+  .udp-dpad-header strong{color:var(--fg);font-size:13px}
+  .udp-dpad{display:grid;grid-template-columns:repeat(3,minmax(48px,1fr));grid-template-rows:repeat(3,minmax(40px,1fr));gap:6px;justify-content:center;align-items:center}
+  .udp-dpad button{padding:10px 0;font-weight:600;min-width:0}
+  .udp-dpad-display{display:grid;gap:2px;text-align:center;font-size:12px;color:var(--mut)}
+  .udp-dpad-display .udp-value{font-size:14px}
+  .udp-value{color:var(--fg);font-weight:600}
+
 
 
 :root { --udp-embed-height: 800px; } /* tweak as needed */
@@ -260,6 +269,73 @@
         <pre class="inline" id="udpRelayReqPreview">{}</pre>
         <div class="mut">Last response:</div>
         <textarea id="udpRelayResp" readonly></textarea>
+      </div>
+    </div>
+  </section>
+
+  <section class="card" id="udpSenderCard" style="display:none">
+    <h2>UDP sender</h2>
+    <div class="body grid">
+      <div class="row">
+        <label>host <input id="udpSenderHost" value="192.168.2.20"></label>
+        <label>port <input id="udpSenderPort" type="number" min="1" max="65535" value="5005"></label>
+      </div>
+      <div class="udp-dpad-wrap">
+        <div class="udp-dpad-header">
+          <strong>ROI size (%)</strong>
+          <div>X: <span class="udp-value" data-udp-value="xsize">50</span>% · Y: <span class="udp-value" data-udp-value="ysize">50</span>%</div>
+        </div>
+        <div class="udp-dpad" role="group" aria-label="Adjust ROI size">
+          <div></div>
+          <button type="button" data-udp-key="ysize" data-udp-delta="5">Y+</button>
+          <div></div>
+          <button type="button" data-udp-key="xsize" data-udp-delta="-5">X-</button>
+          <div class="udp-dpad-display">
+            <div>X <span class="udp-value" data-udp-value="xsize">50</span>%</div>
+            <div>Y <span class="udp-value" data-udp-value="ysize">50</span>%</div>
+          </div>
+          <button type="button" data-udp-key="xsize" data-udp-delta="5">X+</button>
+          <div></div>
+          <button type="button" data-udp-key="ysize" data-udp-delta="-5">Y-</button>
+          <div></div>
+        </div>
+      </div>
+      <div class="udp-dpad-wrap">
+        <div class="udp-dpad-header">
+          <strong>ROI position (%)</strong>
+          <div>X: <span class="udp-value" data-udp-value="xpos">50</span>% · Y: <span class="udp-value" data-udp-value="ypos">50</span>%</div>
+        </div>
+        <div class="udp-dpad" role="group" aria-label="Adjust ROI position">
+          <div></div>
+          <button type="button" data-udp-key="ypos" data-udp-delta="-5">Up</button>
+          <div></div>
+          <button type="button" data-udp-key="xpos" data-udp-delta="-5">Left</button>
+          <div class="udp-dpad-display">
+            <div>X <span class="udp-value" data-udp-value="xpos">50</span>%</div>
+            <div>Y <span class="udp-value" data-udp-value="ypos">50</span>%</div>
+          </div>
+          <button type="button" data-udp-key="xpos" data-udp-delta="5">Right</button>
+          <div></div>
+          <button type="button" data-udp-key="ypos" data-udp-delta="5">Down</button>
+          <div></div>
+        </div>
+      </div>
+      <div class="row">
+        <label>ttl (ms) <input id="udpSenderTtl" type="number" min="0" value="10000"></label>
+        <button id="udpSenderSendBtn">Send</button>
+        <div class="spacer"></div>
+      </div>
+      <div>
+        <div class="mut">curl preview:</div>
+        <pre class="inline" id="udpSenderCurlPreview"></pre>
+      </div>
+      <div>
+        <div class="mut">Request body:</div>
+        <pre class="inline" id="udpSenderBodyPreview"></pre>
+      </div>
+      <div>
+        <div class="mut">Last response:</div>
+        <textarea id="udpSenderResponse" readonly></textarea>
       </div>
     </div>
   </section>
@@ -1256,6 +1332,219 @@ function reloadUdpRelayEmbed(){
   }
 }
 
+const udpSenderDefaults = Object.freeze({
+  host:'192.168.2.20',
+  port:5005,
+  xsize:50,
+  ysize:50,
+  xpos:50,
+  ypos:50,
+  ttl:10000
+});
+
+const udpSenderState = { initialized:false, values:{ ...udpSenderDefaults } };
+
+const UDP_SENDER_ROI_KEYS = ['xsize','ysize','xpos','ypos'];
+const UDP_SENDER_ROI_LIMITS = Object.freeze({
+  xsize:{ min:25, max:100 },
+  ysize:{ min:25, max:100 },
+  xpos:{ min:0, max:100 },
+  ypos:{ min:0, max:100 }
+});
+
+function clampUdpSenderValue(key, raw){
+  const limits = UDP_SENDER_ROI_LIMITS[key] || {};
+  let next = Math.round(Number(raw));
+  if (!Number.isFinite(next)){
+    next = udpSenderState.values[key] ?? udpSenderDefaults[key] ?? 0;
+  }
+  if (limits.min !== undefined && next < limits.min) next = limits.min;
+  if (limits.max !== undefined && next > limits.max) next = limits.max;
+  return next;
+}
+
+function setUdpSenderValue(key, value){
+  const next = clampUdpSenderValue(key, value);
+  udpSenderState.values[key] = next;
+  return next;
+}
+
+function updateUdpSenderDisplays(){
+  for (const key of UDP_SENDER_ROI_KEYS){
+    const nodes = document.querySelectorAll(`[data-udp-value="${key}"]`);
+    nodes.forEach(node => { node.textContent = udpSenderState.values[key]; });
+  }
+}
+
+function collectUdpSenderValues(opts = {}){
+  const strict = !!opts.strict;
+  const errors = [];
+  const values = { ...udpSenderState.values };
+
+  const hostEl = document.getElementById('udpSenderHost');
+  const hostRaw = (hostEl?.value ?? '').trim();
+  if (!hostRaw){
+    if (strict) errors.push('Host is required');
+  } else {
+    values.host = hostRaw;
+  }
+
+  function readInt(el, label, key, min, max){
+    const raw = (el?.value ?? '').trim();
+    if (!raw){
+      if (strict) errors.push(`${label} is required`);
+      return;
+    }
+    const num = Number(raw);
+    if (!Number.isFinite(num)){
+      if (strict) errors.push(`${label} must be a number`);
+      return;
+    }
+    let val = Math.round(num);
+    if (min !== undefined && val < min){
+      if (strict) errors.push(`${label} must be ≥ ${min}`);
+      val = min;
+    }
+    if (max !== undefined && val > max){
+      if (strict) errors.push(`${label} must be ≤ ${max}`);
+      val = max;
+    }
+    values[key] = val;
+  }
+
+  readInt(document.getElementById('udpSenderPort'), 'Port', 'port', 1, 65535);
+  readInt(document.getElementById('udpSenderTtl'), 'TTL (ms)', 'ttl', 0);
+
+  if (Number.isFinite(values.ttl)){
+    udpSenderState.values.ttl = values.ttl;
+  }
+
+  return { values, errors };
+}
+
+function buildUdpSenderPayloadString(values){
+  const zoom = `zoom=${values.xsize},${values.ysize},${values.xpos},${values.ypos}`;
+  return `{"text":["","","","","","","","${zoom}"], "ttl_ms": ${values.ttl}}`;
+}
+
+function buildUdpSenderRequest(values){
+  return {
+    host: values.host,
+    port: values.port,
+    payload: buildUdpSenderPayloadString(values)
+  };
+}
+
+function buildUdpSenderCurl(req){
+  const origin = (typeof window !== 'undefined' && window.location && window.location.origin)
+    ? window.location.origin
+    : 'http://HOST:PORT';
+  const body = JSON.stringify(req);
+  const escaped = body.replace(/'/g, `'\''`);
+  return [
+    `curl -X POST ${origin}/udp \\`,
+    `  -H 'Content-Type: application/json' \\`,
+    `  -d '${escaped}'`
+  ].join('\n');
+}
+
+function updateUdpSenderPreviews(){
+  const { values } = collectUdpSenderValues();
+  const req = buildUdpSenderRequest(values);
+  const curlEl = document.getElementById('udpSenderCurlPreview');
+  if (curlEl) curlEl.textContent = buildUdpSenderCurl(req);
+  const bodyEl = document.getElementById('udpSenderBodyPreview');
+  if (bodyEl) bodyEl.textContent = JSON.stringify(req, null, 2);
+}
+
+async function sendUdpSenderMessage(){
+  const btn = document.getElementById('udpSenderSendBtn');
+  const respEl = document.getElementById('udpSenderResponse');
+  const { values, errors } = collectUdpSenderValues({ strict:true });
+  if (errors.length){
+    if (respEl) respEl.value = errors.join('\n');
+    return;
+  }
+  const req = buildUdpSenderRequest(values);
+  updateUdpSenderPreviews();
+  if (respEl) respEl.value = 'Sending…';
+  if (btn) btn.disabled = true;
+  try {
+    const res = await fetch('/udp', {
+      method:'POST',
+      headers:{ 'Content-Type':'application/json' },
+      body: JSON.stringify(req)
+    });
+    const text = await res.text();
+    let parsed = null;
+    try { parsed = JSON.parse(text); } catch {}
+    if (respEl){
+      if (!res.ok){
+        respEl.value = parsed ? JSON.stringify(parsed, null, 2) : `HTTP ${res.status} ${res.statusText}\n${text}`;
+      } else {
+        respEl.value = parsed ? JSON.stringify(parsed, null, 2) : text;
+      }
+    }
+  } catch (err) {
+    if (respEl) respEl.value = `Error: ${err?.message || err}`;
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+function ensureUdpSenderUI(){
+  if (udpSenderState.initialized) return;
+  udpSenderState.values = { ...udpSenderDefaults };
+  const inputIds = [
+    'udpSenderHost',
+    'udpSenderPort',
+    'udpSenderTtl'
+  ];
+  for (const id of inputIds){
+    const el = document.getElementById(id);
+    if (!el) continue;
+    el.addEventListener('input', updateUdpSenderPreviews);
+    el.addEventListener('change', () => {
+      updateUdpSenderPreviews();
+      sendUdpSenderMessage();
+    });
+    if (el.tagName === 'INPUT'){
+      el.addEventListener('keydown', ev => {
+        if (ev.key === 'Enter'){
+          ev.preventDefault();
+          sendUdpSenderMessage();
+        }
+      });
+    }
+  }
+  const ttlEl = document.getElementById('udpSenderTtl');
+  if (ttlEl){
+    const ttlNum = Math.round(Number(ttlEl.value));
+    if (Number.isFinite(ttlNum) && ttlNum >= 0){
+      udpSenderState.values.ttl = ttlNum;
+    }
+  }
+  const dpadButtons = document.querySelectorAll('#udpSenderCard [data-udp-key][data-udp-delta]');
+  dpadButtons.forEach(btn => {
+    btn.addEventListener('click', () => {
+      const key = btn.getAttribute('data-udp-key');
+      const delta = Number(btn.getAttribute('data-udp-delta'));
+      if (!key || Number.isNaN(delta)) return;
+      setUdpSenderValue(key, (udpSenderState.values[key] ?? udpSenderDefaults[key] ?? 0) + delta);
+      updateUdpSenderDisplays();
+      updateUdpSenderPreviews();
+      sendUdpSenderMessage();
+    });
+  });
+  const sendBtn = document.getElementById('udpSenderSendBtn');
+  if (sendBtn) sendBtn.addEventListener('click', sendUdpSenderMessage);
+  const respEl = document.getElementById('udpSenderResponse');
+  if (respEl) respEl.value = '';
+  udpSenderState.initialized = true;
+  updateUdpSenderDisplays();
+  updateUdpSenderPreviews();
+}
+
 const linkUI = { help:null };
 
 const nodesUI = { enabled:false, expanded:new Set(), entries:new Map() };
@@ -1714,6 +2003,15 @@ async function loadCaps(){
     } else {
       $('#udpRelayCard').style.display = 'none';
       $('#udpRelayStats').textContent = 'cap missing';
+    }
+
+    if (capList.includes('udp_sender')){
+      $('#udpSenderCard').style.display = '';
+      ensureUdpSenderUI();
+    } else {
+      $('#udpSenderCard').style.display = 'none';
+      const respEl = document.getElementById('udpSenderResponse');
+      if (respEl) respEl.value = 'cap missing';
     }
 
     if (hasPixelpilotMiniRk){
