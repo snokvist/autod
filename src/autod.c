@@ -37,6 +37,7 @@ strip autod
 #include <strings.h>
 #include <poll.h>
 #include <ifaddrs.h>
+#include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <netdb.h>
@@ -910,6 +911,188 @@ static int h_exec(struct mg_connection *c, void *ud){
     json_value_free(resp); json_value_free(root); return 1;
 }
 
+static int h_udp(struct mg_connection *c, void *ud) {
+    (void)ud;
+    const struct mg_request_info *ri = mg_get_request_info(c);
+    if (!ri || strcmp(ri->request_method, "POST") != 0) {
+        send_plain(c, 405, "method_not_allowed", 1);
+        return 1;
+    }
+
+    upload_t u = {0};
+    int rb = read_body(c, &u);
+    if (rb != 0) {
+        if (u.body) { free(u.body); u.body = NULL; }
+        JSON_Value *v = json_value_init_object();
+        JSON_Object *o = json_object(v);
+        int status = 400;
+        const char *err = "body_read_failed";
+        const char *cl = mg_get_header(c, "Content-Length");
+        if (cl && *cl) {
+            size_t need = (size_t)strtoul(cl, NULL, 10);
+            if (need > (size_t)MAX_BODY_BYTES) {
+                status = 413;
+                err = "body_too_large";
+            }
+        }
+        json_object_set_string(o, "error", err);
+        send_json(c, v, status, 1);
+        json_value_free(v);
+        return 1;
+    }
+
+    JSON_Value *root = json_parse_string(u.body ? u.body : "{}");
+    free(u.body);
+    if (!root) {
+        JSON_Value *v = json_value_init_object();
+        JSON_Object *o = json_object(v);
+        json_object_set_string(o, "error", "bad_json");
+        send_json(c, v, 400, 1);
+        json_value_free(v);
+        return 1;
+    }
+
+    JSON_Object *obj = json_object(root);
+    JSON_Value *host_v = json_object_get_value(obj, "host");
+    JSON_Value *port_v = json_object_get_value(obj, "port");
+    JSON_Value *payload_v = json_object_get_value(obj, "payload");
+    JSON_Value *payload_b64_v = json_object_get_value(obj, "payload_base64");
+
+    const char *host = (host_v && json_value_get_type(host_v) == JSONString)
+                       ? json_value_get_string(host_v)
+                       : NULL;
+    double port_d = (port_v && json_value_get_type(port_v) == JSONNumber)
+                    ? json_value_get_number(port_v)
+                    : -1.0;
+    int port = (int)port_d;
+
+    int has_payload = (payload_v && json_value_get_type(payload_v) == JSONString) ? 1 : 0;
+    int has_payload_b64 = (payload_b64_v && json_value_get_type(payload_b64_v) == JSONString) ? 1 : 0;
+
+    if (!host || !*host || port_d < 1.0 || port_d > 65535.0 || (double)port != port_d ||
+        (!has_payload && !has_payload_b64) || (has_payload && has_payload_b64)) {
+        JSON_Value *v = json_value_init_object();
+        JSON_Object *o = json_object(v);
+        json_object_set_string(o, "error", "invalid_request");
+        send_json(c, v, 400, 1);
+        json_value_free(v);
+        json_value_free(root);
+        return 1;
+    }
+
+    const unsigned char *data = NULL;
+    unsigned char *tmp = NULL;
+    size_t data_len = 0;
+
+    if (has_payload_b64) {
+        const char *payload_b64 = json_value_get_string(payload_b64_v);
+        size_t src_len = payload_b64 ? strlen(payload_b64) : 0;
+        size_t dst_cap = ((src_len / 4) + 1) * 3;
+        if (dst_cap == 0) dst_cap = 1;
+        tmp = (unsigned char *)malloc(dst_cap);
+        if (!tmp) {
+            JSON_Value *v = json_value_init_object();
+            JSON_Object *o = json_object(v);
+            json_object_set_string(o, "error", "oom");
+            send_json(c, v, 500, 1);
+            json_value_free(v);
+            json_value_free(root);
+            return 1;
+        }
+        size_t out_len = dst_cap;
+        if (src_len == 0) {
+            out_len = 0;
+        } else {
+            if (mg_base64_decode(payload_b64, src_len, tmp, &out_len) != -1) {
+                free(tmp);
+                JSON_Value *v = json_value_init_object();
+                JSON_Object *o = json_object(v);
+                json_object_set_string(o, "error", "invalid_base64");
+                send_json(c, v, 400, 1);
+                json_value_free(v);
+                json_value_free(root);
+                return 1;
+            }
+        }
+        data = tmp;
+        data_len = out_len;
+    } else {
+        const char *payload = json_value_get_string(payload_v);
+        data = (const unsigned char *)(payload ? payload : "");
+        data_len = strlen((const char *)data);
+    }
+
+    char portbuf[16];
+    snprintf(portbuf, sizeof(portbuf), "%d", port);
+    struct addrinfo hints; memset(&hints, 0, sizeof(hints));
+    hints.ai_socktype = SOCK_DGRAM;
+    hints.ai_protocol = IPPROTO_UDP;
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_flags = AI_NUMERICSERV;
+
+    struct addrinfo *res = NULL;
+    int gai = getaddrinfo(host, portbuf, &hints, &res);
+    if (gai != 0) {
+        if (tmp) free(tmp);
+        JSON_Value *v = json_value_init_object();
+        JSON_Object *o = json_object(v);
+        json_object_set_string(o, "error", "resolve_failed");
+        const char *detail = gai_strerror(gai);
+        if (detail && *detail) json_object_set_string(o, "detail", detail);
+        send_json(c, v, 502, 1);
+        json_value_free(v);
+        json_value_free(root);
+        return 1;
+    }
+
+    int sent_ok = 0;
+    ssize_t sent_bytes = -1;
+    for (struct addrinfo *ai = res; ai; ai = ai->ai_next) {
+        int fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+        if (fd < 0) continue;
+        ssize_t r = sendto(fd, data, data_len, 0, ai->ai_addr, ai->ai_addrlen);
+        int saved_errno = errno;
+        close(fd);
+        if (r >= 0) {
+            sent_ok = 1;
+            sent_bytes = r;
+            break;
+        }
+        errno = saved_errno;
+    }
+    freeaddrinfo(res);
+
+    if (!sent_ok) {
+        int saved_errno = errno;
+        if (tmp) free(tmp);
+        JSON_Value *v = json_value_init_object();
+        JSON_Object *o = json_object(v);
+        json_object_set_string(o, "error", "send_failed");
+        if (saved_errno) {
+            json_object_set_string(o, "detail", strerror(saved_errno));
+        }
+        send_json(c, v, 502, 1);
+        json_value_free(v);
+        json_value_free(root);
+        errno = saved_errno;
+        return 1;
+    }
+
+    JSON_Value *resp = json_value_init_object();
+    JSON_Object *or = json_object(resp);
+    json_object_set_string(or, "status", "sent");
+    json_object_set_number(or, "bytes_sent", (double)(sent_bytes >= 0 ? sent_bytes : 0));
+    json_object_set_number(or, "payload_length", (double)data_len);
+    json_object_set_string(or, "host", host);
+    json_object_set_number(or, "port", (double)port);
+    send_json(c, resp, 200, 1);
+    json_value_free(resp);
+
+    if (tmp) free(tmp);
+    json_value_free(root);
+    return 1;
+}
+
 /* ----------------------- /nodes endpoint (via scan.*) ----------------------- */
 static int h_nodes(struct mg_connection *c, void *ud){
     app_t *app=(app_t*)ud;
@@ -1071,6 +1254,7 @@ int main(int argc, char **argv){
     mg_set_request_handler(app.ctx, "/health",  h_health,  &app);
     mg_set_request_handler(app.ctx, "/caps",    h_caps,    &app);
     mg_set_request_handler(app.ctx, "/exec",    h_exec,    &app);
+    mg_set_request_handler(app.ctx, "/udp",     h_udp,     &app);
     mg_set_request_handler(app.ctx, "/nodes",   h_nodes,   &app);
     mg_set_request_handler(app.ctx, "/media",   h_media,   &app);
     mg_set_request_handler(app.ctx, "/",        h_root,    &app);
