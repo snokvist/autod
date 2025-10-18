@@ -74,6 +74,7 @@ map_cli_key(){
     hue)              echo ".image.hue" ;;
     saturation)       echo ".image.saturation" ;;
     luminance)        echo ".image.luminance" ;;
+    outgoing_enabled) echo ".outgoing.enabled" ;;
     outgoing_server)  echo ".outgoing.server" ;;
     .* )              echo "$1" ;;
     *)                return 1 ;;
@@ -151,7 +152,8 @@ video_set_one(){
   pair="$1"; key="${pair%%=*}"; val="${pair#*=}"
   [ -n "$key" ] || die "missing key in pair"; [ "$key" != "$val" ] || die "missing value in pair"
   case "$key" in
-    mirror|flip)        n="$(norm_bool "$val")"; [ "$n" != "__ERR__" ] || die "invalid bool: $key=$val"; val="$n" ;;
+    mirror|flip|outgoing_enabled)
+                        n="$(norm_bool "$val")"; [ "$n" != "__ERR__" ] || die "invalid bool: $key=$val"; val="$n" ;;
     bitrate)            n="$(norm_bitrate "$val")"; [ "$n" != "__ERR__" ] || die "invalid bitrate: $val"; val="$n" ;;
     outgoing_server)    validate_udp_uri "$val" || die "invalid outgoing server: $val" ;;
   esac

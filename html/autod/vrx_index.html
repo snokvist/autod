@@ -780,14 +780,16 @@ async function triggerNodesScan(){
 }
 
 function sortSettings(settings){
-  const sliders=[], selects=[], toggles=[];
+  const sliders=[], selects=[], text=[], toggles=[], rest=[];
   for (const s of settings){
     const k = s.control?.kind;
     if (k==='range') sliders.push(s);
     else if (k==='select') selects.push(s);
+    else if (k==='text') text.push(s);
     else if (k==='toggle') toggles.push(s);
+    else rest.push(s);
   }
-  return [...sliders, ...selects, ...toggles];
+  return [...sliders, ...selects, ...text, ...toggles, ...rest];
 }
 function coerceForKey(meta, raw){
   if (raw==null) return raw;
@@ -878,6 +880,17 @@ function createToggle(meta){
   chk.addEventListener('change', ()=>{ valEl.textContent = chk.checked ? 'true' : 'false'; });
   label.append(chk); holder.append(label);
   return {el:wrap,input:chk,valEl,errEl,kind:'toggle'};
+}
+
+function createText(meta){
+  const {wrap,holder,valEl,errEl} = createCtlContainer(meta);
+  const input = document.createElement('input');
+  input.type = 'text';
+  if (meta.control?.placeholder){
+    input.placeholder = meta.control.placeholder;
+  }
+  holder.append(input);
+  return {el:wrap,input,valEl,errEl,kind:'text'};
 }
 
 function createCapManager(config){
@@ -997,6 +1010,12 @@ function createCapManager(config){
       }
       return;
     }
+    if (ctl.kind==='text'){
+      const s = String(coerced ?? '');
+      ctl.input.value = s;
+      ctl.valEl.textContent = s;
+      return;
+    }
   }
 
   async function getWithRetries(key, retries = getRetries){
@@ -1076,6 +1095,14 @@ function createCapManager(config){
       }
     } else if (ctl.kind==='toggle'){
       ctl.input.addEventListener('change', ()=> ctl.debouncedSet(!!ctl.input.checked));
+    } else if (ctl.kind==='text'){
+      const emitText = ()=>{
+        ctl.valEl.textContent = ctl.input.value;
+        ctl.debouncedSet(ctl.input.value);
+      };
+      ctl.input.addEventListener('change', emitText);
+      ctl.input.addEventListener('blur', emitText);
+      ctl.input.addEventListener('input', emitText);
     }
   }
 
@@ -1116,6 +1143,7 @@ function createCapManager(config){
       const kind = meta.control?.kind;
       if (kind==='range') ctl = createSlider(meta);
       else if (kind==='select') ctl = createSelect(meta);
+      else if (kind==='text') ctl = createText(meta);
       else if (kind==='toggle') ctl = createToggle(meta);
       else continue;
       attachImmediateApply(meta, ctl);
