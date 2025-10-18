@@ -1275,6 +1275,14 @@ function reloadUdpRelayEmbed(){
   }
 }
 
+const UDP_SENDER_STEP = 5;
+
+function quantizeUdpSenderValue(raw){
+  const num = Number(raw);
+  if (!Number.isFinite(num)) return 0;
+  return Math.round(num / UDP_SENDER_STEP) * UDP_SENDER_STEP;
+}
+
 const udpSenderDefaults = Object.freeze({
   host:'192.168.2.20',
   port:5005,
@@ -1309,11 +1317,10 @@ function clampUdpSenderValue(key, raw){
   }
   if (limits.min !== undefined && next < limits.min) next = limits.min;
   if (limits.max !== undefined && next > limits.max) next = limits.max;
-  if (key === 'xpos' || key === 'ypos'){
-    next = Math.round(next * 10) / 10;
-  } else {
-    next = Math.round(next);
-  }
+  next = quantizeUdpSenderValue(next);
+  if (limits.min !== undefined && next < limits.min) next = limits.min;
+  if (limits.max !== undefined && next > limits.max) next = limits.max;
+  next = Math.round(next);
   return next;
 }
 
@@ -1338,16 +1345,19 @@ function enforceUdpSenderRoiBounds(){
       const fb = Number(fallback);
       next = Number.isFinite(fb) ? fb : 50;
     }
-    const min = Math.max(0, halfSize);
-    const max = Math.min(100, 100 - halfSize);
-    if (min > max){
-      const fb = Number(fallback);
-      next = Number.isFinite(fb) ? Math.min(100, Math.max(0, fb)) : 50;
-    } else {
-      if (next < min) next = min;
-      if (next > max) next = max;
+    const minBound = Math.max(0, halfSize);
+    const maxBound = Math.min(100, 100 - halfSize);
+    const minStep = Math.min(100, Math.max(0, Math.ceil(minBound / UDP_SENDER_STEP) * UDP_SENDER_STEP));
+    const maxStep = Math.min(100, Math.max(0, Math.floor(maxBound / UDP_SENDER_STEP) * UDP_SENDER_STEP));
+    const fallbackQuantized = Math.min(100, Math.max(0, quantizeUdpSenderValue(fallback)));
+    if (minStep > maxStep){
+      udpSenderState.values[key] = fallbackQuantized;
+      return;
     }
-    udpSenderState.values[key] = Math.round(next * 10) / 10;
+    next = quantizeUdpSenderValue(next);
+    if (next < minStep) next = minStep;
+    if (next > maxStep) next = maxStep;
+    udpSenderState.values[key] = Math.round(next);
   }
 
   clampCenter('xpos', width / 2, udpSenderDefaults.xpos);
@@ -1356,8 +1366,7 @@ function enforceUdpSenderRoiBounds(){
 
 function formatUdpSenderNumber(value){
   if (!Number.isFinite(value)) return '0';
-  const rounded = Math.round(value * 10) / 10;
-  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
+  return String(Math.round(value));
 }
 
 function updateUdpSenderDisplays(){
