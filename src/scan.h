@@ -33,11 +33,22 @@ typedef struct {
     double   last_finished;   // time(NULL) or 0
 } scan_status_t;
 
+#ifndef SCAN_MAX_EXTRA_SUBNETS
+#define SCAN_MAX_EXTRA_SUBNETS 16
+#endif
+
+typedef struct {
+    uint32_t network; // host-order IPv4 network address
+    uint32_t netmask; // host-order IPv4 netmask
+} scan_extra_subnet_t;
+
 typedef struct {
     int  port;
     char role[64];
     char device[64];
     char version[32];
+    scan_extra_subnet_t extra_subnets[SCAN_MAX_EXTRA_SUBNETS];
+    unsigned            extra_subnet_count;
 } scan_config_t;
 
 // Optional tuning (call once at startup if you want to override defaults)

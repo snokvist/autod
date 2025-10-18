@@ -280,12 +280,17 @@ static unsigned add_arp_hits(ipvec_t *v) {
     return added;
 }
 
-static void add_subnet_walk(ipvec_t *v, const char *ip, const char *mask, uint32_t self_a) {
-    struct in_addr ip4, m4;
-    if (inet_pton(AF_INET, ip, &ip4)!=1 || inet_pton(AF_INET, mask, &m4)!=1) return;
-    uint32_t a = ntohl(ip4.s_addr);
-    uint32_t m = ntohl(m4.s_addr);
-    if (m == 0xffffffffu) return; /* /32 */
+static void add_subnet_walk_raw(ipvec_t *v, uint32_t a, uint32_t m, uint32_t self_a) {
+    if (m == 0xffffffffu) {
+        if (a != self_a && !ipvec_contains(v, a)) {
+            struct in_addr t; t.s_addr = htonl(a);
+            char tip[16];
+            if (inet_ntop(AF_INET, &t, tip, sizeof(tip)) && !is_link_local(tip)) {
+                (void)ipvec_push(v, a);
+            }
+        }
+        return;
+    }
     uint32_t net = a & m;
     uint32_t bcast = net | (~m);
     if (bcast <= net) return;
@@ -294,13 +299,22 @@ static void add_subnet_walk(ipvec_t *v, const char *ip, const char *mask, uint32
     unsigned budget_left = (v->cap > v->n) ? (v->cap - v->n) : 0;
     if (budget_left == 0) return;
 
-    for (uint32_t h = net+1; h < bcast && v->n < v->cap; h++) {
+    for (uint32_t h = net + 1; h < bcast && v->n < v->cap; h++) {
         if (h == a || h == self_a) continue;
         struct in_addr t; t.s_addr = htonl(h);
         char tip[16]; if (!inet_ntop(AF_INET, &t, tip, sizeof(tip))) continue;
         if (is_link_local(tip)) continue;
         if (!ipvec_contains(v, h)) (void)ipvec_push(v, h);
     }
+}
+
+static void add_subnet_walk(ipvec_t *v, const char *ip, const char *mask, uint32_t *self_a) {
+    struct in_addr ip4, m4;
+    if (inet_pton(AF_INET, ip, &ip4)!=1 || inet_pton(AF_INET, mask, &m4)!=1) return;
+    uint32_t a = ntohl(ip4.s_addr);
+    uint32_t m = ntohl(m4.s_addr);
+    if (*self_a == 0) *self_a = a;
+    add_subnet_walk_raw(v, a, m, *self_a);
 }
 
 // ================ Worker pool ================
@@ -364,7 +378,7 @@ static void *worker_fn(void *arg) {
 
 typedef struct { scan_config_t cfg; } scan_ctx_t;
 
-static void plan_targets(ipvec_t *vec, int port, uint32_t *self_a_out) {
+static void plan_targets(ipvec_t *vec, const scan_config_t *cfg, uint32_t *self_a_out) {
     // capacity: keep a hard cap to avoid runaway time
     // We reuse vec->cap set by caller; aim for <= 2048 targets total.
     *self_a_out = 0;
@@ -373,7 +387,7 @@ static void plan_targets(ipvec_t *vec, int port, uint32_t *self_a_out) {
     if (getifaddrs(&ifaddr) != 0) return;
 
     // First: known hosts (from cache)
-    add_known_first(vec, port);
+    add_known_first(vec, cfg->port);
 
     // Also: ARP cache (fast wins)
     add_arp_hits(vec);
@@ -388,13 +402,20 @@ static void plan_targets(ipvec_t *vec, int port, uint32_t *self_a_out) {
         if (!inet_ntop(AF_INET, &((struct sockaddr_in*)ifa->ifa_netmask)->sin_addr, mask, sizeof(mask))) continue;
         if (!strcmp(ip, "127.0.0.1") || is_link_local(ip)) continue;
 
-        if (*self_a_out == 0) {
-            struct in_addr tmp; inet_pton(AF_INET, ip, &tmp);
-            *self_a_out = ntohl(tmp.s_addr);
-        }
-        add_subnet_walk(vec, ip, mask, *self_a_out);
+        add_subnet_walk(vec, ip, mask, self_a_out);
     }
     freeifaddrs(ifaddr);
+
+    // Plus any additional configured subnets (CIDR strings parsed earlier)
+    if (cfg->extra_subnet_count > 0) {
+        uint32_t self_a = *self_a_out;
+        for (unsigned i = 0; i < cfg->extra_subnet_count && i < SCAN_MAX_EXTRA_SUBNETS; i++) {
+            uint32_t net = cfg->extra_subnets[i].network;
+            uint32_t mask = cfg->extra_subnets[i].netmask;
+            if (mask == 0) continue; // skip /0 (too broad)
+            add_subnet_walk_raw(vec, net, mask, self_a);
+        }
+    }
 }
 
 static void *scan_thread(void *arg) {
@@ -409,7 +430,7 @@ static void *scan_thread(void *arg) {
     uint32_t targets_buf[2048];
     ipvec_t targets; ipvec_init(&targets, targets_buf, (unsigned)(sizeof(targets_buf)/sizeof(targets_buf[0])));
     uint32_t self_a = 0;
-    plan_targets(&targets, sc->cfg.port, &self_a);
+    plan_targets(&targets, &sc->cfg, &self_a);
 
     // publish totals
     __sync_lock_test_and_set(&g_scan_total, targets.n);
