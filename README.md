@@ -117,6 +117,22 @@ Important sections inside [`configs/autod.conf`](configs/autod.conf):
 
 The execution plane contract (`/exec` requests and handler expectations) is documented in [`handler_contract.txt`](handler_contract.txt). Ensure your handler script matches that agreement; a minimal sample lives in [`scripts/simple_exec-handler.sh`](scripts/simple_exec-handler.sh).
 
+### Sending UDP packets via the HTTP API
+
+`autod` exposes a `/udp` endpoint so web clients can emit connectionless UDP datagrams without needing raw socket access. The handler accepts `POST` requests with a JSON payload describing the target host, port, and message body. You may supply either a UTF-8 string via `"payload"` or arbitrary binary content via `"payload_base64"`:
+
+```bash
+curl -X POST http://HOST:PORT/udp \
+  -H 'Content-Type: application/json' \
+  -d '{
+        "host": "192.168.1.55",
+        "port": 9000,
+        "payload": "{\"command\":\"ping\"}"
+      }'
+```
+
+For binary datagrams, encode the bytes in base64 and place them in `"payload_base64"` instead. The response confirms delivery and echoes the number of bytes written.
+
 ### Optional LAN Scanner
 
 When `[server] enable_scan = 1`, the daemon seeds itself into the scan database and launches background probing via functions in [`src/scan.c`](src/scan.c). Clients can poll `/nodes` for progress and discovered peers. If you also define one or more `extra_subnet = 10.10.10.0/24` lines inside a `[scan]` section, the scanner will include those CIDR blocks alongside any directly detected interfaces. `/32` entries are treated as single hosts.
