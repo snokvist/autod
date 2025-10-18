@@ -1347,11 +1347,13 @@ function enforceUdpSenderRoiBounds(){
     }
     const minBound = Math.max(0, halfSize);
     const maxBound = Math.min(100, 100 - halfSize);
-    const minStep = Math.min(100, Math.max(0, Math.ceil(minBound / UDP_SENDER_STEP) * UDP_SENDER_STEP));
-    const maxStep = Math.min(100, Math.max(0, Math.floor(maxBound / UDP_SENDER_STEP) * UDP_SENDER_STEP));
-    const fallbackQuantized = Math.min(100, Math.max(0, quantizeUdpSenderValue(fallback)));
+    let minStep = Math.floor(minBound / UDP_SENDER_STEP) * UDP_SENDER_STEP;
+    let maxStep = Math.ceil(maxBound / UDP_SENDER_STEP) * UDP_SENDER_STEP;
+    minStep = Math.max(0, Math.min(100, minStep));
+    maxStep = Math.max(0, Math.min(100, maxStep));
     if (minStep > maxStep){
-      udpSenderState.values[key] = fallbackQuantized;
+      const fallbackQuantized = Math.max(minStep, Math.min(maxStep, quantizeUdpSenderValue(fallback)));
+      udpSenderState.values[key] = Number.isFinite(fallbackQuantized) ? Math.round(fallbackQuantized) : 0;
       return;
     }
     next = quantizeUdpSenderValue(next);
