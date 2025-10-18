@@ -117,6 +117,15 @@
   .ctl.flash-ok{border-color:rgba(54,194,117,.4);box-shadow:0 0 0 1px rgba(54,194,117,.3)}
   .ctl.flash-err{border-color:rgba(255,107,107,.45);box-shadow:0 0 0 1px rgba(255,107,107,.3)}
 
+  .udp-dpad-wrap{display:grid;gap:6px}
+  .udp-dpad-header{display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:12px;color:var(--mut)}
+  .udp-dpad-header strong{color:var(--fg);font-size:13px}
+  .udp-dpad{display:grid;grid-template-columns:repeat(3,minmax(48px,1fr));grid-template-rows:repeat(3,minmax(40px,1fr));gap:6px;justify-content:center;align-items:center}
+  .udp-dpad button{padding:10px 0;font-weight:600;min-width:0}
+  .udp-dpad-display{display:grid;gap:2px;text-align:center;font-size:12px;color:var(--mut)}
+  .udp-dpad-display .udp-value{font-size:14px}
+  .udp-value{color:var(--fg);font-weight:600}
+
 
 
 :root { --udp-embed-height: 800px; } /* tweak as needed */
@@ -269,16 +278,50 @@
     <div class="body grid">
       <div class="row">
         <label>host <input id="udpSenderHost" value="192.168.2.20"></label>
-        <label>port <input id="udpSenderPort" type="number" min="1" max="65535" value="9000"></label>
+        <label>port <input id="udpSenderPort" type="number" min="1" max="65535" value="5005"></label>
+      </div>
+      <div class="udp-dpad-wrap">
+        <div class="udp-dpad-header">
+          <strong>ROI size (%)</strong>
+          <div>X: <span class="udp-value" data-udp-value="xsize">50</span>% · Y: <span class="udp-value" data-udp-value="ysize">50</span>%</div>
+        </div>
+        <div class="udp-dpad" role="group" aria-label="Adjust ROI size">
+          <div></div>
+          <button type="button" data-udp-key="ysize" data-udp-delta="5">Y+</button>
+          <div></div>
+          <button type="button" data-udp-key="xsize" data-udp-delta="-5">X-</button>
+          <div class="udp-dpad-display">
+            <div>X <span class="udp-value" data-udp-value="xsize">50</span>%</div>
+            <div>Y <span class="udp-value" data-udp-value="ysize">50</span>%</div>
+          </div>
+          <button type="button" data-udp-key="xsize" data-udp-delta="5">X+</button>
+          <div></div>
+          <button type="button" data-udp-key="ysize" data-udp-delta="-5">Y-</button>
+          <div></div>
+        </div>
+      </div>
+      <div class="udp-dpad-wrap">
+        <div class="udp-dpad-header">
+          <strong>ROI position (%)</strong>
+          <div>X: <span class="udp-value" data-udp-value="xpos">50</span>% · Y: <span class="udp-value" data-udp-value="ypos">50</span>%</div>
+        </div>
+        <div class="udp-dpad" role="group" aria-label="Adjust ROI position">
+          <div></div>
+          <button type="button" data-udp-key="ypos" data-udp-delta="-5">Up</button>
+          <div></div>
+          <button type="button" data-udp-key="xpos" data-udp-delta="-5">Left</button>
+          <div class="udp-dpad-display">
+            <div>X <span class="udp-value" data-udp-value="xpos">50</span>%</div>
+            <div>Y <span class="udp-value" data-udp-value="ypos">50</span>%</div>
+          </div>
+          <button type="button" data-udp-key="xpos" data-udp-delta="5">Right</button>
+          <div></div>
+          <button type="button" data-udp-key="ypos" data-udp-delta="5">Down</button>
+          <div></div>
+        </div>
       </div>
       <div class="row">
-        <label>x size <input id="udpSenderXsize" type="number" min="0" value="512"></label>
-        <label>y size <input id="udpSenderYsize" type="number" min="0" value="128"></label>
-        <label>x pos <input id="udpSenderXpos" type="number" min="0" value="240"></label>
-        <label>y pos <input id="udpSenderYpos" type="number" min="0" value="240"></label>
-      </div>
-      <div class="row">
-        <label>ttl (ms) <input id="udpSenderTtl" type="number" min="0" value="1000"></label>
+        <label>ttl (ms) <input id="udpSenderTtl" type="number" min="0" value="10000"></label>
         <button id="udpSenderSendBtn">Send</button>
         <div class="spacer"></div>
       </div>
@@ -1263,20 +1306,52 @@ function reloadUdpRelayEmbed(){
 
 const udpSenderDefaults = Object.freeze({
   host:'192.168.2.20',
-  port:9000,
-  xsize:512,
-  ysize:128,
-  xpos:240,
-  ypos:240,
-  ttl:1000
+  port:5005,
+  xsize:50,
+  ysize:50,
+  xpos:50,
+  ypos:50,
+  ttl:10000
 });
 
-const udpSenderState = { initialized:false };
+const udpSenderState = { initialized:false, values:{ ...udpSenderDefaults } };
+
+const UDP_SENDER_ROI_KEYS = ['xsize','ysize','xpos','ypos'];
+const UDP_SENDER_ROI_LIMITS = Object.freeze({
+  xsize:{ min:0, max:100 },
+  ysize:{ min:0, max:100 },
+  xpos:{ min:0, max:100 },
+  ypos:{ min:0, max:100 }
+});
+
+function clampUdpSenderValue(key, raw){
+  const limits = UDP_SENDER_ROI_LIMITS[key] || {};
+  let next = Math.round(Number(raw));
+  if (!Number.isFinite(next)){
+    next = udpSenderState.values[key] ?? udpSenderDefaults[key] ?? 0;
+  }
+  if (limits.min !== undefined && next < limits.min) next = limits.min;
+  if (limits.max !== undefined && next > limits.max) next = limits.max;
+  return next;
+}
+
+function setUdpSenderValue(key, value){
+  const next = clampUdpSenderValue(key, value);
+  udpSenderState.values[key] = next;
+  return next;
+}
+
+function updateUdpSenderDisplays(){
+  for (const key of UDP_SENDER_ROI_KEYS){
+    const nodes = document.querySelectorAll(`[data-udp-value="${key}"]`);
+    nodes.forEach(node => { node.textContent = udpSenderState.values[key]; });
+  }
+}
 
 function collectUdpSenderValues(opts = {}){
   const strict = !!opts.strict;
   const errors = [];
-  const values = { ...udpSenderDefaults };
+  const values = { ...udpSenderState.values };
 
   const hostEl = document.getElementById('udpSenderHost');
   const hostRaw = (hostEl?.value ?? '').trim();
@@ -1310,11 +1385,11 @@ function collectUdpSenderValues(opts = {}){
   }
 
   readInt(document.getElementById('udpSenderPort'), 'Port', 'port', 1, 65535);
-  readInt(document.getElementById('udpSenderXsize'), 'X size', 'xsize', 0);
-  readInt(document.getElementById('udpSenderYsize'), 'Y size', 'ysize', 0);
-  readInt(document.getElementById('udpSenderXpos'), 'X position', 'xpos', 0);
-  readInt(document.getElementById('udpSenderYpos'), 'Y position', 'ypos', 0);
   readInt(document.getElementById('udpSenderTtl'), 'TTL (ms)', 'ttl', 0);
+
+  if (Number.isFinite(values.ttl)){
+    udpSenderState.values.ttl = values.ttl;
+  }
 
   return { values, errors };
 }
@@ -1391,20 +1466,20 @@ async function sendUdpSenderMessage(){
 
 function ensureUdpSenderUI(){
   if (udpSenderState.initialized) return;
-  const inputs = [
+  udpSenderState.values = { ...udpSenderDefaults };
+  const inputIds = [
     'udpSenderHost',
     'udpSenderPort',
-    'udpSenderXsize',
-    'udpSenderYsize',
-    'udpSenderXpos',
-    'udpSenderYpos',
     'udpSenderTtl'
   ];
-  for (const id of inputs){
+  for (const id of inputIds){
     const el = document.getElementById(id);
     if (!el) continue;
     el.addEventListener('input', updateUdpSenderPreviews);
-    el.addEventListener('change', updateUdpSenderPreviews);
+    el.addEventListener('change', () => {
+      updateUdpSenderPreviews();
+      sendUdpSenderMessage();
+    });
     if (el.tagName === 'INPUT'){
       el.addEventListener('keydown', ev => {
         if (ev.key === 'Enter'){
@@ -1414,11 +1489,31 @@ function ensureUdpSenderUI(){
       });
     }
   }
+  const ttlEl = document.getElementById('udpSenderTtl');
+  if (ttlEl){
+    const ttlNum = Math.round(Number(ttlEl.value));
+    if (Number.isFinite(ttlNum) && ttlNum >= 0){
+      udpSenderState.values.ttl = ttlNum;
+    }
+  }
+  const dpadButtons = document.querySelectorAll('#udpSenderCard [data-udp-key][data-udp-delta]');
+  dpadButtons.forEach(btn => {
+    btn.addEventListener('click', () => {
+      const key = btn.getAttribute('data-udp-key');
+      const delta = Number(btn.getAttribute('data-udp-delta'));
+      if (!key || Number.isNaN(delta)) return;
+      setUdpSenderValue(key, (udpSenderState.values[key] ?? udpSenderDefaults[key] ?? 0) + delta);
+      updateUdpSenderDisplays();
+      updateUdpSenderPreviews();
+      sendUdpSenderMessage();
+    });
+  });
   const sendBtn = document.getElementById('udpSenderSendBtn');
   if (sendBtn) sendBtn.addEventListener('click', sendUdpSenderMessage);
   const respEl = document.getElementById('udpSenderResponse');
   if (respEl) respEl.value = '';
   udpSenderState.initialized = true;
+  updateUdpSenderDisplays();
   updateUdpSenderPreviews();
 }
 

@@ -126,7 +126,7 @@ curl -X POST http://HOST:PORT/udp \
   -H 'Content-Type: application/json' \
   -d '{
         "host": "192.168.1.55",
-        "port": 9000,
+        "port": 5005,
         "payload": "{\"command\":\"ping\"}"
       }'
 ```
