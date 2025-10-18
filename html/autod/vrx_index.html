@@ -118,7 +118,8 @@
   .ctl.flash-err{border-color:rgba(255,107,107,.45);box-shadow:0 0 0 1px rgba(255,107,107,.3)}
 
   .udp-viewport{display:grid;gap:6px}
-  .udp-screen{position:relative;width:100%;aspect-ratio:16/9;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:radial-gradient(circle at 50% 50%,rgba(255,255,255,.06),rgba(255,255,255,0)),#0f1317;cursor:crosshair}
+  .udp-screen{position:relative;width:100%;aspect-ratio:16/9;border:1px solid var(--line);border-radius:12px;overflow:hidden;cursor:crosshair}
+  .udp-screen-image{position:absolute;inset:0;background-color:#0f1317;background-image:var(--udp-screen-image,none),radial-gradient(circle at 50% 50%,rgba(255,255,255,.06),rgba(255,255,255,0));background-size:cover,100% 100%;background-position:center;background-repeat:no-repeat;pointer-events:none;transition:opacity .2s ease}
   .udp-screen::after{content:"";position:absolute;inset:0;border:1px dashed rgba(154,161,166,.25);pointer-events:none}
   .udp-roi{position:absolute;border:2px solid rgba(54,194,117,.8);background:rgba(54,194,117,.18);border-radius:10px;box-shadow:0 0 0 1px rgba(54,194,117,.45);min-width:0;min-height:0;transition:background .2s ease,border-color .2s ease,box-shadow .2s ease}
   .udp-screen-hint{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);padding:8px 12px;border-radius:999px;border:1px solid var(--line);background:rgba(15,19,23,.8);font-size:12px;color:var(--mut);pointer-events:none;transition:opacity .2s ease,visibility .2s ease}
@@ -280,9 +281,17 @@
       <div class="row">
         <label>host <input id="udpSenderHost" value="192.168.2.20"></label>
         <label>port <input id="udpSenderPort" type="number" min="1" max="65535" value="5005"></label>
+        <label>image
+          <select id="udpSenderImageFormat">
+            <option value="jpg">JPEG</option>
+            <option value="heif">HEIF</option>
+            <option value="yuv420">YUV420</option>
+          </select>
+        </label>
       </div>
       <div class="udp-viewport">
         <div id="udpSenderScreen" class="udp-screen" role="presentation" aria-label="Draw zoom ROI">
+          <div id="udpSenderImageLayer" class="udp-screen-image" aria-hidden="true"></div>
           <div id="udpSenderRoi" class="udp-roi"></div>
           <div id="udpSenderHint" class="udp-screen-hint">Drag to set zoom ROI</div>
         </div>
@@ -1290,10 +1299,19 @@ const udpSenderDefaults = Object.freeze({
   ysize:50,
   xpos:50,
   ypos:50,
-  ttl:10000
+  ttl:10000,
+  imageFormat:'jpg'
 });
 
 const udpSenderState = { initialized:false, values:{ ...udpSenderDefaults } };
+
+const UDP_SENDER_IMAGE_SOURCES = Object.freeze({
+  jpg:'image.jpg',
+  heif:'image.heif',
+  yuv420:'image.yuv420'
+});
+
+const udpSenderImageState = { token:0 };
 
 const UDP_SENDER_ROI_KEYS = ['xsize','ysize','xpos','ypos'];
 const UDP_SENDER_ROI_LIMITS = Object.freeze({
@@ -1411,6 +1429,53 @@ function setUdpSenderRoi(partial){
     updateUdpSenderPreviews();
   }
   return changed;
+}
+
+function buildUdpSenderBaseUrl(host){
+  const raw = typeof host === 'string' ? host.trim() : '';
+  if (!raw) return null;
+  let base = raw;
+  if (!/^https?:\/\//i.test(base)) base = `http://${base}`;
+  return base.replace(/\/+$/, '');
+}
+
+function buildUdpSenderImageUrl(values){
+  const base = buildUdpSenderBaseUrl(values?.host);
+  if (!base) return null;
+  const choice = values?.imageFormat;
+  const key = UDP_SENDER_IMAGE_SOURCES[choice] ? choice : udpSenderDefaults.imageFormat;
+  const path = UDP_SENDER_IMAGE_SOURCES[key];
+  if (!path) return null;
+  const url = `${base}/${path}`;
+  const cacheBust = Date.now();
+  return `${url}${url.includes('?') ? '&' : '?'}t=${cacheBust}`;
+}
+
+function refreshUdpSenderImage(values){
+  const layer = document.getElementById('udpSenderImageLayer');
+  if (!layer) return;
+  const url = buildUdpSenderImageUrl(values);
+  if (!url){
+    layer.style.removeProperty('--udp-screen-image');
+    return;
+  }
+  const token = ++udpSenderImageState.token;
+  const img = new Image();
+  img.onload = () => {
+    if (udpSenderImageState.token !== token) return;
+    const quoted = JSON.stringify(url);
+    layer.style.setProperty('--udp-screen-image', `url(${quoted})`);
+  };
+  img.onerror = () => {
+    if (udpSenderImageState.token !== token) return;
+    layer.style.removeProperty('--udp-screen-image');
+  };
+  img.src = url;
+}
+
+function refreshUdpSenderImageFromInputs(){
+  const { values } = collectUdpSenderValues();
+  refreshUdpSenderImage(values);
 }
 
 function buildRoiFromDrag(start, current){
@@ -1573,8 +1638,19 @@ function collectUdpSenderValues(opts = {}){
   readInt(document.getElementById('udpSenderPort'), 'Port', 'port', 1, 65535);
   readInt(document.getElementById('udpSenderTtl'), 'TTL (ms)', 'ttl', 0);
 
-  if (Number.isFinite(values.ttl)){
-    udpSenderState.values.ttl = values.ttl;
+  const formatEl = document.getElementById('udpSenderImageFormat');
+  if (formatEl){
+    const choice = formatEl.value;
+    values.imageFormat = UDP_SENDER_IMAGE_SOURCES[choice] ? choice : udpSenderDefaults.imageFormat;
+  } else {
+    values.imageFormat = udpSenderDefaults.imageFormat;
+  }
+
+  if (!errors.length){
+    if (values.host) udpSenderState.values.host = values.host;
+    if (Number.isFinite(values.port)) udpSenderState.values.port = values.port;
+    if (Number.isFinite(values.ttl)) udpSenderState.values.ttl = values.ttl;
+    if (values.imageFormat) udpSenderState.values.imageFormat = values.imageFormat;
   }
 
   return { values, errors };
@@ -1624,6 +1700,7 @@ async function sendUdpSenderMessage(){
     if (respEl) respEl.value = errors.join('\n');
     return;
   }
+  refreshUdpSenderImage(values);
   const req = buildUdpSenderRequest(values);
   updateUdpSenderPreviews();
   if (respEl) respEl.value = 'Sending…';
@@ -1683,6 +1760,17 @@ function ensureUdpSenderUI(){
       udpSenderState.values.ttl = ttlNum;
     }
   }
+  const formatEl = document.getElementById('udpSenderImageFormat');
+  if (formatEl){
+    const fallback = UDP_SENDER_IMAGE_SOURCES[formatEl.value] ? formatEl.value : udpSenderDefaults.imageFormat;
+    formatEl.value = fallback;
+    udpSenderState.values.imageFormat = fallback;
+    formatEl.addEventListener('change', () => {
+      const next = UDP_SENDER_IMAGE_SOURCES[formatEl.value] ? formatEl.value : udpSenderDefaults.imageFormat;
+      udpSenderState.values.imageFormat = next;
+      refreshUdpSenderImageFromInputs();
+    });
+  }
   configureUdpSenderScreen();
   const sendBtn = document.getElementById('udpSenderSendBtn');
   if (sendBtn) sendBtn.addEventListener('click', sendUdpSenderMessage);
@@ -1691,6 +1779,7 @@ function ensureUdpSenderUI(){
   udpSenderState.initialized = true;
   updateUdpSenderDisplays();
   updateUdpSenderPreviews();
+  refreshUdpSenderImageFromInputs();
 }
 
 const linkUI = { help:null };
