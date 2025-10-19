@@ -119,7 +119,10 @@
 
   .udp-viewport{display:grid;gap:6px}
   .udp-screen{position:relative;width:100%;aspect-ratio:16/9;border:1px solid var(--line);border-radius:12px;overflow:hidden;cursor:crosshair}
-  .udp-screen-image{position:absolute;inset:0;background-color:#0f1317;background-image:var(--udp-screen-image,none),radial-gradient(circle at 50% 50%,rgba(255,255,255,.06),rgba(255,255,255,0));background-size:cover,100% 100%;background-position:center;background-repeat:no-repeat;pointer-events:none;transition:opacity .2s ease}
+  .udp-screen-image{position:absolute;inset:0;background-color:#0f1317;pointer-events:none;overflow:hidden}
+  .udp-screen-image::after{content:"";position:absolute;inset:0;background:radial-gradient(circle at 50% 50%,rgba(255,255,255,.06),rgba(255,255,255,0));pointer-events:none}
+  .udp-screen-image img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:0;transition:opacity .25s ease}
+  .udp-screen-image img[data-active="true"]{opacity:1}
   .udp-screen::after{content:"";position:absolute;inset:0;border:1px dashed rgba(154,161,166,.25);pointer-events:none}
   .udp-roi{position:absolute;border:2px solid rgba(54,194,117,.8);background:rgba(54,194,117,.18);border-radius:10px;box-shadow:0 0 0 1px rgba(54,194,117,.45);min-width:0;min-height:0;transition:background .2s ease,border-color .2s ease,box-shadow .2s ease}
   .udp-screen-hint{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);padding:8px 12px;border-radius:999px;border:1px solid var(--line);background:rgba(15,19,23,.8);font-size:12px;color:var(--mut);pointer-events:none;transition:opacity .2s ease,visibility .2s ease}
@@ -1562,19 +1565,39 @@ function refreshUdpSenderImage(values){
   if (!layer) return;
   const url = buildUdpSenderImageUrl(values);
   if (!url){
-    layer.style.removeProperty('--udp-screen-image');
+    udpSenderImageState.token++;
+    const frames = layer.querySelectorAll('img');
+    frames.forEach(node => node.remove());
     return;
   }
   const token = ++udpSenderImageState.token;
   const img = new Image();
+  img.decoding = 'async';
+  img.alt = '';
   img.onload = () => {
     if (udpSenderImageState.token !== token) return;
-    const quoted = JSON.stringify(url);
-    layer.style.setProperty('--udp-screen-image', `url(${quoted})`);
+    const active = layer.querySelector('img[data-active="true"]');
+    const frame = img;
+    frame.dataset.active = 'true';
+    frame.style.opacity = '0';
+    layer.appendChild(frame);
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        frame.style.opacity = '1';
+      });
+    });
+    if (active){
+      active.dataset.active = 'false';
+      active.style.opacity = '0';
+      active.addEventListener('transitionend', () => {
+        if (active.parentElement === layer) active.remove();
+      }, { once:true });
+    }
   };
   img.onerror = () => {
     if (udpSenderImageState.token !== token) return;
-    layer.style.removeProperty('--udp-screen-image');
+    const stale = layer.querySelector('img[data-active="true"]');
+    if (!stale) layer.querySelectorAll('img').forEach(node => node.remove());
   };
   img.src = url;
 }
