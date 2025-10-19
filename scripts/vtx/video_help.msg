@@ -2,7 +2,7 @@
   "cap": "video",
   "contract_version": "0.2",
   "commands": [
-    {"name":"get","description":"Read a single setting","args":[{"key":"name","type":"enum","control":{"kind":"select","options":["codec","fps","bitrate","rcMode","gopSize","size","exposure","mirror","flip","contrast","hue","saturation","luminance","outgoing_server"],"multi":false},"required":true}]},
+    {"name":"get","description":"Read a single setting","args":[{"key":"name","type":"enum","control":{"kind":"select","options":["codec","fps","bitrate","rcMode","gopSize","size","exposure","mirror","flip","contrast","hue","saturation","luminance","outgoing_enabled","outgoing_server"],"multi":false},"required":true}]},
     {"name":"set","description":"Set one setting (key=value) and apply instantly","args":[{"key":"pair","type":"string","control":{"kind":"text"},"required":true,"description":"key=value"}]},
     {"name":"params","description":"Set multiple settings and apply instantly","args":[{"key":"pairs","type":"string","control":{"kind":"text"},"required":false,"description":"Repeated key=value tokens"}]},
     {"name":"apply","description":"Re-read settings without changing values (SIGHUP → restart fallback)","args":[]},
@@ -25,6 +25,7 @@
     {"key":"hue","type":"int","required":false,"default":50,"description":"Image hue","control":{"kind":"range","min":0,"max":100,"step":1}},
     {"key":"saturation","type":"int","required":false,"default":50,"description":"Image saturation","control":{"kind":"range","min":0,"max":100,"step":1}},
     {"key":"luminance","type":"int","required":false,"default":50,"description":"Image luminance","control":{"kind":"range","min":0,"max":100,"step":1}},
+    {"key":"outgoing_enabled","type":"bool","required":false,"default":true,"description":"Enable primary UDP output","control":{"kind":"toggle"}},
     {"key":"outgoing_server","type":"string","required":false,"default":"udp://224.0.0.1:5600","description":"Primary output (udp://{ip}:{port})","control":{"kind":"text","placeholder":"udp://192.168.2.20:5600"}}
   ]
 }
