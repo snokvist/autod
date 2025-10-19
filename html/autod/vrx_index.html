@@ -117,14 +117,19 @@
   .ctl.flash-ok{border-color:rgba(54,194,117,.4);box-shadow:0 0 0 1px rgba(54,194,117,.3)}
   .ctl.flash-err{border-color:rgba(255,107,107,.45);box-shadow:0 0 0 1px rgba(255,107,107,.3)}
 
-  .udp-dpad-wrap{display:grid;gap:6px}
-  .udp-dpad-header{display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:12px;color:var(--mut)}
-  .udp-dpad-header strong{color:var(--fg);font-size:13px}
-  .udp-dpad{display:grid;grid-template-columns:repeat(3,minmax(48px,1fr));grid-template-rows:repeat(3,minmax(40px,1fr));gap:6px;justify-content:center;align-items:center}
-  .udp-dpad button{padding:10px 0;font-weight:600;min-width:0}
-  .udp-dpad-display{display:grid;gap:2px;text-align:center;font-size:12px;color:var(--mut)}
-  .udp-dpad-display .udp-value{font-size:14px}
-  .udp-value{color:var(--fg);font-weight:600}
+  .udp-viewport{display:grid;gap:6px}
+  .udp-screen{position:relative;width:100%;aspect-ratio:16/9;border:1px solid var(--line);border-radius:12px;overflow:hidden;cursor:crosshair}
+  .udp-screen-image{position:absolute;inset:0;background-color:#0f1317;pointer-events:none;overflow:hidden}
+  .udp-screen-image::after{content:"";position:absolute;inset:0;background:radial-gradient(circle at 50% 50%,rgba(255,255,255,.06),rgba(255,255,255,0));pointer-events:none}
+  .udp-screen-image img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:0;transition:opacity .25s ease}
+  .udp-screen-image img[data-active="true"]{opacity:1}
+  .udp-screen::after{content:"";position:absolute;inset:0;border:1px dashed rgba(154,161,166,.25);pointer-events:none}
+  .udp-roi{position:absolute;border:2px solid rgba(54,194,117,.8);background:rgba(54,194,117,.18);border-radius:10px;box-shadow:0 0 0 1px rgba(54,194,117,.45);min-width:0;min-height:0;transition:background .2s ease,border-color .2s ease,box-shadow .2s ease}
+  .udp-screen-hint{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);padding:8px 12px;border-radius:999px;border:1px solid var(--line);background:rgba(15,19,23,.8);font-size:12px;color:var(--mut);pointer-events:none;transition:opacity .2s ease,visibility .2s ease}
+  .udp-screen-hint.hidden{opacity:0;visibility:hidden}
+  .udp-roi-meta{display:grid;gap:4px;font-size:12px;color:var(--mut)}
+  .udp-roi-meta strong{color:var(--fg)}
+  .udp-roi-meta .udp-value{color:var(--fg);font-weight:600}
 
 
 
@@ -279,45 +284,42 @@
       <div class="row">
         <label>host <input id="udpSenderHost" value="192.168.2.20"></label>
         <label>port <input id="udpSenderPort" type="number" min="1" max="65535" value="5005"></label>
+        <label>image host <input id="udpSenderImageHost" value="192.168.0.1"></label>
+        <label>image format
+          <select id="udpSenderImageFormat">
+            <option value="jpg">JPEG</option>
+          </select>
+        </label>
+        <label>click size
+          <select id="udpSenderClickSize">
+            <option value="25">25% × 25%</option>
+            <option value="30">30% × 30%</option>
+            <option value="35">35% × 35%</option>
+            <option value="40">40% × 40%</option>
+            <option value="45">45% × 45%</option>
+            <option value="50">50% × 50%</option>
+            <option value="55">55% × 55%</option>
+            <option value="60">60% × 60%</option>
+            <option value="65">65% × 65%</option>
+            <option value="70">70% × 70%</option>
+            <option value="75">75% × 75%</option>
+            <option value="80">80% × 80%</option>
+            <option value="85">85% × 85%</option>
+            <option value="90">90% × 90%</option>
+            <option value="95">95% × 95%</option>
+            <option value="100">100% × 100%</option>
+          </select>
+        </label>
       </div>
-      <div class="udp-dpad-wrap">
-        <div class="udp-dpad-header">
-          <strong>ROI size (%)</strong>
-          <div>X: <span class="udp-value" data-udp-value="xsize">50</span>% · Y: <span class="udp-value" data-udp-value="ysize">50</span>%</div>
+      <div class="udp-viewport">
+        <div id="udpSenderScreen" class="udp-screen" role="presentation" aria-label="Draw zoom ROI">
+          <div id="udpSenderImageLayer" class="udp-screen-image" aria-hidden="true"></div>
+          <div id="udpSenderRoi" class="udp-roi"></div>
+          <div id="udpSenderHint" class="udp-screen-hint">Drag to set zoom ROI</div>
         </div>
-        <div class="udp-dpad" role="group" aria-label="Adjust ROI size">
-          <div></div>
-          <button type="button" data-udp-key="ysize" data-udp-delta="5">Y+</button>
-          <div></div>
-          <button type="button" data-udp-key="xsize" data-udp-delta="-5">X-</button>
-          <div class="udp-dpad-display">
-            <div>X <span class="udp-value" data-udp-value="xsize">50</span>%</div>
-            <div>Y <span class="udp-value" data-udp-value="ysize">50</span>%</div>
-          </div>
-          <button type="button" data-udp-key="xsize" data-udp-delta="5">X+</button>
-          <div></div>
-          <button type="button" data-udp-key="ysize" data-udp-delta="-5">Y-</button>
-          <div></div>
-        </div>
-      </div>
-      <div class="udp-dpad-wrap">
-        <div class="udp-dpad-header">
-          <strong>ROI position (%)</strong>
-          <div>X: <span class="udp-value" data-udp-value="xpos">50</span>% · Y: <span class="udp-value" data-udp-value="ypos">50</span>%</div>
-        </div>
-        <div class="udp-dpad" role="group" aria-label="Adjust ROI position">
-          <div></div>
-          <button type="button" data-udp-key="ypos" data-udp-delta="-5">Up</button>
-          <div></div>
-          <button type="button" data-udp-key="xpos" data-udp-delta="-5">Left</button>
-          <div class="udp-dpad-display">
-            <div>X <span class="udp-value" data-udp-value="xpos">50</span>%</div>
-            <div>Y <span class="udp-value" data-udp-value="ypos">50</span>%</div>
-          </div>
-          <button type="button" data-udp-key="xpos" data-udp-delta="5">Right</button>
-          <div></div>
-          <button type="button" data-udp-key="ypos" data-udp-delta="5">Down</button>
-          <div></div>
+        <div class="udp-roi-meta">
+          <div><strong>Size</strong> <span class="udp-value" data-udp-value="xsize">50</span>% × <span class="udp-value" data-udp-value="ysize">50</span>%</div>
+          <div><strong>Center</strong> X <span class="udp-value" data-udp-value="xpos">50</span>% · Y <span class="udp-value" data-udp-value="ypos">50</span>%</div>
         </div>
       </div>
       <div class="row">
@@ -1332,17 +1334,34 @@ function reloadUdpRelayEmbed(){
   }
 }
 
+const UDP_SENDER_STEP = 5;
+
+function quantizeUdpSenderValue(raw){
+  const num = Number(raw);
+  if (!Number.isFinite(num)) return 0;
+  return Math.round(num / UDP_SENDER_STEP) * UDP_SENDER_STEP;
+}
+
 const udpSenderDefaults = Object.freeze({
   host:'192.168.2.20',
+  imageHost:'192.168.0.1',
   port:5005,
   xsize:50,
   ysize:50,
   xpos:50,
   ypos:50,
-  ttl:10000
+  ttl:10000,
+  imageFormat:'jpg',
+  clickSize:25
 });
 
 const udpSenderState = { initialized:false, values:{ ...udpSenderDefaults } };
+
+const UDP_SENDER_IMAGE_SOURCES = Object.freeze({
+  jpg:'image.jpg'
+});
+
+const udpSenderImageState = { token:0 };
 
 const UDP_SENDER_ROI_KEYS = ['xsize','ysize','xpos','ypos'];
 const UDP_SENDER_ROI_LIMITS = Object.freeze({
@@ -1352,28 +1371,403 @@ const UDP_SENDER_ROI_LIMITS = Object.freeze({
   ypos:{ min:0, max:100 }
 });
 
+function clampUdpSenderClickSize(raw){
+  const min = UDP_SENDER_ROI_LIMITS.xsize?.min ?? 0;
+  const max = UDP_SENDER_ROI_LIMITS.xsize?.max ?? 100;
+  let next = Number(raw);
+  if (!Number.isFinite(next)) next = udpSenderDefaults.clickSize;
+  next = quantizeUdpSenderValue(next);
+  if (!Number.isFinite(next)) next = udpSenderDefaults.clickSize;
+  if (next < min) next = min;
+  if (next > max) next = max;
+  return Math.round(next);
+}
+
+function getUdpSenderClickSize(){
+  const current = udpSenderState.values?.clickSize;
+  const next = clampUdpSenderClickSize(current);
+  if (udpSenderState.values) udpSenderState.values.clickSize = next;
+  return next;
+}
+
 function clampUdpSenderValue(key, raw){
   const limits = UDP_SENDER_ROI_LIMITS[key] || {};
-  let next = Math.round(Number(raw));
+  let next = Number(raw);
   if (!Number.isFinite(next)){
-    next = udpSenderState.values[key] ?? udpSenderDefaults[key] ?? 0;
+    const fallback = udpSenderState.values[key];
+    if (Number.isFinite(fallback)){
+      next = fallback;
+    } else {
+      const def = udpSenderDefaults[key];
+      next = Number.isFinite(def) ? def : 0;
+    }
   }
   if (limits.min !== undefined && next < limits.min) next = limits.min;
   if (limits.max !== undefined && next > limits.max) next = limits.max;
+  next = quantizeUdpSenderValue(next);
+  if (limits.min !== undefined && next < limits.min) next = limits.min;
+  if (limits.max !== undefined && next > limits.max) next = limits.max;
+  next = Math.round(next);
   return next;
 }
 
 function setUdpSenderValue(key, value){
   const next = clampUdpSenderValue(key, value);
   udpSenderState.values[key] = next;
+  enforceUdpSenderRoiBounds();
   return next;
+}
+
+function clampUdpSenderCenter(centerKey, sizeKey, fallback){
+  const limits = UDP_SENDER_ROI_LIMITS[centerKey] || {};
+  const minLimit = limits.min ?? 0;
+  const maxLimit = limits.max ?? 100;
+  const size = Number(udpSenderState.values[sizeKey]);
+  const half = Number.isFinite(size) ? size / 2 : 0;
+  let next = Number(udpSenderState.values[centerKey]);
+  if (!Number.isFinite(next)){
+    const fb = Number(fallback);
+    next = Number.isFinite(fb) ? fb : 50;
+  }
+  next = quantizeUdpSenderValue(next);
+  if (!Number.isFinite(next)) next = 0;
+  const minBound = Math.max(minLimit, half);
+  const maxBound = Math.min(maxLimit, 100 - half);
+  if (minBound > maxBound){
+    const fallbackQuantized = quantizeUdpSenderValue(fallback);
+    const safe = Number.isFinite(fallbackQuantized) ? fallbackQuantized : Math.max(minLimit, Math.min(maxLimit, 50));
+    if (udpSenderState.values[centerKey] !== safe){
+      udpSenderState.values[centerKey] = Math.round(Math.max(minLimit, Math.min(maxLimit, safe)));
+      return true;
+    }
+    return false;
+  }
+  const step = UDP_SENDER_STEP;
+  const minStep = Math.ceil(minBound / step) * step;
+  const maxStep = Math.floor(maxBound / step) * step;
+  let lower = Math.max(minLimit, Math.min(maxLimit, minStep));
+  let upper = Math.max(minLimit, Math.min(maxLimit, maxStep));
+  if (upper < lower) upper = lower;
+  if (next < lower) next = lower;
+  if (next > upper) next = upper;
+  next = quantizeUdpSenderValue(next);
+  if (next < lower) next = lower;
+  if (next > upper) next = upper;
+  next = Math.max(minLimit, Math.min(maxLimit, next));
+  const rounded = Math.round(next);
+  if (udpSenderState.values[centerKey] !== rounded){
+    udpSenderState.values[centerKey] = rounded;
+    return true;
+  }
+  return false;
+}
+
+function maybeExpandUdpSenderSizeForEdges(sizeKey, centerKey){
+  const limits = UDP_SENDER_ROI_LIMITS[sizeKey] || {};
+  const minSize = limits.min ?? 0;
+  const maxSize = limits.max ?? 100;
+  let size = Number(udpSenderState.values[sizeKey]);
+  const center = Number(udpSenderState.values[centerKey]);
+  if (!Number.isFinite(size) || !Number.isFinite(center)) return false;
+  const step = UDP_SENDER_STEP;
+  let changed = false;
+
+  const expand = required => {
+    if (!Number.isFinite(required)) return;
+    let next = quantizeUdpSenderValue(required);
+    if (!Number.isFinite(next)) return;
+    if (next < minSize) next = minSize;
+    if (next > maxSize) next = maxSize;
+    if (next > size){
+      size = next;
+      udpSenderState.values[sizeKey] = next;
+      changed = true;
+    }
+  };
+
+  let half = size / 2;
+  const leftGap = center - half;
+  if (leftGap < 0 || (leftGap > 0 && leftGap < step)){
+    expand(center * 2);
+    size = Number(udpSenderState.values[sizeKey]);
+    half = size / 2;
+  }
+
+  const rightGap = 100 - (center + half);
+  if (rightGap < 0 || (rightGap > 0 && rightGap < step)){
+    expand((100 - center) * 2);
+  }
+
+  return changed;
+}
+
+function enforceUdpSenderRoiBounds(){
+  const maxIterations = 6;
+  for (let i = 0; i < maxIterations; i++){
+    let changed = false;
+    for (const key of ['xsize','ysize']){
+      const prev = udpSenderState.values[key];
+      const next = clampUdpSenderValue(key, prev);
+      if (next !== prev){
+        udpSenderState.values[key] = next;
+        changed = true;
+      }
+    }
+    if (clampUdpSenderCenter('xpos', 'xsize', udpSenderDefaults.xpos)) changed = true;
+    if (clampUdpSenderCenter('ypos', 'ysize', udpSenderDefaults.ypos)) changed = true;
+    if (maybeExpandUdpSenderSizeForEdges('xsize', 'xpos')) changed = true;
+    if (maybeExpandUdpSenderSizeForEdges('ysize', 'ypos')) changed = true;
+    if (!changed) break;
+  }
+}
+
+function formatUdpSenderNumber(value){
+  if (!Number.isFinite(value)) return '0';
+  return String(Math.round(value));
 }
 
 function updateUdpSenderDisplays(){
   for (const key of UDP_SENDER_ROI_KEYS){
     const nodes = document.querySelectorAll(`[data-udp-value="${key}"]`);
-    nodes.forEach(node => { node.textContent = udpSenderState.values[key]; });
+    nodes.forEach(node => {
+      const val = udpSenderState.values[key];
+      node.textContent = formatUdpSenderNumber(val);
+    });
   }
+  updateUdpSenderRoi();
+}
+
+function updateUdpSenderRoi(){
+  const roi = document.getElementById('udpSenderRoi');
+  if (!roi) return;
+  const { xpos = 0, ypos = 0, xsize = 0, ysize = 0 } = udpSenderState.values;
+  const halfWidth = xsize / 2;
+  const halfHeight = ysize / 2;
+  const left = Math.max(0, Math.min(100 - xsize, xpos - halfWidth));
+  const top = Math.max(0, Math.min(100 - ysize, ypos - halfHeight));
+  roi.style.left = `${left}%`;
+  roi.style.top = `${top}%`;
+  roi.style.width = `${xsize}%`;
+  roi.style.height = `${ysize}%`;
+}
+
+function setUdpSenderRoi(partial){
+  if (!partial) return false;
+  const order = ['xsize','ysize','xpos','ypos'];
+  let changed = false;
+  for (const key of order){
+    if (partial[key] === undefined) continue;
+    const prev = udpSenderState.values[key];
+    const next = setUdpSenderValue(key, partial[key]);
+    if (next !== prev) changed = true;
+  }
+  if (changed){
+    updateUdpSenderDisplays();
+    updateUdpSenderPreviews();
+  }
+  return changed;
+}
+
+function buildUdpSenderBaseUrl(host){
+  const raw = typeof host === 'string' ? host.trim() : '';
+  if (!raw) return null;
+  let base = raw;
+  if (!/^https?:\/\//i.test(base)) base = `http://${base}`;
+  return base.replace(/\/+$/, '');
+}
+
+function buildUdpSenderImageUrl(values){
+  const base = buildUdpSenderBaseUrl(values?.imageHost);
+  if (!base) return null;
+  const choice = values?.imageFormat;
+  const key = UDP_SENDER_IMAGE_SOURCES[choice] ? choice : udpSenderDefaults.imageFormat;
+  const path = UDP_SENDER_IMAGE_SOURCES[key];
+  if (!path) return null;
+  const url = `${base}/${path}`;
+  const cacheBust = Date.now();
+  return `${url}${url.includes('?') ? '&' : '?'}t=${cacheBust}`;
+}
+
+function refreshUdpSenderImage(values){
+  const layer = document.getElementById('udpSenderImageLayer');
+  if (!layer) return;
+  const url = buildUdpSenderImageUrl(values);
+  if (!url){
+    udpSenderImageState.token++;
+    const frames = layer.querySelectorAll('img');
+    frames.forEach(node => node.remove());
+    return;
+  }
+  const token = ++udpSenderImageState.token;
+  const img = new Image();
+  img.decoding = 'async';
+  img.alt = '';
+  img.onload = () => {
+    if (udpSenderImageState.token !== token) return;
+    const active = layer.querySelector('img[data-active="true"]');
+    const frame = img;
+    frame.dataset.active = 'true';
+    frame.style.opacity = '0';
+    layer.appendChild(frame);
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        frame.style.opacity = '1';
+      });
+    });
+    if (active){
+      active.dataset.active = 'false';
+      active.style.opacity = '0';
+      active.addEventListener('transitionend', () => {
+        if (active.parentElement === layer) active.remove();
+      }, { once:true });
+    }
+  };
+  img.onerror = () => {
+    if (udpSenderImageState.token !== token) return;
+    const stale = layer.querySelector('img[data-active="true"]');
+    if (!stale) layer.querySelectorAll('img').forEach(node => node.remove());
+  };
+  img.src = url;
+}
+
+function refreshUdpSenderImageFromInputs(){
+  const { values } = collectUdpSenderValues();
+  refreshUdpSenderImage(values);
+}
+
+function buildRoiFromDrag(start, current){
+  if (!start || !current) return null;
+  const clickSizePct = getUdpSenderClickSize();
+  const minWidthPct = Math.max(UDP_SENDER_ROI_LIMITS.xsize?.min ?? 0, clickSizePct);
+  const minHeightPct = Math.max(UDP_SENDER_ROI_LIMITS.ysize?.min ?? 0, clickSizePct);
+  const minWidthFrac = minWidthPct / 100;
+  const minHeightFrac = minHeightPct / 100;
+  const widthFracRaw = Math.abs(current.x - start.x);
+  const heightFracRaw = Math.abs(current.y - start.y);
+  const widthFrac = Math.max(minWidthFrac, Math.min(1, widthFracRaw));
+  const heightFrac = Math.max(minHeightFrac, Math.min(1, heightFracRaw));
+  const halfWidth = widthFrac / 2;
+  const halfHeight = heightFrac / 2;
+  const minX = Math.min(start.x, current.x);
+  const maxX = Math.max(start.x, current.x);
+  const minY = Math.min(start.y, current.y);
+  const maxY = Math.max(start.y, current.y);
+  const baseCenterX = widthFracRaw >= minWidthFrac ? (minX + maxX) / 2 : current.x;
+  const baseCenterY = heightFracRaw >= minHeightFrac ? (minY + maxY) / 2 : current.y;
+  const clampCenterFrac = (center, half) => {
+    if (!Number.isFinite(center)) return 0.5;
+    if (half >= 0.5) return 0.5;
+    if (center < half) return half;
+    if (center > 1 - half) return 1 - half;
+    return center;
+  };
+  const centerX = clampCenterFrac(baseCenterX, halfWidth);
+  const centerY = clampCenterFrac(baseCenterY, halfHeight);
+  return {
+    xsize: Math.round(widthFrac * 100),
+    ysize: Math.round(heightFrac * 100),
+    xpos: Math.round(centerX * 1000) / 10,
+    ypos: Math.round(centerY * 1000) / 10
+  };
+}
+
+function buildRoiFromPoint(point){
+  if (!point) return null;
+  const size = getUdpSenderClickSize();
+  const centerX = quantizeUdpSenderValue(point.x * 100);
+  const centerY = quantizeUdpSenderValue(point.y * 100);
+  return {
+    xsize: size,
+    ysize: size,
+    xpos: centerX,
+    ypos: centerY
+  };
+}
+
+function configureUdpSenderScreen(){
+  const screen = document.getElementById('udpSenderScreen');
+  if (!screen) return;
+  const hint = document.getElementById('udpSenderHint');
+  const state = { active:false, start:null, changed:false };
+
+  function hideHint(){
+    if (hint && !hint.classList.contains('hidden')) hint.classList.add('hidden');
+  }
+
+  function toFraction(ev){
+    const rect = screen.getBoundingClientRect();
+    if (!rect || rect.width <= 0 || rect.height <= 0) return null;
+    const x = (ev.clientX - rect.left) / rect.width;
+    const y = (ev.clientY - rect.top) / rect.height;
+    return {
+      x: Math.min(1, Math.max(0, x)),
+      y: Math.min(1, Math.max(0, y))
+    };
+  }
+
+  function pointerDown(ev){
+    if (typeof ev.button === 'number' && ev.button !== 0) return;
+    hideHint();
+    ev.preventDefault();
+    const start = toFraction(ev);
+    if (!start) return;
+    state.active = true;
+    state.start = start;
+    state.changed = false;
+    if (typeof screen.setPointerCapture === 'function'){
+      try { screen.setPointerCapture(ev.pointerId); } catch {}
+    }
+  }
+
+  function pointerMove(ev){
+    if (!state.active) return;
+    ev.preventDefault();
+    const current = toFraction(ev);
+    if (!state.start || !current) return;
+    const roi = buildRoiFromDrag(state.start, current);
+    if (!roi) return;
+    if (setUdpSenderRoi(roi)) state.changed = true;
+  }
+
+  function pointerEnd(ev){
+    if (!state.active) return;
+    ev.preventDefault();
+    if (typeof screen.releasePointerCapture === 'function'){
+      try { screen.releasePointerCapture(ev.pointerId); } catch {}
+    }
+    const hadStart = state.start;
+    const hadChange = state.changed;
+    state.active = false;
+    state.start = null;
+    state.changed = false;
+    let shouldSend = hadChange;
+    if (!shouldSend && hadStart){
+      const roi = buildRoiFromPoint(hadStart);
+      if (roi) shouldSend = setUdpSenderRoi(roi);
+    }
+    if (shouldSend) sendUdpSenderMessage();
+  }
+
+  function pointerCancel(ev){
+    if (!state.active) return;
+    if (typeof screen.releasePointerCapture === 'function'){
+      try { screen.releasePointerCapture(ev.pointerId); } catch {}
+    }
+    state.active = false;
+    state.start = null;
+    state.changed = false;
+  }
+
+  screen.addEventListener('pointerdown', pointerDown);
+  screen.addEventListener('pointermove', pointerMove);
+  screen.addEventListener('pointerup', pointerEnd);
+  screen.addEventListener('pointerleave', pointerEnd);
+  screen.addEventListener('pointercancel', pointerCancel);
+  screen.addEventListener('lostpointercapture', () => {
+    state.active = false;
+    state.start = null;
+    state.changed = false;
+  });
 }
 
 function collectUdpSenderValues(opts = {}){
@@ -1387,6 +1781,24 @@ function collectUdpSenderValues(opts = {}){
     if (strict) errors.push('Host is required');
   } else {
     values.host = hostRaw;
+  }
+
+  const imageHostEl = document.getElementById('udpSenderImageHost');
+  const imageHostRaw = (imageHostEl?.value ?? '').trim();
+  if (imageHostRaw){
+    values.imageHost = imageHostRaw;
+  } else if (udpSenderDefaults.imageHost){
+    values.imageHost = udpSenderDefaults.imageHost;
+  }
+
+  const clickSizeEl = document.getElementById('udpSenderClickSize');
+  if (clickSizeEl){
+    const next = clampUdpSenderClickSize(clickSizeEl.value);
+    values.clickSize = next;
+    udpSenderState.values.clickSize = next;
+    if (`${clickSizeEl.value}` !== `${next}`) clickSizeEl.value = String(next);
+  } else if (udpSenderDefaults.clickSize){
+    values.clickSize = udpSenderDefaults.clickSize;
   }
 
   function readInt(el, label, key, min, max){
@@ -1415,15 +1827,29 @@ function collectUdpSenderValues(opts = {}){
   readInt(document.getElementById('udpSenderPort'), 'Port', 'port', 1, 65535);
   readInt(document.getElementById('udpSenderTtl'), 'TTL (ms)', 'ttl', 0);
 
-  if (Number.isFinite(values.ttl)){
-    udpSenderState.values.ttl = values.ttl;
+  const formatEl = document.getElementById('udpSenderImageFormat');
+  if (formatEl){
+    const choice = formatEl.value;
+    values.imageFormat = UDP_SENDER_IMAGE_SOURCES[choice] ? choice : udpSenderDefaults.imageFormat;
+  } else {
+    values.imageFormat = udpSenderDefaults.imageFormat;
+  }
+
+  if (!errors.length){
+    if (values.host) udpSenderState.values.host = values.host;
+    if (values.imageHost) udpSenderState.values.imageHost = values.imageHost;
+    if (Number.isFinite(values.port)) udpSenderState.values.port = values.port;
+    if (Number.isFinite(values.ttl)) udpSenderState.values.ttl = values.ttl;
+    if (values.imageFormat) udpSenderState.values.imageFormat = values.imageFormat;
+    if (Number.isFinite(values.clickSize)) udpSenderState.values.clickSize = values.clickSize;
   }
 
   return { values, errors };
 }
 
 function buildUdpSenderPayloadString(values){
-  const zoom = `zoom=${values.xsize},${values.ysize},${values.xpos},${values.ypos}`;
+  const parts = ['xsize','ysize','xpos','ypos'].map(key => formatUdpSenderNumber(values[key]));
+  const zoom = `zoom=${parts.join(',')}`;
   return `{"text":["","","","","","","","${zoom}"], "ttl_ms": ${values.ttl}}`;
 }
 
@@ -1465,6 +1891,7 @@ async function sendUdpSenderMessage(){
     if (respEl) respEl.value = errors.join('\n');
     return;
   }
+  refreshUdpSenderImage(values);
   const req = buildUdpSenderRequest(values);
   updateUdpSenderPreviews();
   if (respEl) respEl.value = 'Sending…';
@@ -1498,6 +1925,7 @@ function ensureUdpSenderUI(){
   const inputIds = [
     'udpSenderHost',
     'udpSenderPort',
+    'udpSenderImageHost',
     'udpSenderTtl'
   ];
   for (const id of inputIds){
@@ -1524,18 +1952,31 @@ function ensureUdpSenderUI(){
       udpSenderState.values.ttl = ttlNum;
     }
   }
-  const dpadButtons = document.querySelectorAll('#udpSenderCard [data-udp-key][data-udp-delta]');
-  dpadButtons.forEach(btn => {
-    btn.addEventListener('click', () => {
-      const key = btn.getAttribute('data-udp-key');
-      const delta = Number(btn.getAttribute('data-udp-delta'));
-      if (!key || Number.isNaN(delta)) return;
-      setUdpSenderValue(key, (udpSenderState.values[key] ?? udpSenderDefaults[key] ?? 0) + delta);
-      updateUdpSenderDisplays();
-      updateUdpSenderPreviews();
+  const formatEl = document.getElementById('udpSenderImageFormat');
+  if (formatEl){
+    const fallback = UDP_SENDER_IMAGE_SOURCES[formatEl.value] ? formatEl.value : udpSenderDefaults.imageFormat;
+    formatEl.value = fallback;
+    udpSenderState.values.imageFormat = fallback;
+    formatEl.addEventListener('change', () => {
+      const next = UDP_SENDER_IMAGE_SOURCES[formatEl.value] ? formatEl.value : udpSenderDefaults.imageFormat;
+      udpSenderState.values.imageFormat = next;
+      refreshUdpSenderImageFromInputs();
+    });
+  }
+  const clickSizeEl = document.getElementById('udpSenderClickSize');
+  if (clickSizeEl){
+    const fallback = clampUdpSenderClickSize(clickSizeEl.value);
+    clickSizeEl.value = String(fallback);
+    udpSenderState.values.clickSize = fallback;
+    clickSizeEl.addEventListener('change', () => {
+      const next = clampUdpSenderClickSize(clickSizeEl.value);
+      clickSizeEl.value = String(next);
+      udpSenderState.values.clickSize = next;
+      setUdpSenderRoi({ xsize: next, ysize: next });
       sendUdpSenderMessage();
     });
-  });
+  }
+  configureUdpSenderScreen();
   const sendBtn = document.getElementById('udpSenderSendBtn');
   if (sendBtn) sendBtn.addEventListener('click', sendUdpSenderMessage);
   const respEl = document.getElementById('udpSenderResponse');
@@ -1543,6 +1984,7 @@ function ensureUdpSenderUI(){
   udpSenderState.initialized = true;
   updateUdpSenderDisplays();
   updateUdpSenderPreviews();
+  refreshUdpSenderImageFromInputs();
 }
 
 const linkUI = { help:null };
