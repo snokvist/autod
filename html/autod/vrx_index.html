@@ -281,7 +281,8 @@
       <div class="row">
         <label>host <input id="udpSenderHost" value="192.168.2.20"></label>
         <label>port <input id="udpSenderPort" type="number" min="1" max="65535" value="5005"></label>
-        <label>image
+        <label>image host <input id="udpSenderImageHost" value="192.168.0.1"></label>
+        <label>image format
           <select id="udpSenderImageFormat">
             <option value="jpg">JPEG</option>
             <option value="heif">HEIF</option>
@@ -1294,6 +1295,7 @@ function quantizeUdpSenderValue(raw){
 
 const udpSenderDefaults = Object.freeze({
   host:'192.168.2.20',
+  imageHost:'192.168.0.1',
   port:5005,
   xsize:50,
   ysize:50,
@@ -1349,39 +1351,107 @@ function setUdpSenderValue(key, value){
   return next;
 }
 
-function enforceUdpSenderRoiBounds(){
-  const minX = UDP_SENDER_ROI_LIMITS.xsize?.min ?? 0;
-  const minY = UDP_SENDER_ROI_LIMITS.ysize?.min ?? 0;
-  udpSenderState.values.xsize = clampUdpSenderValue('xsize', udpSenderState.values.xsize);
-  udpSenderState.values.ysize = clampUdpSenderValue('ysize', udpSenderState.values.ysize);
-  const width = udpSenderState.values.xsize ?? minX;
-  const height = udpSenderState.values.ysize ?? minY;
+function clampUdpSenderCenter(centerKey, sizeKey, fallback){
+  const limits = UDP_SENDER_ROI_LIMITS[centerKey] || {};
+  const minLimit = limits.min ?? 0;
+  const maxLimit = limits.max ?? 100;
+  const size = Number(udpSenderState.values[sizeKey]);
+  const half = Number.isFinite(size) ? size / 2 : 0;
+  let next = Number(udpSenderState.values[centerKey]);
+  if (!Number.isFinite(next)){
+    const fb = Number(fallback);
+    next = Number.isFinite(fb) ? fb : 50;
+  }
+  next = quantizeUdpSenderValue(next);
+  if (!Number.isFinite(next)) next = 0;
+  const minBound = Math.max(minLimit, half);
+  const maxBound = Math.min(maxLimit, 100 - half);
+  if (minBound > maxBound){
+    const fallbackQuantized = quantizeUdpSenderValue(fallback);
+    const safe = Number.isFinite(fallbackQuantized) ? fallbackQuantized : Math.max(minLimit, Math.min(maxLimit, 50));
+    if (udpSenderState.values[centerKey] !== safe){
+      udpSenderState.values[centerKey] = Math.round(Math.max(minLimit, Math.min(maxLimit, safe)));
+      return true;
+    }
+    return false;
+  }
+  const step = UDP_SENDER_STEP;
+  const minStep = Math.ceil(minBound / step) * step;
+  const maxStep = Math.floor(maxBound / step) * step;
+  let lower = Math.max(minLimit, Math.min(maxLimit, minStep));
+  let upper = Math.max(minLimit, Math.min(maxLimit, maxStep));
+  if (upper < lower) upper = lower;
+  if (next < lower) next = lower;
+  if (next > upper) next = upper;
+  next = quantizeUdpSenderValue(next);
+  if (next < lower) next = lower;
+  if (next > upper) next = upper;
+  next = Math.max(minLimit, Math.min(maxLimit, next));
+  const rounded = Math.round(next);
+  if (udpSenderState.values[centerKey] !== rounded){
+    udpSenderState.values[centerKey] = rounded;
+    return true;
+  }
+  return false;
+}
 
-  function clampCenter(key, halfSize, fallback){
-    let next = Number(udpSenderState.values[key]);
-    if (!Number.isFinite(next)){
-      const fb = Number(fallback);
-      next = Number.isFinite(fb) ? fb : 50;
+function maybeExpandUdpSenderSizeForEdges(sizeKey, centerKey){
+  const limits = UDP_SENDER_ROI_LIMITS[sizeKey] || {};
+  const minSize = limits.min ?? 0;
+  const maxSize = limits.max ?? 100;
+  let size = Number(udpSenderState.values[sizeKey]);
+  const center = Number(udpSenderState.values[centerKey]);
+  if (!Number.isFinite(size) || !Number.isFinite(center)) return false;
+  const step = UDP_SENDER_STEP;
+  let changed = false;
+
+  const expand = required => {
+    if (!Number.isFinite(required)) return;
+    let next = quantizeUdpSenderValue(required);
+    if (!Number.isFinite(next)) return;
+    if (next < minSize) next = minSize;
+    if (next > maxSize) next = maxSize;
+    if (next > size){
+      size = next;
+      udpSenderState.values[sizeKey] = next;
+      changed = true;
     }
-    const minBound = Math.max(0, halfSize);
-    const maxBound = Math.min(100, 100 - halfSize);
-    let minStep = Math.floor(minBound / UDP_SENDER_STEP) * UDP_SENDER_STEP;
-    let maxStep = Math.ceil(maxBound / UDP_SENDER_STEP) * UDP_SENDER_STEP;
-    minStep = Math.max(0, Math.min(100, minStep));
-    maxStep = Math.max(0, Math.min(100, maxStep));
-    if (minStep > maxStep){
-      const fallbackQuantized = Math.max(minStep, Math.min(maxStep, quantizeUdpSenderValue(fallback)));
-      udpSenderState.values[key] = Number.isFinite(fallbackQuantized) ? Math.round(fallbackQuantized) : 0;
-      return;
-    }
-    next = quantizeUdpSenderValue(next);
-    if (next < minStep) next = minStep;
-    if (next > maxStep) next = maxStep;
-    udpSenderState.values[key] = Math.round(next);
+  };
+
+  let half = size / 2;
+  const leftGap = center - half;
+  if (leftGap < 0 || (leftGap > 0 && leftGap < step)){
+    expand(center * 2);
+    size = Number(udpSenderState.values[sizeKey]);
+    half = size / 2;
   }
 
-  clampCenter('xpos', width / 2, udpSenderDefaults.xpos);
-  clampCenter('ypos', height / 2, udpSenderDefaults.ypos);
+  const rightGap = 100 - (center + half);
+  if (rightGap < 0 || (rightGap > 0 && rightGap < step)){
+    expand((100 - center) * 2);
+  }
+
+  return changed;
+}
+
+function enforceUdpSenderRoiBounds(){
+  const maxIterations = 6;
+  for (let i = 0; i < maxIterations; i++){
+    let changed = false;
+    for (const key of ['xsize','ysize']){
+      const prev = udpSenderState.values[key];
+      const next = clampUdpSenderValue(key, prev);
+      if (next !== prev){
+        udpSenderState.values[key] = next;
+        changed = true;
+      }
+    }
+    if (clampUdpSenderCenter('xpos', 'xsize', udpSenderDefaults.xpos)) changed = true;
+    if (clampUdpSenderCenter('ypos', 'ysize', udpSenderDefaults.ypos)) changed = true;
+    if (maybeExpandUdpSenderSizeForEdges('xsize', 'xpos')) changed = true;
+    if (maybeExpandUdpSenderSizeForEdges('ysize', 'ypos')) changed = true;
+    if (!changed) break;
+  }
 }
 
 function formatUdpSenderNumber(value){
@@ -1440,7 +1510,7 @@ function buildUdpSenderBaseUrl(host){
 }
 
 function buildUdpSenderImageUrl(values){
-  const base = buildUdpSenderBaseUrl(values?.host);
+  const base = buildUdpSenderBaseUrl(values?.imageHost);
   if (!base) return null;
   const choice = values?.imageFormat;
   const key = UDP_SENDER_IMAGE_SOURCES[choice] ? choice : udpSenderDefaults.imageFormat;
@@ -1612,6 +1682,14 @@ function collectUdpSenderValues(opts = {}){
     values.host = hostRaw;
   }
 
+  const imageHostEl = document.getElementById('udpSenderImageHost');
+  const imageHostRaw = (imageHostEl?.value ?? '').trim();
+  if (imageHostRaw){
+    values.imageHost = imageHostRaw;
+  } else if (udpSenderDefaults.imageHost){
+    values.imageHost = udpSenderDefaults.imageHost;
+  }
+
   function readInt(el, label, key, min, max){
     const raw = (el?.value ?? '').trim();
     if (!raw){
@@ -1648,6 +1726,7 @@ function collectUdpSenderValues(opts = {}){
 
   if (!errors.length){
     if (values.host) udpSenderState.values.host = values.host;
+    if (values.imageHost) udpSenderState.values.imageHost = values.imageHost;
     if (Number.isFinite(values.port)) udpSenderState.values.port = values.port;
     if (Number.isFinite(values.ttl)) udpSenderState.values.ttl = values.ttl;
     if (values.imageFormat) udpSenderState.values.imageFormat = values.imageFormat;
@@ -1734,6 +1813,7 @@ function ensureUdpSenderUI(){
   const inputIds = [
     'udpSenderHost',
     'udpSenderPort',
+    'udpSenderImageHost',
     'udpSenderTtl'
   ];
   for (const id of inputIds){
