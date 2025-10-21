@@ -70,14 +70,13 @@ static uint8_t crc8(const uint8_t *d, size_t n)
 {
     uint8_t c = 0;
     while (n--) {
-        uint8_t in = *d++;
+        c ^= *d++;
         for (int i = 0; i < 8; i++) {
-            uint8_t mix = (c ^ in) & 1U;
-            c >>= 1;
-            if (mix) {
-                c ^= 0x8CU;
+            if (c & 0x80U) {
+                c = (uint8_t)((c << 1) ^ 0xD5U);
+            } else {
+                c <<= 1;
             }
-            in >>= 1;
         }
     }
     return c;
@@ -657,6 +656,22 @@ int main(int argc, char **argv)
         fprintf(stderr, "Warning: no output destinations configured; frames will stay local.\n");
     }
 
+    if (udp_fd >= 0) {
+        char hostbuf[NI_MAXHOST];
+        char servbuf[NI_MAXSERV];
+        int gi = getnameinfo((struct sockaddr *)&udp_addr, udp_addrlen,
+                             hostbuf, sizeof(hostbuf),
+                             servbuf, sizeof(servbuf),
+                             NI_NUMERICHOST | NI_NUMERICSERV);
+        if (gi == 0) {
+            fprintf(stderr, "UDP target %s resolved to %s:%s\n",
+                    cfg.udp_target, hostbuf, servbuf);
+        } else {
+            fprintf(stderr, "UDP target %s ready (resolution error: %s)\n",
+                    cfg.udp_target, gai_strerror(gi));
+        }
+    }
+
     try_rt(10);
     signal(SIGINT, on_sigint);
 
@@ -670,6 +685,8 @@ int main(int argc, char **argv)
 
     double t_min = 1e9, t_max = 0.0, t_sum = 0.0;
     uint64_t t_cnt = 0;
+    uint64_t serial_packets = 0;
+    uint64_t udp_packets = 0;
     char rxbuf[256];
     size_t rxlen = 0;
 
@@ -761,14 +778,20 @@ int main(int argc, char **argv)
                 if (send_all(serial_fd, frame, CRSF_FRAME_LEN + 2) < 0) {
                     perror("serial write");
                     g_run = 0;
+                } else {
+                    serial_packets++;
                 }
             }
             if (udp_fd >= 0) {
                 ssize_t sent = sendto(udp_fd, frame, CRSF_FRAME_LEN + 2, 0,
                                        (struct sockaddr *)&udp_addr, udp_addrlen);
-                if (sent < 0 && errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK) {
-                    perror("udp send");
-                    g_run = 0;
+                if (sent < 0) {
+                    if (errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK) {
+                        perror("udp send");
+                        g_run = 0;
+                    }
+                } else {
+                    udp_packets++;
                 }
             }
         }
@@ -788,12 +811,24 @@ int main(int argc, char **argv)
                 t_sum += dt;
                 t_cnt++;
                 if (t_cnt >= LOOP_HZ) {
-                    printf("loop min %.3f  max %.3f  avg %.3f ms\n",
-                           t_min * 1e3, t_max * 1e3, (t_sum / (double)t_cnt) * 1e3);
+                    printf("loop min %.3f  max %.3f  avg %.3f ms",
+                           t_min * 1e3, t_max * 1e3,
+                           (t_sum / (double)t_cnt) * 1e3);
+                    if (serial_fd >= 0) {
+                        printf("  serial %llu/s",
+                               (unsigned long long)serial_packets);
+                    }
+                    if (udp_fd >= 0) {
+                        printf("  udp %llu/s",
+                               (unsigned long long)udp_packets);
+                    }
+                    putchar('\n');
                     t_min = 1e9;
                     t_max = 0.0;
                     t_sum = 0.0;
                     t_cnt = 0;
+                    serial_packets = 0;
+                    udp_packets = 0;
                 }
             }
         }
