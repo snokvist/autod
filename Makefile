@@ -192,7 +192,7 @@ all: native
 gui: native-gui
 
 # Utilities (native by default)
-tools: sse_tail udp_relay antenna_osd ip2uart joystick2crfs
+tools: sse_tail udp_relay antenna_osd ip2uart joystick2crfs joystick2uart
 tools-musl: sse_tail-musl udp_relay-musl antenna_osd-musl ip2uart-musl
 tools-gnu: sse_tail-gnu udp_relay-gnu antenna_osd-gnu ip2uart-gnu
 
@@ -202,12 +202,12 @@ clean:
 	       sse_tail sse_tail-musl sse_tail-gnu \
 	       udp_relay udp_relay-musl udp_relay-gnu \
 	       antenna_osd antenna_osd-musl antenna_osd-gnu \
-	       ip2uart ip2uart-musl ip2uart-gnu \
-	       joystick2crfs
+               ip2uart ip2uart-musl ip2uart-gnu \
+               joystick2crfs joystick2uart
 
 # Strip whatever exists (no-op if strip tools missing)
 strip: ;
-	-@command -v $(STRIP_NATIVE) >/dev/null 2>&1 && $(STRIP_NATIVE) $(APP) sse_tail udp_relay antenna_osd ip2uart joystick2crfs 2>/dev/null || true
+        -@command -v $(STRIP_NATIVE) >/dev/null 2>&1 && $(STRIP_NATIVE) $(APP) sse_tail udp_relay antenna_osd ip2uart joystick2crfs joystick2uart 2>/dev/null || true
 	-@command -v $(STRIP_MUSL)   >/dev/null 2>&1 && $(STRIP_MUSL)   $(APP)-musl sse_tail-musl udp_relay-musl antenna_osd-musl ip2uart-musl 2>/dev/null || true
 	-@command -v $(STRIP_GNU)    >/dev/null 2>&1 && $(STRIP_GNU)    $(APP)-gnu sse_tail-gnu udp_relay-gnu antenna_osd-gnu ip2uart-gnu 2>/dev/null || true
 
@@ -216,13 +216,26 @@ JOYSTICK2CRFS_BIN   := joystick2crfs
 JOYSTICK2CRFS_OBJ   := $(JOYSTICK2CRFS_BUILD)/joystick2crfs.o
 
 $(JOYSTICK2CRFS_BIN): $(JOYSTICK2CRFS_OBJ)
-	$(CC_NATIVE) $^ $(LDFLAGS_COM) $(SDL2_LDLIBS) -o $@
-	@command -v $(STRIP_NATIVE) >/dev/null 2>&1 && $(STRIP_NATIVE) $@ || true
+        $(CC_NATIVE) $^ $(LDFLAGS_COM) $(SDL2_LDLIBS) -o $@
+        @command -v $(STRIP_NATIVE) >/dev/null 2>&1 && $(STRIP_NATIVE) $@ || true
 
 $(JOYSTICK2CRFS_OBJ): $(SRC_DIR)/joystick2crfs.c | $(JOYSTICK2CRFS_BUILD)
-	$(CC_NATIVE) $(CPPFLAGS_COM) $(CFLAGS_TOOL_O2_GNU11) $(SDL2_CFLAGS) -c $< -o $@
+        $(CC_NATIVE) $(CPPFLAGS_COM) $(CFLAGS_TOOL_O2_GNU11) $(SDL2_CFLAGS) -c $< -o $@
 
 -include $(JOYSTICK2CRFS_OBJ:.o=.d)
+
+JOYSTICK2UART_BUILD := build/native
+JOYSTICK2UART_BIN   := joystick2uart
+JOYSTICK2UART_OBJ   := $(JOYSTICK2UART_BUILD)/joystick2uart.o
+
+$(JOYSTICK2UART_BIN): $(JOYSTICK2UART_OBJ)
+        $(CC_NATIVE) $^ $(LDFLAGS_COM) $(SDL2_LDLIBS) -o $@
+        @command -v $(STRIP_NATIVE) >/dev/null 2>&1 && $(STRIP_NATIVE) $@ || true
+
+$(JOYSTICK2UART_OBJ): $(SRC_DIR)/joystick2uart.c | $(JOYSTICK2UART_BUILD)
+        $(CC_NATIVE) $(CPPFLAGS_COM) $(CFLAGS_TOOL_O2_GNU11) $(SDL2_CFLAGS) -c $< -o $@
+
+-include $(JOYSTICK2UART_OBJ:.o=.d)
 
 install: native udp_relay
 	@if command -v systemctl >/dev/null 2>&1 && [ -z "$(DESTDIR)" ]; then \

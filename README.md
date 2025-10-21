@@ -60,8 +60,9 @@ All commands are run from the repository root.
 | ---- | ------- | ------ |
 | Native headless daemon | `make` | `./autod` |
 | Native daemon with GUI | `make gui` | `./autod-gui` (requires SDL2/SDL_ttf) |
-| Helper tools (native)  | `make tools` | `./sse_tail`, `./udp_relay`, `./ip2uart` |
+| Helper tools (native)  | `make tools` | `./sse_tail`, `./udp_relay`, `./ip2uart`, `./joystick2crfs`, `./joystick2uart` |
 | `joystick2crfs` utility | `make joystick2crfs` | `./joystick2crfs` (requires SDL2; config at `/etc/joystick2crfs.conf`) |
+| `joystick2uart` utility | `make joystick2uart` | `./joystick2uart` (requires SDL2; config at `/etc/joystick2uart.conf`) |
 | Musl cross build       | `make musl` | `./autod-musl` (and friends) |
 | GNU cross build        | `make gnu`  | `./autod-gnu` (and friends) |
 | Clean intermediates    | `make clean` | removes `build/` and produced binaries |
@@ -152,6 +153,9 @@ Static files under `html/` can be served by the daemon (when `serve_ui=1`) or by
 - `udp_relay`: controlled through its own config file [`configs/udp_relay.conf`](configs/udp_relay.conf). When installed system-wide the default path is `/etc/udp_relay/udp_relay.conf`; you can run it directly or via UI bindings.
 - `ip2uart`: run `make ip2uart` (or any of the cross variants) to build a bidirectional bridge between a UART and a TCP or UDP peer. It uses `/etc/ip2uart.conf` by default; a sample lives in [`configs/ip2uart.conf`](configs/ip2uart.conf). Pass `-c /path/to/conf` to point at a different configuration, `-v`/`-vv`/`-vvv` for progressively verbose logging, and send `SIGHUP` to reload the config without dropping the process.
 - `joystick2crfs`: build with `make joystick2crfs` to translate an SDL2 joystick into CRSF frames. The utility requires SDL2 development headers (`libsdl2-dev` on Debian-based systems) and reads `/etc/joystick2crfs.conf` by default. A documented sample lives in [`configs/joystick2crfs.conf`](configs/joystick2crfs.conf); adjust the transport and channel mapping there.
+- `joystick2uart`: build with `make joystick2uart` to stream CRSF frames over UART and/or UDP with a safety latch on channel 5 by default. The utility requires SDL2 and reads `/etc/joystick2uart.conf`, with a sample at [`configs/joystick2uart.conf`](configs/joystick2uart.conf).
+  Configure `arm_toggle` to pick the sticky arm/disarm channel: hold the mapped control high (>1709) for at least 1000 ms to arm,
+  and tap it briefly to disarm.
 
 #### `ip2uart` configuration keys
 
