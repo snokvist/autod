@@ -55,6 +55,15 @@ GUI_LDLIBS   = $(shell $(PKGCONFIG) --libs   sdl2 SDL2_ttf 2>/dev/null)
 SDL2_CFLAGS  = $(shell $(PKGCONFIG) --cflags sdl2 2>/dev/null)
 SDL2_LDLIBS  = $(shell $(PKGCONFIG) --libs   sdl2 2>/dev/null)
 
+ifeq ($(strip $(SDL2_CFLAGS)$(SDL2_LDLIBS)),)
+SDL2_CFLAGS  = $(shell sdl2-config --cflags 2>/dev/null)
+SDL2_LDLIBS  = $(shell sdl2-config --libs   2>/dev/null)
+endif
+
+ifeq ($(strip $(SDL2_CFLAGS)$(SDL2_LDLIBS)),)
+$(error SDL2 development files not found. Install libsdl2-dev (or equivalent) to build joystick2crfs.)
+endif
+
 # ===== Helper macro to define a build "flavor" =====
 # $(call DEFINE_FLAVOR,flavor_name,CC,build_subdir,outbase,suffix,strip_tool)
 define DEFINE_FLAVOR
