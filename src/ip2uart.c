@@ -24,8 +24,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/epoll.h>
+#include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <termios.h>
+#if defined(__linux__)
+#include <asm/ioctls.h>
+#include <asm/termbits.h>
+#endif
 #include <time.h>
 #include <unistd.h>
 
@@ -200,6 +205,22 @@ static speed_t baud_to_speed(int baud){
         default: return 0;
     }
 }
+
+static int set_custom_baud(int fd, int baud){
+#if defined(__linux__) && defined(TCGETS2) && defined(TCSETS2)
+    struct termios2 tio2;
+    if (ioctl(fd, TCGETS2, &tio2) < 0) return -1;
+    tio2.c_cflag &= ~CBAUD;
+    tio2.c_cflag |= BOTHER;
+    tio2.c_ispeed = baud;
+    tio2.c_ospeed = baud;
+    return ioctl(fd, TCSETS2, &tio2);
+#else
+    (void)fd; (void)baud;
+    errno = EINVAL;
+    return -1;
+#endif
+}
 static void get_mono(struct timespec *ts){ clock_gettime(CLOCK_MONOTONIC, ts); }
 static long long diff_ms(const struct timespec *a, const struct timespec *b){ return (a->tv_sec-b->tv_sec)*1000LL + (a->tv_nsec-b->tv_nsec)/1000000LL; }
 
@@ -296,8 +317,13 @@ static int open_uart(const config_t *cfg){
     cfmakeraw(&tio);
 
     speed_t sp = baud_to_speed(cfg->uart_baud);
-    if (!sp) { close(fd); errno = EINVAL; return -1; }
-    cfsetispeed(&tio, sp); cfsetospeed(&tio, sp);
+    if (sp){
+        cfsetispeed(&tio, sp);
+        cfsetospeed(&tio, sp);
+    } else {
+        cfsetispeed(&tio, B38400);
+        cfsetospeed(&tio, B38400);
+    }
 
     tio.c_cflag &= ~CSIZE;
     switch (cfg->uart_databits) { case 5: tio.c_cflag|=CS5; break; case 6: tio.c_cflag|=CS6; break;
@@ -312,6 +338,15 @@ static int open_uart(const config_t *cfg){
     tio.c_cc[VMIN]=1; tio.c_cc[VTIME]=0;
 
     if (tcsetattr(fd, TCSANOW, &tio) < 0) { close(fd); return -1; }
+
+    if (!sp){
+        if (set_custom_baud(fd, cfg->uart_baud) < 0){
+            int saved = errno;
+            close(fd);
+            errno = saved;
+            return -1;
+        }
+    }
     return fd;
 }
 
