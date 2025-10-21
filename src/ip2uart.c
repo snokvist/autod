@@ -57,7 +57,14 @@ static void vlog(int level, const char *fmt, ...){
 
 /* ----------------- Small ring buffer (non-blocking IO helper) ----------------- */
 typedef struct { uint8_t *buf; size_t cap, head, tail, len; } ringbuf_t;
-static void   ring_init (ringbuf_t *r, size_t cap){ r->buf=cap?(uint8_t*)malloc(cap):NULL; r->cap=cap; r->head=r->tail=r->len=0; }
+static int    ring_init (ringbuf_t *r, size_t cap){
+    r->buf=NULL; r->cap=r->head=r->tail=r->len=0;
+    if(!cap) return 0;
+    r->buf=(uint8_t*)malloc(cap);
+    if(!r->buf){ errno=ENOMEM; return -1; }
+    r->cap=cap;
+    return 0;
+}
 static void   ring_free (ringbuf_t *r){ free(r->buf); r->buf=NULL; r->cap=r->head=r->tail=r->len=0; }
 static size_t ring_space(const ringbuf_t *r){ return r->cap - r->len; }
 static size_t ring_write(ringbuf_t *r, const uint8_t *src, size_t n){
@@ -96,6 +103,7 @@ typedef struct {
     // TCP server
     char listen_addr[64];
     int  listen_port;
+    int  tcp_listen_backlog;
 
     // TCP client
     char remote_host[128];
@@ -157,12 +165,14 @@ typedef struct {
     // timers
     struct timespec last_status;
     struct timespec last_uart_rx; // for UDP idle
+    struct timespec next_reconnect;
 
     // rings for short-write safety
     ringbuf_t tcp_out;   // UART/STDIN -> TCP pending bytes
     ringbuf_t uart_out;  // NET -> UART/STDOUT pending bytes
 
     bool running;
+    bool reconnect_pending;
 } state_t;
 
 /* ------------------------------- Signals ------------------------------------ */
@@ -203,7 +213,7 @@ static int parse_config(const char *path, config_t *cfg){
     strcpy(cfg->uart_device, "/dev/ttyS1");
     cfg->uart_baud=115200; cfg->uart_databits=8; strcpy(cfg->uart_parity,"none"); cfg->uart_stopbits=1; strcpy(cfg->uart_flow,"none");
 
-    strcpy(cfg->listen_addr,"0.0.0.0"); cfg->listen_port=5760;
+    strcpy(cfg->listen_addr,"0.0.0.0"); cfg->listen_port=5760; cfg->tcp_listen_backlog=8;
     strcpy(cfg->remote_host,"127.0.0.1"); cfg->remote_port=5760; cfg->reconnect_delay_ms=1000; cfg->tcp_nodelay=1;
 
     strcpy(cfg->udp_bind_addr,"0.0.0.0"); cfg->udp_bind_port=14550; cfg->udp_peer_addr[0]=0; cfg->udp_peer_port=14550;
@@ -242,6 +252,7 @@ static int parse_config(const char *path, config_t *cfg){
         // tcp
         else if(!strcmp(key,"listen_addr")){ strncpy(cfg->listen_addr,val,sizeof(cfg->listen_addr)-1); cfg->listen_addr[sizeof(cfg->listen_addr)-1]=0; }
         else if(!strcmp(key,"listen_port")) cfg->listen_port=atoi(val);
+        else if(!strcmp(key,"tcp_listen_backlog")) cfg->tcp_listen_backlog=atoi(val);
         else if(!strcmp(key,"remote_host")){ strncpy(cfg->remote_host,val,sizeof(cfg->remote_host)-1); cfg->remote_host[sizeof(cfg->remote_host)-1]=0; }
         else if(!strcmp(key,"remote_port")) cfg->remote_port=atoi(val);
         else if(!strcmp(key,"reconnect_delay_ms")) cfg->reconnect_delay_ms=atoi(val);
@@ -270,6 +281,7 @@ static int parse_config(const char *path, config_t *cfg){
     if (cfg->udp_coalesce_bytes <= 0 || cfg->udp_coalesce_bytes > cfg->udp_max_datagram)
         cfg->udp_coalesce_bytes = cfg->udp_max_datagram;
     if (cfg->udp_coalesce_idle_ms < 0) cfg->udp_coalesce_idle_ms = 0;
+    if (cfg->tcp_listen_backlog <= 0) cfg->tcp_listen_backlog = 1;
 
     return 0;
 }
@@ -304,7 +316,7 @@ static int open_uart(const config_t *cfg){
 }
 
 /* ------------------------------- Sockets ------------------------------------ */
-static int make_tcp_server(const char *addr, int port){
+static int make_tcp_server(const char *addr, int port, int backlog){
     int fd=socket(AF_INET,SOCK_STREAM,0); if(fd<0) return -1;
     int one=1; setsockopt(fd,SOL_SOCKET,SO_REUSEADDR,&one,sizeof(one));
 #ifdef SO_REUSEPORT
@@ -313,7 +325,8 @@ static int make_tcp_server(const char *addr, int port){
     struct sockaddr_in sa={0}; sa.sin_family=AF_INET; sa.sin_port=htons(port);
     if(inet_pton(AF_INET,addr,&sa.sin_addr)!=1){ close(fd); errno=EINVAL; return -1; }
     if(bind(fd,(struct sockaddr*)&sa,sizeof(sa))<0){ close(fd); return -1; }
-    if(listen(fd,1)<0){ close(fd); return -1; }
+    if(backlog<=0) backlog=1;
+    if(listen(fd,backlog)<0){ close(fd); return -1; }
     set_nonblock(fd); return fd;
 }
 static int make_tcp_client_connect(const char *host, int port){
@@ -343,7 +356,61 @@ static int add_ep(int epfd,int fd,uint32_t ev){ struct epoll_event e={.events=ev
 static int mod_ep(int epfd,int fd,uint32_t ev){ struct epoll_event e={.events=ev,.data.fd=fd}; return epoll_ctl(epfd,EPOLL_CTL_MOD,fd,&e); }
 static int del_ep(int epfd,int fd){ return epoll_ctl(epfd,EPOLL_CTL_DEL,fd,NULL); }
 static void close_fd(int *fd){ if(*fd>=0){ close(*fd); *fd=-1; } }
-static void sleep_ms(int ms){ struct timespec ts={ms/1000,(ms%1000)*1000000L}; nanosleep(&ts,NULL); }
+static void timespec_add_ms(struct timespec *ts, int ms){
+    ts->tv_sec += ms / 1000;
+    long nsec = ts->tv_nsec + (long)(ms % 1000) * 1000000L;
+    if (nsec >= 1000000000L){
+        ts->tv_sec += 1;
+        nsec -= 1000000000L;
+    }
+    ts->tv_nsec = nsec;
+}
+
+static void schedule_tcp_reconnect(const config_t *cfg, state_t *st, const char *reason){
+    if(cfg->net_mode!=NET_TCP_CLIENT) return;
+    int delay = cfg->reconnect_delay_ms>0?cfg->reconnect_delay_ms:500;
+    struct timespec now; get_mono(&now);
+    struct timespec target = now;
+    timespec_add_ms(&target, delay);
+
+    bool update=false;
+    if(!st->reconnect_pending){
+        st->next_reconnect = target;
+        st->reconnect_pending = true;
+        update=true;
+    } else if(diff_ms(&st->next_reconnect, &target) > 0){
+        st->next_reconnect = target;
+        update=true;
+    }
+
+    if(update){
+        long long wait = diff_ms(&st->next_reconnect, &now);
+        if(wait<0) wait=0;
+        vlog(2, "TCP client: %s, retry in %lldms", reason?reason:"retry scheduled", wait);
+    } else if(reason){
+        vlog(3, "TCP client: %s, retry already pending", reason);
+    }
+}
+
+static void maybe_start_tcp_dial(const config_t *cfg, state_t *st){
+    if(cfg->net_mode!=NET_TCP_CLIENT) return;
+    if(st->fd_net>=0) return;
+    if(!st->reconnect_pending) return;
+
+    struct timespec now; get_mono(&now);
+    if(diff_ms(&now,&st->next_reconnect) < 0) return;
+
+    st->reconnect_pending=false;
+    int fd = make_tcp_client_connect(cfg->remote_host,cfg->remote_port);
+    if(fd<0){
+        schedule_tcp_reconnect(cfg, st, "connect attempt failed");
+        return;
+    }
+
+    st->fd_net = fd;
+    add_ep(st->epfd, st->fd_net, EPOLLIN|EPOLLOUT);
+    vlog(2, "TCP client: dialing %s:%d", cfg->remote_host, cfg->remote_port);
+}
 
 /* --------------------------- Short-write helpers ---------------------------- */
 static ssize_t write_from_ring_fd(int fd, ringbuf_t *r){
@@ -372,10 +439,14 @@ static int reopen_everything(const config_t *cfg, state_t *st){
     st->fd_stdout=-1;
 
     st->tcp_connected=false; st->tcp_peer_ip[0]=0; st->tcp_peer_port=0; st->udp_peer_set=false;
+    st->reconnect_pending=false; memset(&st->next_reconnect,0,sizeof(st->next_reconnect));
     st->udp_out_len=0;
 
     ring_free(&st->tcp_out); ring_free(&st->uart_out);
-    ring_init(&st->tcp_out,cfg->tx_buf); ring_init(&st->uart_out,cfg->tx_buf);
+    if(ring_init(&st->tcp_out,cfg->tx_buf)<0 || ring_init(&st->uart_out,cfg->tx_buf)<0){
+        vlog(1, "ring buffer allocation failed (%s)", strerror(errno));
+        return -1;
+    }
 
     // UART / STDIO
     if (cfg->uart_backend==UART_STDIO){
@@ -396,13 +467,18 @@ static int reopen_everything(const config_t *cfg, state_t *st){
 
     // Network
     if (cfg->net_mode==NET_TCP_SERVER){
-        st->fd_listen=make_tcp_server(cfg->listen_addr,cfg->listen_port); if(st->fd_listen<0){ vlog(1,"TCP listen failed (%s)", strerror(errno)); return -1; }
+        st->fd_listen=make_tcp_server(cfg->listen_addr,cfg->listen_port,cfg->tcp_listen_backlog); if(st->fd_listen<0){ vlog(1,"TCP listen failed (%s)", strerror(errno)); return -1; }
         add_ep(st->epfd, st->fd_listen, EPOLLIN);
-        vlog(1, "TCP server: listen %s:%d", cfg->listen_addr, cfg->listen_port);
+        vlog(1, "TCP server: listen %s:%d (backlog=%d)", cfg->listen_addr, cfg->listen_port, cfg->tcp_listen_backlog);
     } else if (cfg->net_mode==NET_TCP_CLIENT){
-        st->fd_net=make_tcp_client_connect(cfg->remote_host,cfg->remote_port); if(st->fd_net<0){ vlog(1,"TCP client connect setup failed (%s)", strerror(errno)); return -1; }
-        add_ep(st->epfd, st->fd_net, EPOLLIN|EPOLLOUT);
-        vlog(1, "TCP client: connect to %s:%d (nodelay=%d)", cfg->remote_host, cfg->remote_port, cfg->tcp_nodelay);
+        st->fd_net=make_tcp_client_connect(cfg->remote_host,cfg->remote_port);
+        if(st->fd_net<0){
+            vlog(1,"TCP client connect setup failed, will retry (err=%d)", errno);
+            schedule_tcp_reconnect(cfg, st, "initial connect failed");
+        } else {
+            add_ep(st->epfd, st->fd_net, EPOLLIN|EPOLLOUT);
+            vlog(1, "TCP client: connect to %s:%d (nodelay=%d)", cfg->remote_host, cfg->remote_port, cfg->tcp_nodelay);
+        }
     } else { // UDP
         st->fd_net=make_udp_bind(cfg->udp_bind_addr,cfg->udp_bind_port); if(st->fd_net<0){ vlog(1,"UDP bind failed (%s)", strerror(errno)); return -1; }
         add_ep(st->epfd, st->fd_net, EPOLLIN);
@@ -526,7 +602,15 @@ int main(int argc, char **argv){
     st.epfd=epoll_create1(0); if(st.epfd<0){ perror("epoll_create1"); return 1; }
 
     st.udp_out=(uint8_t*)malloc(cfg.udp_max_datagram>0?(size_t)cfg.udp_max_datagram:1200); st.udp_out_len=0;
-    ring_init(&st.tcp_out,cfg.tx_buf); ring_init(&st.uart_out,cfg.tx_buf);
+    if(!st.udp_out){
+        fprintf(stderr,"Failed to allocate UDP buffer (%s)\n", strerror(errno));
+        return 1;
+    }
+    if(ring_init(&st.tcp_out,cfg.tx_buf)<0 || ring_init(&st.uart_out,cfg.tx_buf)<0){
+        fprintf(stderr,"Failed to allocate ring buffers (%s)\n", strerror(errno));
+        free(st.udp_out); st.udp_out=NULL;
+        return 1;
+    }
 
     struct sigaction sa={0}; sa.sa_handler=on_sighup; sigaction(SIGHUP,&sa,NULL);
     sa.sa_handler=on_sigterm; sigaction(SIGINT,&sa,NULL); sigaction(SIGTERM,&sa,NULL);
@@ -552,6 +636,11 @@ int main(int argc, char **argv){
                 cfg=newcfg;
                 free(st.udp_out);
                 st.udp_out=(uint8_t*)malloc(cfg.udp_max_datagram>0?(size_t)cfg.udp_max_datagram:1200);
+                if(!st.udp_out){
+                    fprintf(stderr,"Reopen aborted: UDP buffer alloc failed (%s)\n", strerror(errno));
+                    st.running=false;
+                    break;
+                }
                 st.udp_out_len=0;
                 if(reopen_everything(&cfg,&st)<0){
                     fprintf(stderr,"Reopen failed after SIGHUP (%s)\n", strerror(errno));
@@ -567,6 +656,9 @@ int main(int argc, char **argv){
             }
         }
 
+        if(cfg.net_mode==NET_TCP_CLIENT && st.fd_net<0)
+            maybe_start_tcp_dial(&cfg, &st);
+
         int timeout_ms=500;
         if(cfg.net_mode==NET_UDP_PEER && st.udp_out_len>0 && cfg.udp_coalesce_idle_ms>0){
             struct timespec now; get_mono(&now);
@@ -575,14 +667,20 @@ int main(int argc, char **argv){
             if(remain<0) remain=0;
             if(remain<timeout_ms) timeout_ms=(int)remain;
         }
+        if(cfg.net_mode==NET_TCP_CLIENT && st.fd_net<0 && st.reconnect_pending){
+            struct timespec now; get_mono(&now);
+            long long remain=diff_ms(&st.next_reconnect,&now);
+            if(remain<0) remain=0;
+            if(remain<timeout_ms) timeout_ms=(int)remain;
+        }
         if(cfg.status_interval_ms>0 && timeout_ms>cfg.status_interval_ms) timeout_ms=cfg.status_interval_ms;
 
         // NET events
         uint32_t net_events = EPOLLIN;
-        if(cfg.net_mode==NET_TCP_CLIENT && !st.tcp_connected) net_events|=EPOLLOUT;
-        if(cfg.net_mode!=NET_UDP_PEER && st.tcp_out.len>0) net_events|=EPOLLOUT;
+        if(cfg.net_mode==NET_TCP_CLIENT && st.fd_net>=0 && !st.tcp_connected) net_events|=EPOLLOUT;
+        if(cfg.net_mode!=NET_UDP_PEER && st.tcp_out.len>0 && st.fd_net>=0) net_events|=EPOLLOUT;
         if(cfg.net_mode==NET_UDP_PEER && st.udp_out_len>0) net_events|=EPOLLOUT;
-        mod_ep(st.epfd, st.fd_net, net_events);
+        if(st.fd_net>=0) mod_ep(st.epfd, st.fd_net, net_events);
 
         // UART/STDIO events
         if(cfg.uart_backend==UART_TTY){
@@ -597,6 +695,9 @@ int main(int argc, char **argv){
 
         struct epoll_event evs[MAX_EVENTS]; int n=epoll_wait(st.epfd, evs, MAX_EVENTS, timeout_ms);
         if(n<0){ if(errno==EINTR) continue; break; }
+
+        if(cfg.net_mode==NET_TCP_CLIENT && st.fd_net<0)
+            maybe_start_tcp_dial(&cfg, &st);
 
         // UDP idle flush
         if(cfg.net_mode==NET_UDP_PEER && st.udp_out_len>0 && cfg.udp_coalesce_idle_ms>0){
@@ -631,6 +732,7 @@ int main(int argc, char **argv){
                 int err=0; socklen_t elen=sizeof(err);
                 if(getsockopt(fd,SOL_SOCKET,SO_ERROR,&err,&elen)==0 && err==0){
                     st.tcp_connected=true; st.connects++;
+                    st.reconnect_pending=false; memset(&st.next_reconnect,0,sizeof(st.next_reconnect));
                     mod_ep(st.epfd, fd, EPOLLIN | (st.tcp_out.len?EPOLLOUT:0));
                     struct sockaddr_in pa; socklen_t pl=sizeof(pa);
                     if(getpeername(fd,(struct sockaddr*)&pa,&pl)==0){
@@ -644,10 +746,8 @@ int main(int argc, char **argv){
                     vlog(1, "TCP client: connected to %s:%d", st.tcp_peer_ip, st.tcp_peer_port);
                 } else {
                     del_ep(st.epfd,fd); close_fd(&st.fd_net);
-                    vlog(2, "TCP client: connect failed (err=%d), retry in %dms", err, cfg.reconnect_delay_ms>0?cfg.reconnect_delay_ms:500);
-                    sleep_ms(cfg.reconnect_delay_ms>0?cfg.reconnect_delay_ms:500);
-                    st.fd_net=make_tcp_client_connect(cfg.remote_host,cfg.remote_port);
-                    if(st.fd_net>=0) add_ep(st.epfd, st.fd_net, EPOLLIN|EPOLLOUT);
+                    vlog(2, "TCP client: connect failed (err=%d)", err);
+                    schedule_tcp_reconnect(&cfg, &st, "connect failed");
                 }
                 continue;
             }
@@ -703,6 +803,17 @@ int main(int argc, char **argv){
                     struct sockaddr_in from; socklen_t flen=sizeof(from);
                     ssize_t r=recvfrom(st.fd_net, buf_net, cfg.rx_buf, 0,(struct sockaddr*)&from,&flen);
                     if(r>0){
+                        if(!cfg.udp_peer_addr[0]){
+                            bool changed = !st.udp_peer_set ||
+                                st.udp_peer.sin_addr.s_addr!=from.sin_addr.s_addr ||
+                                st.udp_peer.sin_port!=from.sin_port;
+                            if(changed){
+                                st.udp_peer = from; st.udp_peer_set=true;
+                                char ipbuf[INET_ADDRSTRLEN];
+                                inet_ntop(AF_INET,&from.sin_addr,ipbuf,sizeof(ipbuf));
+                                vlog(1, "UDP: learned peer %s:%d", ipbuf, ntohs(from.sin_port));
+                            }
+                        }
                         int outfd = (cfg.uart_backend==UART_STDIO)? STDOUT_FILENO : st.fd_uart;
                         ssize_t w=write(outfd, buf_net, (size_t)r);
                         if(w>0){
@@ -756,9 +867,7 @@ int main(int argc, char **argv){
                             if(cfg.net_mode==NET_TCP_SERVER || cfg.net_mode==NET_TCP_CLIENT){
                                 disconnect_tcp(&st);
                                 if(cfg.net_mode==NET_TCP_CLIENT){
-                                    st.fd_net=make_tcp_client_connect(cfg.remote_host,cfg.remote_port);
-                                    if(st.fd_net>=0) add_ep(st.epfd, st.fd_net, EPOLLIN|EPOLLOUT);
-                                    vlog(2, "TCP client: reconnect scheduled");
+                                    schedule_tcp_reconnect(&cfg, &st, "peer closed");
                                 }
                             }
                         }
@@ -766,18 +875,14 @@ int main(int argc, char **argv){
                         if(cfg.net_mode==NET_TCP_SERVER || cfg.net_mode==NET_TCP_CLIENT){
                             disconnect_tcp(&st);
                             if(cfg.net_mode==NET_TCP_CLIENT){
-                                st.fd_net=make_tcp_client_connect(cfg.remote_host,cfg.remote_port);
-                                if(st.fd_net>=0) add_ep(st.epfd, st.fd_net, EPOLLIN|EPOLLOUT);
-                                vlog(2, "TCP client: reconnect scheduled");
+                                schedule_tcp_reconnect(&cfg, &st, "peer closed");
                             }
                         }
                     } else if(errno!=EAGAIN && errno!=EWOULDBLOCK){
                         if(cfg.net_mode==NET_TCP_SERVER || cfg.net_mode==NET_TCP_CLIENT){
                             disconnect_tcp(&st);
                             if(cfg.net_mode==NET_TCP_CLIENT){
-                                st.fd_net=make_tcp_client_connect(cfg.remote_host,cfg.remote_port);
-                                if(st.fd_net>=0) add_ep(st.epfd, st.fd_net, EPOLLIN|EPOLLOUT);
-                                vlog(2, "TCP client: error -> reconnect scheduled");
+                                schedule_tcp_reconnect(&cfg, &st, "socket error");
                             }
                         }
                     }
