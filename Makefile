@@ -202,12 +202,12 @@ clean:
 	       sse_tail sse_tail-musl sse_tail-gnu \
 	       udp_relay udp_relay-musl udp_relay-gnu \
 	       antenna_osd antenna_osd-musl antenna_osd-gnu \
-               ip2uart ip2uart-musl ip2uart-gnu \
-               joystick2crfs joystick2uart
+	       ip2uart ip2uart-musl ip2uart-gnu \
+	       joystick2crfs joystick2uart
 
 # Strip whatever exists (no-op if strip tools missing)
 strip: ;
-        -@command -v $(STRIP_NATIVE) >/dev/null 2>&1 && $(STRIP_NATIVE) $(APP) sse_tail udp_relay antenna_osd ip2uart joystick2crfs joystick2uart 2>/dev/null || true
+	-@command -v $(STRIP_NATIVE) >/dev/null 2>&1 && $(STRIP_NATIVE) $(APP) sse_tail udp_relay antenna_osd ip2uart joystick2crfs joystick2uart 2>/dev/null || true
 	-@command -v $(STRIP_MUSL)   >/dev/null 2>&1 && $(STRIP_MUSL)   $(APP)-musl sse_tail-musl udp_relay-musl antenna_osd-musl ip2uart-musl 2>/dev/null || true
 	-@command -v $(STRIP_GNU)    >/dev/null 2>&1 && $(STRIP_GNU)    $(APP)-gnu sse_tail-gnu udp_relay-gnu antenna_osd-gnu ip2uart-gnu 2>/dev/null || true
 
