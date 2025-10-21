@@ -57,6 +57,7 @@ typedef struct {
     int map[16];
     int invert[16];
     int dead[16];
+    int arm_toggle;             /* -1 disables, otherwise channel index */
     int joystick_index;
     int rescan_interval;        /* seconds */
 } config_t;
@@ -468,6 +469,7 @@ static void config_defaults(config_t *cfg)
     cfg->serial_baud = 115200;
     cfg->udp_enabled = 1;
     snprintf(cfg->udp_target, sizeof(cfg->udp_target), "%s", "192.168.0.1:14550");
+    cfg->arm_toggle = 4;
     cfg->joystick_index = 0;
     cfg->rescan_interval = 5;
     for (int i = 0; i < 16; i++) {
@@ -541,6 +543,15 @@ static int config_load(config_t *cfg, const char *path)
             }
         } else if (!strcasecmp(key, "udp_target")) {
             snprintf(cfg->udp_target, sizeof(cfg->udp_target), "%s", val);
+        } else if (!strcasecmp(key, "arm_toggle")) {
+            int ch = atoi(val);
+            if (ch >= 1 && ch <= 16) {
+                cfg->arm_toggle = ch - 1;
+            } else if (ch <= 0) {
+                cfg->arm_toggle = -1;
+            } else {
+                fprintf(stderr, "%s:%d: arm_toggle must be 1-16 (or 0 to disable)\n", path, lineno);
+            }
         } else if (!strcasecmp(key, "map")) {
             parse_map_list(val, cfg->map);
         } else if (!strcasecmp(key, "invert")) {
@@ -591,6 +602,17 @@ static struct timespec timespec_add(struct timespec ts, int sec, long nsec)
         ts.tv_sec -= 1;
     }
     return ts;
+}
+
+static int64_t timespec_diff_ms(const struct timespec *start, const struct timespec *end)
+{
+    int64_t sec = (int64_t)end->tv_sec - (int64_t)start->tv_sec;
+    int64_t nsec = (int64_t)end->tv_nsec - (int64_t)start->tv_nsec;
+    if (nsec < 0) {
+        sec -= 1;
+        nsec += 1000000000L;
+    }
+    return sec * 1000 + nsec / 1000000L;
 }
 
 /* ------------------------------- Main -------------------------------------- */
@@ -695,6 +717,11 @@ int main(int argc, char **argv)
     frame[1] = CRSF_FRAME_LEN;
     frame[2] = CRSF_TYPE_CHANNELS;
 
+    int arm_channel = (cfg.arm_toggle >= 0 && cfg.arm_toggle < 16) ? cfg.arm_toggle : -1;
+    int arm_sticky = 0;
+    int arm_press_active = 0;
+    struct timespec arm_press_start = {0, 0};
+
     while (g_run) {
         struct timespec now;
         clock_gettime(CLOCK_MONOTONIC, &now);
@@ -756,6 +783,42 @@ int main(int argc, char **argv)
             }
             ch_out[i] = v;
             raw_out[i] = raw_source[src];
+        }
+
+        if (arm_channel >= 0) {
+            int src = cfg.map[arm_channel];
+            if (src < 0 || src >= 16) {
+                src = arm_channel;
+            }
+            uint16_t arm_input = ch_source[src];
+            int arm_high = arm_input > 1709;
+            if (arm_high) {
+                if (!arm_press_active) {
+                    arm_press_start = now;
+                    arm_press_active = 1;
+                } else if (!arm_sticky) {
+                    int64_t held = timespec_diff_ms(&arm_press_start, &now);
+                    if (held >= 1000) {
+                        arm_sticky = 1;
+                    }
+                }
+            } else if (arm_press_active) {
+                int64_t held = timespec_diff_ms(&arm_press_start, &now);
+                if (arm_sticky && held < 1000) {
+                    arm_sticky = 0;
+                }
+                arm_press_active = 0;
+            }
+
+            uint16_t arm_high_value = cfg.invert[arm_channel] ? CRSF_MIN : CRSF_MAX;
+            uint16_t arm_low_value = cfg.invert[arm_channel] ? CRSF_MAX : CRSF_MIN;
+            if (arm_sticky || arm_high) {
+                ch_out[arm_channel] = arm_high_value;
+                raw_out[arm_channel] = 1;
+            } else {
+                ch_out[arm_channel] = arm_low_value;
+                raw_out[arm_channel] = 0;
+            }
         }
 
         if (loops % every == 0) {
