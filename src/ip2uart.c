@@ -29,7 +29,9 @@
 #include <termios.h>
 #if defined(__linux__)
 #include <asm/ioctls.h>
+#define termios asm_termios
 #include <asm/termbits.h>
+#undef termios
 #endif
 #include <time.h>
 #include <unistd.h>
