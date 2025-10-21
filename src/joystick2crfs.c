@@ -70,14 +70,13 @@ static uint8_t crc8(const uint8_t *d, size_t n)
 {
     uint8_t c = 0;
     while (n--) {
-        uint8_t in = *d++;
+        c ^= *d++;
         for (int i = 0; i < 8; i++) {
-            uint8_t mix = (c ^ in) & 1U;
-            c >>= 1;
-            if (mix) {
-                c ^= 0x8CU;
+            if (c & 0x80U) {
+                c = (uint8_t)((c << 1) ^ 0xD5U);
+            } else {
+                c <<= 1;
             }
-            in >>= 1;
         }
     }
     return c;
