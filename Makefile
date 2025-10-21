@@ -216,11 +216,11 @@ JOYSTICK2CRFS_BIN   := joystick2crfs
 JOYSTICK2CRFS_OBJ   := $(JOYSTICK2CRFS_BUILD)/joystick2crfs.o
 
 $(JOYSTICK2CRFS_BIN): $(JOYSTICK2CRFS_OBJ)
-        $(CC_NATIVE) $^ $(LDFLAGS_COM) $(SDL2_LDLIBS) -o $@
-        @command -v $(STRIP_NATIVE) >/dev/null 2>&1 && $(STRIP_NATIVE) $@ || true
+	$(CC_NATIVE) $^ $(LDFLAGS_COM) $(SDL2_LDLIBS) -o $@
+	@command -v $(STRIP_NATIVE) >/dev/null 2>&1 && $(STRIP_NATIVE) $@ || true
 
 $(JOYSTICK2CRFS_OBJ): $(SRC_DIR)/joystick2crfs.c | $(JOYSTICK2CRFS_BUILD)
-        $(CC_NATIVE) $(CPPFLAGS_COM) $(CFLAGS_TOOL_O2_GNU11) $(SDL2_CFLAGS) -c $< -o $@
+	$(CC_NATIVE) $(CPPFLAGS_COM) $(CFLAGS_TOOL_O2_GNU11) $(SDL2_CFLAGS) -c $< -o $@
 
 -include $(JOYSTICK2CRFS_OBJ:.o=.d)
 
@@ -229,11 +229,11 @@ JOYSTICK2UART_BIN   := joystick2uart
 JOYSTICK2UART_OBJ   := $(JOYSTICK2UART_BUILD)/joystick2uart.o
 
 $(JOYSTICK2UART_BIN): $(JOYSTICK2UART_OBJ)
-        $(CC_NATIVE) $^ $(LDFLAGS_COM) $(SDL2_LDLIBS) -o $@
-        @command -v $(STRIP_NATIVE) >/dev/null 2>&1 && $(STRIP_NATIVE) $@ || true
+	$(CC_NATIVE) $^ $(LDFLAGS_COM) $(SDL2_LDLIBS) -o $@
+	@command -v $(STRIP_NATIVE) >/dev/null 2>&1 && $(STRIP_NATIVE) $@ || true
 
 $(JOYSTICK2UART_OBJ): $(SRC_DIR)/joystick2uart.c | $(JOYSTICK2UART_BUILD)
-        $(CC_NATIVE) $(CPPFLAGS_COM) $(CFLAGS_TOOL_O2_GNU11) $(SDL2_CFLAGS) -c $< -o $@
+	$(CC_NATIVE) $(CPPFLAGS_COM) $(CFLAGS_TOOL_O2_GNU11) $(SDL2_CFLAGS) -c $< -o $@
 
 -include $(JOYSTICK2UART_OBJ:.o=.d)
 
