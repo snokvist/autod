@@ -39,6 +39,37 @@
   .mut{color:var(--mut)}
   .sse a{color:inherit;text-decoration:underline dotted;word-break:break-all}
 
+  .joystick-body{display:grid;gap:12px}
+  .joystick-status{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+  .joystick-status .mut{font-size:12px}
+  .joystick-layout{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));align-items:flex-start}
+  .controller-diagram{position:relative;background:#0f1317;border:1px solid var(--line);border-radius:20px;padding:16px;min-height:260px;display:flex;align-items:center;justify-content:center;overflow:hidden}
+  .controller-diagram svg{position:absolute;inset:16px;width:calc(100% - 32px);height:calc(100% - 32px);max-height:none}
+  .controller-diagram::after{content:"";position:absolute;inset:12px;border-radius:24px;pointer-events:none;box-shadow:inset 0 0 0 1px rgba(255,255,255,.02)}
+  .joystick-node{position:absolute;left:var(--x);top:var(--y);transform:translate(-50%,-50%);display:grid;gap:4px;justify-items:center;text-align:center;pointer-events:none}
+  .joystick-node-bubble{width:42px;height:42px;border-radius:50%;background:rgba(12,16,20,.85);border:2px solid rgba(255,255,255,.12);display:flex;align-items:center;justify-content:center;font-weight:600;transition:border-color .2s ease,box-shadow .2s ease}
+  .joystick-node-value{font-size:12px;color:var(--mut);min-width:44px}
+  .joystick-node.active .joystick-node-bubble{border-color:rgba(54,194,117,.6);box-shadow:0 0 12px rgba(54,194,117,.35)}
+  .joystick-node.active .joystick-node-value{color:var(--fg)}
+  .joystick-channel-list{display:grid;gap:10px}
+  .joystick-channel-row{border:1px solid var(--line);border-radius:14px;background:#0f1317;padding:10px;display:grid;gap:8px;transition:border-color .2s ease,box-shadow .2s ease}
+  .joystick-channel-row.active{border-color:rgba(54,194,117,.45);box-shadow:0 0 0 1px rgba(54,194,117,.2)}
+  .joystick-channel-row .top{display:flex;justify-content:space-between;align-items:center;gap:8px}
+  .joystick-channel-row .name{font-weight:600}
+  .joystick-channel-row .code{font-size:12px;color:var(--mut)}
+  .joystick-meter{position:relative;height:8px;background:#12161a;border-radius:999px;overflow:hidden}
+  .joystick-meter::before{content:"";position:absolute;left:50%;top:0;bottom:0;width:2px;background:rgba(154,161,166,.35)}
+  .joystick-meter-fill{position:absolute;top:0;bottom:0;left:50%;width:0;background:linear-gradient(90deg,var(--ok),#64d38f);transition:all .2s ease}
+  .joystick-meter-fill[data-dir="neg"]{background:linear-gradient(90deg,#ff6b6b,#ffa0a0)}
+  .joystick-meter-fill.active{box-shadow:0 0 6px rgba(54,194,117,.35)}
+  .joystick-channel-row .values{display:flex;flex-wrap:wrap;gap:12px;font-size:12px;color:var(--mut)}
+  .joystick-channel-row .values strong{color:var(--fg)}
+  .joystick-hint{font-size:12px;color:var(--mut)}
+  @media (max-width:640px){
+    .controller-diagram{min-height:220px}
+    .joystick-node-bubble{width:38px;height:38px}
+  }
+
   .dvr-body{display:grid;grid-template-rows:auto 1fr;gap:10px;height:360px;min-height:0}
   .dvr-scroll{display:grid;gap:6px;overflow:auto;padding-right:4px;min-height:0}
   .dvr-list{display:grid;gap:6px}
@@ -212,6 +243,38 @@
         <div class="mut">Last response:</div>
         <textarea id="pixelpilotResp" readonly></textarea>
       </div>
+    </div>
+  </section>
+
+  <section class="card" id="joystickCard" style="display:none">
+    <h2>Joystick monitor</h2>
+    <div class="body grid joystick-body">
+      <div class="joystick-status">
+        <div class="status-indicator" id="joystickStatus">Idle</div>
+        <div class="mut" id="joystickLastUpdate">Waiting for samples…</div>
+      </div>
+      <div class="joystick-layout">
+        <div class="controller-diagram" id="joystickDiagram" aria-label="Xbox controller layout">
+          <svg class="controller-svg" viewBox="0 0 400 220" role="presentation" aria-hidden="true" focusable="false">
+            <defs>
+              <linearGradient id="joystickControllerBody" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stop-color="#1f242a" />
+                <stop offset="100%" stop-color="#12171d" />
+              </linearGradient>
+            </defs>
+            <path d="M80 190 Q30 120 70 80 L120 40 Q160 15 200 15 Q240 15 280 40 L330 80 Q370 120 320 190 L265 165 Q235 150 200 150 Q165 150 135 165 Z" fill="url(#joystickControllerBody)" stroke="rgba(0,0,0,0.45)" stroke-width="6" stroke-linejoin="round" />
+            <ellipse cx="110" cy="70" rx="46" ry="32" fill="rgba(15,19,23,0.9)" />
+            <ellipse cx="290" cy="70" rx="46" ry="32" fill="rgba(15,19,23,0.9)" />
+            <circle cx="135" cy="115" r="38" fill="#0f1317" stroke="rgba(0,0,0,0.4)" stroke-width="4" />
+            <circle cx="265" cy="115" r="32" fill="#0f1317" stroke="rgba(0,0,0,0.4)" stroke-width="4" />
+            <circle cx="200" cy="72" r="18" fill="#1a1f24" stroke="rgba(0,0,0,0.35)" stroke-width="3" />
+            <rect x="180" y="52" width="14" height="6" rx="3" fill="#cfd6dd" opacity="0.35" />
+            <rect x="206" y="52" width="14" height="6" rx="3" fill="#cfd6dd" opacity="0.35" />
+          </svg>
+        </div>
+        <div class="joystick-channel-list" id="joystickChannelList"></div>
+      </div>
+      <div class="joystick-hint" id="joystickHint">Normalized range: 988–2012 (center 1500). Raw range: ±32768. Activate a control on the physical gamepad to see which channel responds.</div>
     </div>
   </section>
 
@@ -400,6 +463,425 @@ const fmtOneLine = obj => JSON.stringify(obj);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const clamp = (v,min,max)=>Math.max(min,Math.min(max,v));
 const DEFAULT_REMOTE_EXEC_TARGET = 'http://192.168.2.203:55667/exec';
+
+const JOYSTICK_CHANNEL_MIN = 988;
+const JOYSTICK_CHANNEL_MAX = 2012;
+const JOYSTICK_CENTER = (JOYSTICK_CHANNEL_MIN + JOYSTICK_CHANNEL_MAX) / 2;
+const JOYSTICK_HALF_RANGE = (JOYSTICK_CHANNEL_MAX - JOYSTICK_CHANNEL_MIN) / 2;
+const JOYSTICK_RAW_RANGE = 32768;
+const JOYSTICK_DEFAULT_EVENT = 'joystick2crfs';
+const JOYSTICK_LAYOUT = [
+  { channel:1, short:'LX', label:'Left Stick X', x:24, y:66 },
+  { channel:2, short:'LY', label:'Left Stick Y', x:24, y:46 },
+  { channel:3, short:'RX', label:'Right Stick X', x:76, y:66 },
+  { channel:4, short:'RY', label:'Right Stick Y', x:76, y:46 },
+  { channel:5, short:'LT', label:'Left Trigger', x:16, y:18 },
+  { channel:6, short:'RT', label:'Right Trigger', x:84, y:18 },
+  { channel:7, short:'LB', label:'Left Bumper', x:28, y:28 },
+  { channel:8, short:'RB', label:'Right Bumper', x:72, y:28 },
+  { channel:9, short:'DU', label:'D-pad Up', x:38, y:44 },
+  { channel:10, short:'DD', label:'D-pad Down', x:38, y:68 },
+  { channel:11, short:'DL', label:'D-pad Left', x:28, y:56 },
+  { channel:12, short:'DR', label:'D-pad Right', x:48, y:56 },
+  { channel:13, short:'Y', label:'Button Y', x:84, y:38 },
+  { channel:14, short:'X', label:'Button X', x:72, y:52 },
+  { channel:15, short:'B', label:'Button B', x:92, y:52 },
+  { channel:16, short:'A', label:'Button A', x:82, y:64 }
+];
+
+const joystickUI = {
+  built:false,
+  card:null,
+  statusEl:null,
+  lastUpdateEl:null,
+  diagramEl:null,
+  channelListEl:null,
+  hintEl:null,
+  slots:[],
+  rows:[],
+  eventSource:null,
+  reconnectTimer:null,
+  sseUrl:null,
+  eventNames:[],
+  lastSampleTs:null,
+  sampleCount:0
+};
+
+function dedupeStringArray(values){
+  const seen = new Set();
+  const result = [];
+  (values || []).forEach(val => {
+    if (typeof val !== 'string') return;
+    const trimmed = val.trim();
+    if (!trimmed || seen.has(trimmed)) return;
+    seen.add(trimmed);
+    result.push(trimmed);
+  });
+  return result;
+}
+
+function arraysEqual(a, b){
+  if (a === b) return true;
+  if (!Array.isArray(a) || !Array.isArray(b)) return false;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++){
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
+function initJoystickDom(){
+  if (!joystickUI.card){
+    joystickUI.card = document.getElementById('joystickCard');
+    joystickUI.statusEl = document.getElementById('joystickStatus');
+    joystickUI.lastUpdateEl = document.getElementById('joystickLastUpdate');
+    joystickUI.diagramEl = document.getElementById('joystickDiagram');
+    joystickUI.channelListEl = document.getElementById('joystickChannelList');
+    joystickUI.hintEl = document.getElementById('joystickHint');
+  }
+}
+
+function buildJoystickUI(){
+  initJoystickDom();
+  if (joystickUI.built) return;
+  const diagram = joystickUI.diagramEl;
+  const list = joystickUI.channelListEl;
+  if (!diagram || !list) return;
+  JOYSTICK_LAYOUT.forEach(entry => {
+    const idx = entry.channel - 1;
+    const node = document.createElement('div');
+    node.className = 'joystick-node';
+    node.style.setProperty('--x', entry.x + '%');
+    node.style.setProperty('--y', entry.y + '%');
+    const bubble = document.createElement('div');
+    bubble.className = 'joystick-node-bubble';
+    bubble.textContent = entry.short;
+    const value = document.createElement('div');
+    value.className = 'joystick-node-value';
+    value.textContent = '—';
+    node.append(bubble, value);
+    diagram.appendChild(node);
+    joystickUI.slots[idx] = { node, valueEl:value, entry };
+  });
+  list.innerHTML = '';
+  JOYSTICK_LAYOUT.forEach(entry => {
+    const idx = entry.channel - 1;
+    const row = document.createElement('div');
+    row.className = 'joystick-channel-row';
+    const top = document.createElement('div');
+    top.className = 'top';
+    const name = document.createElement('div');
+    name.className = 'name';
+    name.textContent = entry.label;
+    const code = document.createElement('div');
+    code.className = 'code';
+    code.textContent = `ch${entry.channel}`;
+    top.append(name, code);
+    const meter = document.createElement('div');
+    meter.className = 'joystick-meter';
+    const fill = document.createElement('div');
+    fill.className = 'joystick-meter-fill';
+    meter.appendChild(fill);
+    const values = document.createElement('div');
+    values.className = 'values';
+    const normSpan = document.createElement('span');
+    const normValue = document.createElement('strong');
+    normValue.textContent = '—';
+    const axisValue = document.createElement('strong');
+    axisValue.textContent = '—';
+    normSpan.append('Norm ', normValue, ' (', axisValue, ')');
+    const rawSpan = document.createElement('span');
+    const rawValue = document.createElement('strong');
+    rawValue.textContent = '—';
+    const rawAxisValue = document.createElement('strong');
+    rawAxisValue.textContent = '—';
+    rawSpan.append('Raw ', rawValue, ' (', rawAxisValue, ')');
+    values.append(normSpan, rawSpan);
+    row.append(top, meter, values);
+    list.appendChild(row);
+    joystickUI.rows[idx] = {
+      row,
+      normEl:normValue,
+      axisEl:axisValue,
+      rawEl:rawValue,
+      rawAxisEl:rawAxisValue,
+      fillEl:fill,
+      entry
+    };
+  });
+  resetJoystickReadings();
+  joystickUI.built = true;
+}
+
+function resetJoystickReadings(){
+  joystickUI.slots.forEach(slot => {
+    if (!slot) return;
+    slot.valueEl.textContent = '—';
+    slot.node.classList.remove('active');
+  });
+  joystickUI.rows.forEach(rowState => {
+    if (!rowState) return;
+    rowState.normEl.textContent = '—';
+    rowState.axisEl.textContent = '—';
+    rowState.rawEl.textContent = '—';
+    rowState.rawAxisEl.textContent = '—';
+    if (rowState.fillEl){
+      rowState.fillEl.style.width = '0%';
+      rowState.fillEl.style.left = '50%';
+      rowState.fillEl.dataset.dir = 'pos';
+      rowState.fillEl.classList.remove('active');
+    }
+    rowState.row.classList.remove('active');
+  });
+  joystickUI.sampleCount = 0;
+  joystickUI.lastSampleTs = null;
+  if (joystickUI.lastUpdateEl){
+    joystickUI.lastUpdateEl.textContent = 'Waiting for samples…';
+  }
+}
+
+function setJoystickStatus(state, detail=''){
+  const el = joystickUI.statusEl;
+  if (!el) return;
+  el.classList.remove('running','ok','err','flash');
+  let label = '';
+  switch(state){
+    case 'connecting':
+      el.classList.add('running');
+      label = 'Connecting…';
+      break;
+    case 'ok':
+      el.classList.add('ok');
+      label = 'Streaming';
+      break;
+    case 'err':
+      el.classList.add('err');
+      label = 'Disconnected';
+      break;
+    case 'idle':
+    default:
+      label = state === 'idle' ? 'Idle' : state;
+      break;
+  }
+  el.textContent = detail ? `${label} • ${detail}` : label;
+}
+
+function flashJoystickStatus(){
+  const el = joystickUI.statusEl;
+  if (!el) return;
+  el.classList.remove('flash');
+  void el.offsetWidth;
+  el.classList.add('flash');
+}
+
+function fmtMs(ms){
+  if (typeof ms !== 'number' || !Number.isFinite(ms) || ms <= 0) return '—';
+  if (ms < 1000) return `${Math.round(ms)} ms`;
+  if (ms < 60000) return `${(ms/1000).toFixed(ms < 10000 ? 2 : 1)} s`;
+  const minutes = ms / 60000;
+  if (minutes < 60) return `${minutes.toFixed(1)} min`;
+  const hours = minutes / 60;
+  return `${hours.toFixed(1)} h`;
+}
+
+function formatAxis(val){
+  if (typeof val !== 'number' || !Number.isFinite(val)) return '—';
+  const clamped = clamp(val, -1, 1);
+  const rounded = clamped.toFixed(2);
+  return (clamped >= 0 ? '+' : '') + rounded;
+}
+
+function updateJoystickChannel(index, normVal, rawVal){
+  const slot = joystickUI.slots[index];
+  const row = joystickUI.rows[index];
+  const hasNorm = typeof normVal === 'number' && Number.isFinite(normVal);
+  const hasRaw = typeof rawVal === 'number' && Number.isFinite(rawVal);
+  const axis = hasNorm ? clamp((normVal - JOYSTICK_CENTER) / JOYSTICK_HALF_RANGE, -1.5, 1.5) : null;
+  const rawAxis = hasRaw ? clamp(rawVal / JOYSTICK_RAW_RANGE, -1.5, 1.5) : null;
+  const meterValue = axis !== null ? axis : rawAxis;
+  if (slot){
+    slot.valueEl.textContent = meterValue !== null ? formatAxis(meterValue) : '—';
+    slot.node.classList.toggle('active', Math.abs(meterValue ?? 0) > 0.12);
+  }
+  if (row){
+    row.normEl.textContent = hasNorm ? Math.round(normVal) : '—';
+    row.axisEl.textContent = axis !== null ? formatAxis(axis) : '—';
+    row.rawEl.textContent = hasRaw ? Math.round(rawVal) : '—';
+    row.rawAxisEl.textContent = rawAxis !== null ? formatAxis(rawAxis) : '—';
+    if (row.fillEl){
+      if (meterValue === null){
+        row.fillEl.style.width = '0%';
+        row.fillEl.style.left = '50%';
+        row.fillEl.dataset.dir = 'pos';
+        row.fillEl.classList.remove('active');
+      } else {
+        const clampedVal = clamp(meterValue, -1, 1);
+        const absVal = Math.abs(clampedVal);
+        const widthVal = Math.max(0, Math.min(50, absVal * 50));
+        const widthPct = widthVal.toFixed(2) + '%';
+        if (clampedVal >= 0){
+          row.fillEl.style.left = '50%';
+          row.fillEl.dataset.dir = 'pos';
+        } else {
+          row.fillEl.style.left = `${50 - widthVal}%`;
+          row.fillEl.dataset.dir = 'neg';
+        }
+        row.fillEl.style.width = widthPct;
+        if (absVal > 0.05){
+          row.fillEl.classList.add('active');
+        } else {
+          row.fillEl.classList.remove('active');
+        }
+      }
+    }
+    const active = Math.max(Math.abs(axis ?? 0), Math.abs(rawAxis ?? 0)) > 0.12;
+    row.row.classList.toggle('active', active);
+  }
+}
+
+function applyJoystickSample(sample){
+  if (!sample || typeof sample !== 'object') return;
+  const channels = Array.isArray(sample.channels) ? sample.channels : [];
+  const raw = Array.isArray(sample.raw) ? sample.raw : [];
+  const now = Date.now();
+  const prev = joystickUI.lastSampleTs;
+  joystickUI.lastSampleTs = now;
+  joystickUI.sampleCount = (joystickUI.sampleCount || 0) + 1;
+  const delta = (typeof prev === 'number' && Number.isFinite(prev)) ? now - prev : null;
+  const detail = delta ? `Δ ${fmtMs(delta)}` : '';
+  setJoystickStatus('ok', detail);
+  flashJoystickStatus();
+  if (joystickUI.lastUpdateEl){
+    const stamp = new Date(now).toLocaleTimeString();
+    joystickUI.lastUpdateEl.textContent = delta
+      ? `Last sample ${stamp} • Δ ${fmtMs(delta)}`
+      : `Last sample ${stamp}`;
+  }
+  JOYSTICK_LAYOUT.forEach(entry => {
+    const idx = entry.channel - 1;
+    const normVal = Number.isFinite(channels[idx]) ? channels[idx] : null;
+    const rawVal = Number.isFinite(raw[idx]) ? raw[idx] : null;
+    updateJoystickChannel(idx, normVal, rawVal);
+  });
+}
+
+function processJoystickEvent(evt){
+  if (!evt || typeof evt.data !== 'string' || !evt.data.trim()) return;
+  let payload = null;
+  try {
+    payload = JSON.parse(evt.data);
+  } catch { return; }
+  if (!payload || typeof payload !== 'object') return;
+  if (!Array.isArray(payload.channels) && !Array.isArray(payload.raw)) return;
+  applyJoystickSample(payload);
+}
+
+function stopJoystickStream(){
+  if (joystickUI.eventSource){
+    try { joystickUI.eventSource.close(); } catch {}
+  }
+  joystickUI.eventSource = null;
+  if (joystickUI.reconnectTimer){
+    clearTimeout(joystickUI.reconnectTimer);
+    joystickUI.reconnectTimer = null;
+  }
+}
+
+function scheduleJoystickReconnect(){
+  if (joystickUI.reconnectTimer || !joystickUI.sseUrl) return;
+  joystickUI.reconnectTimer = setTimeout(() => {
+    joystickUI.reconnectTimer = null;
+    if (!joystickUI.sseUrl || joystickUI.eventSource) return;
+    startJoystickStream();
+  }, 2000);
+}
+
+function startJoystickStream(){
+  if (!joystickUI.sseUrl || joystickUI.eventSource) return;
+  try {
+    setJoystickStatus('connecting');
+    const es = new EventSource(joystickUI.sseUrl);
+    joystickUI.eventSource = es;
+    const handler = evt => processJoystickEvent(evt);
+    es.addEventListener('open', () => {
+      setJoystickStatus('ok', 'connected');
+    });
+    es.addEventListener('error', () => {
+      setJoystickStatus('err', 'stream interrupted');
+      stopJoystickStream();
+      scheduleJoystickReconnect();
+    });
+    es.addEventListener('message', handler);
+    if (Array.isArray(joystickUI.eventNames)){
+      joystickUI.eventNames.forEach(name => {
+        if (!name || name === 'message') return;
+        es.addEventListener(name, handler);
+      });
+    }
+  } catch (e) {
+    setJoystickStatus('err', 'connection failed');
+    stopJoystickStream();
+    scheduleJoystickReconnect();
+  }
+}
+
+function findJoystickSseEntry(caps){
+  if (!caps) return null;
+  const entries = Array.isArray(caps.sse) ? caps.sse : [];
+  const primary = entries.find(entry => {
+    if (!entry || typeof entry.url !== 'string') return false;
+    const url = entry.url.trim();
+    if (!url) return false;
+    const label = [entry.event, entry.name, entry.topic, entry.channel]
+      .filter(Boolean)
+      .map(v => String(v).toLowerCase())
+      .join(' ');
+    return label.includes('joystick2crfs') || label.includes('joystick');
+  });
+  if (primary) return primary;
+  return entries.find(entry => entry && typeof entry.url === 'string' && entry.url.trim());
+}
+
+function ensureJoystickUI(caps){
+  buildJoystickUI();
+  const entry = findJoystickSseEntry(caps);
+  const newUrl = entry && typeof entry.url === 'string' && entry.url.trim() ? entry.url.trim() : null;
+  const newEvents = entry
+    ? dedupeStringArray([entry.event, entry.name, entry.topic, entry.channel, JOYSTICK_DEFAULT_EVENT])
+    : dedupeStringArray([JOYSTICK_DEFAULT_EVENT]);
+  const urlChanged = newUrl !== joystickUI.sseUrl;
+  const eventsChanged = !arraysEqual(newEvents, joystickUI.eventNames);
+  if (urlChanged || eventsChanged){
+    stopJoystickStream();
+    if (urlChanged) resetJoystickReadings();
+  }
+  joystickUI.sseUrl = newUrl;
+  joystickUI.eventNames = newEvents;
+  if (!joystickUI.sseUrl){
+    resetJoystickReadings();
+    setJoystickStatus('err', 'SSE endpoint missing');
+    if (joystickUI.lastUpdateEl) joystickUI.lastUpdateEl.textContent = 'SSE endpoint missing';
+    return;
+  }
+  if (!joystickUI.eventSource){
+    startJoystickStream();
+  }
+}
+
+function disableJoystickUI(reason=''){
+  stopJoystickStream();
+  joystickUI.sseUrl = null;
+  joystickUI.eventNames = [];
+  initJoystickDom();
+  resetJoystickReadings();
+  if (joystickUI.statusEl){
+    joystickUI.statusEl.classList.remove('running','ok','err','flash');
+    joystickUI.statusEl.textContent = reason || 'Idle';
+  }
+  if (joystickUI.lastUpdateEl && reason){
+    joystickUI.lastUpdateEl.textContent = reason;
+  }
+}
 
 function joinCaps(caps){
   if (!Array.isArray(caps) || !caps.length) return '—';
@@ -2436,6 +2918,14 @@ async function loadCaps(){
     } else {
       $('#pixelpilotCard').style.display = 'none';
       $('#pixelpilotStats').textContent = 'cap missing';
+    }
+
+    if (capList.includes('joystick2crfs')){
+      $('#joystickCard').style.display = '';
+      ensureJoystickUI(caps);
+    } else {
+      $('#joystickCard').style.display = 'none';
+      disableJoystickUI('cap missing');
     }
 
     if (capList.includes('udp_relay')){
