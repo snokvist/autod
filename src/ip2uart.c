@@ -157,6 +157,7 @@ typedef struct {
     // UDP coalesce buffer
     uint8_t *udp_out;
     size_t   udp_out_len;
+    size_t   udp_out_cap;
 
     // stats
     uint64_t bytes_uart_to_net, bytes_net_to_uart;
@@ -638,8 +639,12 @@ int main(int argc, char **argv){
     st.fd_uart=st.fd_listen=st.fd_net=-1; st.fd_stdout=-1;
     st.epfd=epoll_create1(0); if(st.epfd<0){ perror("epoll_create1"); return 1; }
 
-    st.udp_out=(uint8_t*)malloc(cfg.udp_max_datagram>0?(size_t)cfg.udp_max_datagram:1200); st.udp_out_len=0;
+    size_t udp_out_cap = cfg.udp_max_datagram>0?(size_t)cfg.udp_max_datagram:1200;
+    st.udp_out=(uint8_t*)malloc(udp_out_cap);
+    st.udp_out_len=0;
+    st.udp_out_cap=udp_out_cap;
     if(!st.udp_out){
+        st.udp_out_cap=0;
         fprintf(stderr,"Failed to allocate UDP buffer (%s)\n", strerror(errno));
         return 1;
     }
@@ -660,6 +665,7 @@ int main(int argc, char **argv){
     if(cfg.dump_on_start) dump_ini(&cfg,&st);
 
     uint8_t *buf_uart=malloc(cfg.rx_buf), *buf_net=malloc(cfg.rx_buf);
+    size_t rx_buf_cap = cfg.rx_buf;
     if(!buf_uart||!buf_net){ fprintf(stderr,"OOM\n"); free(buf_uart); free(buf_net); return 1; }
 
     st.running=true; get_mono(&st.last_uart_rx);
@@ -667,25 +673,82 @@ int main(int argc, char **argv){
     while(st.running && !g_stop){
         if(g_reload){
             vlog(1, "SIGHUP: reloading %s", conf_path);
-            g_reload=0; config_t newcfg;
+            g_reload=0;
+            config_t newcfg;
             if(parse_config(conf_path,&newcfg)==0){
                 vlog(2, "SIGHUP: parse ok");
-                cfg=newcfg;
-                free(st.udp_out);
-                st.udp_out=(uint8_t*)malloc(cfg.udp_max_datagram>0?(size_t)cfg.udp_max_datagram:1200);
-                if(!st.udp_out){
-                    fprintf(stderr,"Reopen aborted: UDP buffer alloc failed (%s)\n", strerror(errno));
-                    st.running=false;
-                    break;
+                config_t oldcfg = cfg;
+
+                size_t desired_udp_cap = newcfg.udp_max_datagram>0?(size_t)newcfg.udp_max_datagram:1200;
+                bool udp_resize = desired_udp_cap != st.udp_out_cap;
+                uint8_t *new_udp_out = NULL;
+                if(udp_resize){
+                    new_udp_out = (uint8_t*)malloc(desired_udp_cap);
+                    if(!new_udp_out){
+                        vlog(1, "SIGHUP: UDP buffer alloc failed (%s), keeping previous config", strerror(errno));
+                        continue;
+                    }
                 }
-                st.udp_out_len=0;
-                if(reopen_everything(&cfg,&st)<0){
-                    fprintf(stderr,"Reopen failed after SIGHUP (%s)\n", strerror(errno));
+
+                size_t desired_rx = newcfg.rx_buf>0?newcfg.rx_buf:1;
+                bool rx_resize = desired_rx != rx_buf_cap;
+                uint8_t *new_buf_uart=NULL, *new_buf_net=NULL;
+                if(rx_resize){
+                    new_buf_uart=(uint8_t*)malloc(desired_rx);
+                    new_buf_net=(uint8_t*)malloc(desired_rx);
+                    if(!new_buf_uart||!new_buf_net){
+                        int err = errno;
+                        free(new_buf_uart);
+                        free(new_buf_net);
+                        if(new_udp_out) free(new_udp_out);
+                        vlog(1, "SIGHUP: RX buffer alloc failed (%s), keeping previous config", strerror(err));
+                        continue;
+                    }
+                }
+
+                if(reopen_everything(&newcfg,&st)<0){
+                    int err = errno;
+                    vlog(1, "SIGHUP: reopen failed (%s), attempting to restore previous config", strerror(err));
+                    if(reopen_everything(&oldcfg,&st)<0){
+                        int restore_err = errno;
+                        vlog(0, "SIGHUP: failed to restore previous config (%s), stopping", strerror(restore_err));
+                        if(rx_resize){ free(new_buf_uart); free(new_buf_net); }
+                        if(new_udp_out) free(new_udp_out);
+                        st.running=false;
+                        break;
+                    }
+                    cfg = oldcfg;
+                    if(rx_resize){ free(new_buf_uart); free(new_buf_net); }
+                    if(new_udp_out) free(new_udp_out);
+                    memset(&st.last_status,0,sizeof(st.last_status));
+                    dump_ini(&cfg,&st);
+                    continue;
+                }
+
+                cfg = newcfg;
+
+                if(rx_resize){
+                    free(buf_uart);
+                    free(buf_net);
+                    buf_uart = new_buf_uart;
+                    buf_net = new_buf_net;
+                    rx_buf_cap = desired_rx;
+                }
+
+                if(new_udp_out){
+                    uint8_t *old_udp = st.udp_out;
+                    st.udp_out = new_udp_out;
+                    st.udp_out_cap = desired_udp_cap;
+                    st.udp_out_len = 0;
+                    free(old_udp);
                 } else {
-                    vlog(1, "SIGHUP: reopen successful (uart_backend=%s net_mode=%s)",
-                        (cfg.uart_backend==UART_TTY?"tty":"stdio"),
-                        (cfg.net_mode==NET_TCP_SERVER?"tcp_server":(cfg.net_mode==NET_TCP_CLIENT?"tcp_client":"udp_peer")));
+                    st.udp_out_cap = desired_udp_cap;
+                    st.udp_out_len = 0;
                 }
+
+                vlog(1, "SIGHUP: reopen successful (uart_backend=%s net_mode=%s)",
+                     (cfg.uart_backend==UART_TTY?"tty":"stdio"),
+                     (cfg.net_mode==NET_TCP_SERVER?"tcp_server":(cfg.net_mode==NET_TCP_CLIENT?"tcp_client":"udp_peer")));
                 memset(&st.last_status,0,sizeof(st.last_status));
                 dump_ini(&cfg,&st);
             } else {
