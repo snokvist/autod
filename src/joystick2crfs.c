@@ -470,10 +470,7 @@ static int sse_accept_pending(int listen_fd, int *client_fd, const char *path)
         return -1;
     }
 
-    if (*client_fd >= 0) {
-        close(*client_fd);
-        *client_fd = -1;
-    }
+    int prev_fd = *client_fd;
 
     if (sse_handshake(cfd, path) < 0) {
         static const char *reject =
@@ -482,7 +479,11 @@ static int sse_accept_pending(int listen_fd, int *client_fd, const char *path)
             "Connection: close\r\n\r\n";
         (void)sse_send_all(cfd, reject, strlen(reject));
         close(cfd);
-        return -1;
+        return 0;
+    }
+
+    if (prev_fd >= 0) {
+        close(prev_fd);
     }
 
     *client_fd = cfd;
