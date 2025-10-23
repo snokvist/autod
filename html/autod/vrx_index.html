@@ -82,6 +82,20 @@
   .joy-item .joy-raw{color:var(--mut);font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:10px;font-variant-numeric:tabular-nums}
   .joy-item.joy-bump{border-color:rgba(54,194,117,.45);box-shadow:0 0 0 1px rgba(54,194,117,.25)}
 
+  .joy-config-summary{display:grid;gap:8px;margin-top:6px}
+  .joy-config-grid{display:grid;gap:8px;grid-template-columns:repeat(auto-fit,minmax(160px,1fr))}
+  .joy-config-item{background:#0f1317;border:1px solid var(--line);border-radius:12px;padding:10px;display:grid;gap:6px;justify-items:center;text-align:center}
+  .joy-config-ch{font-size:12px;letter-spacing:.08em;color:var(--mut);text-transform:uppercase}
+  .joy-config-axis{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-weight:600;font-size:13px}
+  .joy-config-tags{display:flex;flex-wrap:wrap;gap:6px;justify-content:center}
+  .joy-config-tag{font-size:11px}
+  .joy-config-tag-normal{color:var(--mut);border-color:var(--line);background:rgba(255,255,255,.02)}
+  .joy-config-tag-invert{color:var(--err);border-color:rgba(255,107,107,.45);background:rgba(255,107,107,.12)}
+  .joy-config-dead{font-size:12px;color:var(--mut)}
+  .joy-config-item.joy-config-inverted{border-color:rgba(255,107,107,.35)}
+  .joy-config-item.joy-config-unmapped .joy-config-axis{color:var(--err)}
+  .joy-config-raw{font-size:12px;color:var(--mut);word-break:break-all}
+
   .dvr-body{display:grid;grid-template-rows:auto 1fr;gap:10px;height:360px;min-height:0}
   .dvr-scroll{display:grid;gap:6px;overflow:auto;padding-right:4px;min-height:0}
   .dvr-list{display:grid;gap:6px}
@@ -277,6 +291,11 @@
         <div class="cap-stats" id="joystickConfigStats">—</div>
       </div>
       <div class="cap-grid" id="joystickConfigGrid"></div>
+      <div class="joy-config-summary" id="joystickConfigSummary" style="display:none">
+        <div class="mut">Channel map, inversion, and deadband from /etc/joystick2crfs.conf</div>
+        <div class="joy-config-grid" id="joystickConfigSummaryGrid"></div>
+        <div class="joy-config-raw" id="joystickConfigSummaryRaw" style="display:none"></div>
+      </div>
       <div class="mut">Configuration changes persist to /etc/joystick2crfs.conf. Reload to apply without restarting.</div>
     </div>
   </section>
@@ -885,6 +904,170 @@ const joystickSse = (()=>{
   };
 })();
 
+const joystickConfigSummary = (()=>{
+  const wrap = document.getElementById('joystickConfigSummary');
+  const grid = document.getElementById('joystickConfigSummaryGrid');
+  const rawEl = document.getElementById('joystickConfigSummaryRaw');
+
+  const state = {
+    map:Array.from({length:16}, ()=>null),
+    invert:Array.from({length:16}, ()=>false),
+    deadband:Array.from({length:16}, ()=>0),
+    rawMap:'',
+    rawInvert:'',
+    rawDeadband:'',
+    haveMap:false,
+    haveInvert:false,
+    haveDeadband:false
+  };
+
+  const pad = (num)=> String(num).padStart(2,'0');
+
+  function parseMap(str){
+    const values = Array.from({length:16}, ()=>null);
+    if (!str) return values;
+    const parts = String(str).split(',');
+    for (let i = 0; i < values.length; i++){
+      const raw = (parts[i] ?? '').trim();
+      if (!raw) continue;
+      const num = Number.parseInt(raw, 10);
+      if (Number.isFinite(num) && num > 0){
+        values[i] = num;
+      }
+    }
+    return values;
+  }
+
+  function parseInvert(str){
+    const flags = Array.from({length:16}, ()=>false);
+    if (!str) return flags;
+    const parts = String(str).split(',');
+    for (const part of parts){
+      const raw = part.trim();
+      if (!raw) continue;
+      const num = Number.parseInt(raw, 10);
+      if (Number.isFinite(num) && num >= 1 && num <= 16){
+        flags[num - 1] = true;
+      }
+    }
+    return flags;
+  }
+
+  function parseDeadband(str){
+    const values = Array.from({length:16}, ()=>0);
+    if (!str) return values;
+    const parts = String(str).split(',');
+    for (let i = 0; i < values.length; i++){
+      const raw = (parts[i] ?? '').trim();
+      if (!raw) continue;
+      const num = Number.parseInt(raw, 10);
+      if (Number.isFinite(num)){
+        values[i] = Math.max(0, Math.abs(num));
+      }
+    }
+    return values;
+  }
+
+  function render(){
+    if (!wrap || !grid) return;
+    const hasData = state.haveMap || state.haveInvert || state.haveDeadband;
+    if (!hasData){
+      wrap.style.display = 'none';
+      grid.innerHTML = '';
+      if (rawEl){
+        rawEl.style.display = 'none';
+        rawEl.textContent = '';
+      }
+      return;
+    }
+
+    wrap.style.display = 'grid';
+    const frag = document.createDocumentFragment();
+    for (let i = 0; i < 16; i++){
+      const item = document.createElement('div');
+      item.className = 'joy-config-item';
+      const chEl = document.createElement('div');
+      chEl.className = 'joy-config-ch';
+      chEl.textContent = `CH${pad(i + 1)}`;
+
+      const axis = state.map[i];
+      const axisEl = document.createElement('div');
+      axisEl.className = 'joy-config-axis';
+      if (axis){
+        axisEl.textContent = `Input ${pad(axis)}`;
+      } else {
+        axisEl.textContent = 'Unmapped';
+        item.classList.add('joy-config-unmapped');
+      }
+
+      const tagsEl = document.createElement('div');
+      tagsEl.className = 'joy-config-tags';
+      const tag = document.createElement('span');
+      const inverted = !!state.invert[i];
+      tag.className = `pill joy-config-tag ${inverted ? 'joy-config-tag-invert' : 'joy-config-tag-normal'}`;
+      tag.textContent = inverted ? 'Inverted' : 'Normal';
+      tagsEl.append(tag);
+      if (inverted) item.classList.add('joy-config-inverted');
+
+      const deadVal = state.deadband[i] ?? 0;
+      const deadEl = document.createElement('div');
+      deadEl.className = 'joy-config-dead';
+      deadEl.textContent = deadVal ? `Deadband ±${deadVal}` : 'Deadband off';
+
+      item.append(chEl, axisEl, tagsEl, deadEl);
+      frag.append(item);
+    }
+    grid.replaceChildren(frag);
+
+    if (rawEl){
+      const parts = [];
+      if (state.haveMap) parts.push(`map=${state.rawMap || '—'}`);
+      if (state.haveInvert) parts.push(`invert=${state.rawInvert || '—'}`);
+      if (state.haveDeadband) parts.push(`deadband=${state.rawDeadband || '—'}`);
+      rawEl.textContent = parts.join(' • ');
+      rawEl.style.display = parts.length ? 'block' : 'none';
+    }
+  }
+
+  function setMap(str){
+    state.rawMap = typeof str === 'string' ? str.trim() : '';
+    state.haveMap = !!state.rawMap;
+    state.map = parseMap(state.rawMap);
+    render();
+  }
+
+  function setInvert(str){
+    state.rawInvert = typeof str === 'string' ? str.trim() : '';
+    state.haveInvert = !!state.rawInvert;
+    state.invert = parseInvert(state.rawInvert);
+    render();
+  }
+
+  function setDeadband(str){
+    state.rawDeadband = typeof str === 'string' ? str.trim() : '';
+    state.haveDeadband = !!state.rawDeadband;
+    state.deadband = parseDeadband(state.rawDeadband);
+    render();
+  }
+
+  function reset(){
+    state.map = Array.from({length:16}, ()=>null);
+    state.invert = Array.from({length:16}, ()=>false);
+    state.deadband = Array.from({length:16}, ()=>0);
+    state.rawMap = '';
+    state.rawInvert = '';
+    state.rawDeadband = '';
+    state.haveMap = false;
+    state.haveInvert = false;
+    state.haveDeadband = false;
+    render();
+  }
+
+  reset();
+
+  return { setMap, setInvert, setDeadband, reset };
+})();
+
 function miniRkStatusEl(){
   return document.getElementById('pixelpilotMiniRkStatus');
 }
@@ -1489,49 +1672,56 @@ function createCapManager(config){
   }
 
   function applyValueToUI(meta, value){
-    const ctl = state.controls[meta.key];
-    if (!ctl) return;
-    ctl.errEl.style.display='none';
     const coerced = coerceForKey(meta, value);
-
-    if (ctl.kind==='toggle'){
-      ctl.input.checked = !!coerced;
-      ctl.valEl.textContent = ctl.input.checked ? 'true' : 'false';
-      return;
-    }
-    if (ctl.kind==='range'){
-      const num = Number(coerced);
-      const v = clamp(Number.isFinite(num)?num:Number(ctl.input.min), ctl.min, ctl.max);
-      ctl.input.value = String(v);
-      ctl.valEl.textContent = v + (meta.control?.unit?(' '+meta.control.unit):'');
-      return;
-    }
-    if (ctl.kind==='select'){
-      const s = String(coerced ?? '');
-      let matched = false;
-      for (const opt of ctl.input.options){
-        if (opt.value !== "__free__" && opt.value === s){
-          ctl.input.value = s; matched = true; break;
+    const ctl = state.controls[meta.key];
+    if (ctl){
+      ctl.errEl.style.display='none';
+      if (ctl.kind==='toggle'){
+        ctl.input.checked = !!coerced;
+        ctl.valEl.textContent = ctl.input.checked ? 'true' : 'false';
+      }
+      else if (ctl.kind==='range'){
+        const num = Number(coerced);
+        const v = clamp(Number.isFinite(num)?num:Number(ctl.input.min), ctl.min, ctl.max);
+        ctl.input.value = String(v);
+        ctl.valEl.textContent = v + (meta.control?.unit?(' '+meta.control.unit):'');
+      }
+      else if (ctl.kind==='select'){
+        const s = String(coerced ?? '');
+        let matched = false;
+        for (const opt of ctl.input.options){
+          if (opt.value !== "__free__" && opt.value === s){
+            ctl.input.value = s; matched = true; break;
+          }
+        }
+        if (matched){
+          if (ctl.allowFree && ctl.freeWrap) ctl.freeWrap.style.display='none';
+          ctl.valEl.textContent = ctl.input.value;
+        } else if (ctl.allowFree){
+          ctl.input.value = "__free__";
+          if (ctl.freeWrap) ctl.freeWrap.style.display='block';
+          if (ctl.freeInput) ctl.freeInput.value = s;
+          ctl.valEl.textContent = s;
+        } else {
+          ctl.valEl.textContent = s;
         }
       }
-      if (matched){
-        if (ctl.allowFree && ctl.freeWrap) ctl.freeWrap.style.display='none';
-        ctl.valEl.textContent = ctl.input.value;
-      } else if (ctl.allowFree){
-        ctl.input.value = "__free__";
-        if (ctl.freeWrap) ctl.freeWrap.style.display='block';
-        if (ctl.freeInput) ctl.freeInput.value = s;
-        ctl.valEl.textContent = s;
-      } else {
+      else if (ctl.kind==='text'){
+        const s = String(coerced ?? '');
+        ctl.input.value = s;
         ctl.valEl.textContent = s;
       }
-      return;
+      else {
+        const str = valueToString(meta, value);
+        if (ctl.input && typeof ctl.input.value === 'string'){
+          ctl.input.value = str;
+        }
+        ctl.valEl.textContent = str;
+      }
     }
-    if (ctl.kind==='text'){
-      const s = String(coerced ?? '');
-      ctl.input.value = s;
-      ctl.valEl.textContent = s;
-      return;
+    if (typeof config.onValue === 'function'){
+      try { config.onValue(meta, coerced, value, state); }
+      catch(e){}
     }
   }
 
@@ -1739,7 +1929,18 @@ const joystickManager = createCapManager({
   cmdsId:'joystickCmds',
   helpTimeoutMs:500,
   getTimeoutMs:800,
-  setTimeoutMs:1500
+  setTimeoutMs:1500,
+  onValue(meta, value){
+    if (!meta || !meta.key) return;
+    const strVal = value == null ? '' : String(value);
+    if (meta.key === 'map'){
+      joystickConfigSummary.setMap(strVal);
+    } else if (meta.key === 'invert'){
+      joystickConfigSummary.setInvert(strVal);
+    } else if (meta.key === 'deadband'){
+      joystickConfigSummary.setDeadband(strVal);
+    }
+  }
 });
 
 const udpRelayManager = createCapManager({
@@ -2904,6 +3105,7 @@ async function loadCaps(){
       if (gridEl) gridEl.innerHTML = '';
       const cmdsEl = document.getElementById('joystickCmds');
       if (cmdsEl) cmdsEl.innerHTML = '';
+      joystickConfigSummary.reset();
     }
 
     if (capList.includes('udp_relay')){
