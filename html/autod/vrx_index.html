@@ -86,11 +86,19 @@
   .joy-meta-map{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-weight:600;font-size:12px;color:var(--fg)}
   .joy-meta-map.joy-meta-map-unmapped{color:var(--err)}
   .joy-meta-tags{display:flex;flex-wrap:wrap;gap:6px;justify-content:center}
-  .joy-meta-tag{font-size:10px}
+  .joy-meta-tag{font-size:10px;cursor:pointer;transition:color .2s ease,border-color .2s ease,background .2s ease}
+  .joy-meta-tag[aria-disabled="true"]{cursor:not-allowed;opacity:.55}
   .joy-meta-tag-normal{color:var(--mut);border-color:var(--line);background:rgba(255,255,255,.02)}
   .joy-meta-tag-invert{color:var(--err);border-color:rgba(255,107,107,.45);background:rgba(255,107,107,.12)}
   .joy-meta-dead{font-size:11px;color:var(--mut)}
   .joy-meta-dead.joy-meta-dead-active{color:var(--fg)}
+  .joy-controls{display:grid;gap:6px;justify-items:center;width:100%}
+  .joy-move{display:flex;gap:6px}
+  .joy-move-btn{padding:4px 8px;font-size:11px;line-height:1;border-radius:999px;background:rgba(255,255,255,.02);border:1px solid var(--line);color:var(--fg);min-width:0}
+  .joy-move-btn:disabled{opacity:.5;cursor:not-allowed}
+  .joy-move-btn:not(:disabled):hover{background:rgba(255,255,255,.05)}
+  .joy-deadband-control{display:grid;gap:4px;width:100%;font-size:10px;color:var(--mut);justify-items:center}
+  .joy-deadband-slider{width:100%}
   .joy-item.joy-item-inverted{border-color:rgba(255,107,107,.35)}
   .joy-item.joy-item-unmapped .joy-meta-map{color:var(--err)}
 
@@ -669,6 +677,8 @@ const joystickSse = (()=>{
   let active = false;
   let url = '';
   let cells = [];
+  const channelControls = Array.from({length:16}, ()=>null);
+  let configActionBusy = false;
   let lastStatus = { mode: '', text: '' };
   const configState = {
     map:Array.from({length:16}, ()=>null),
@@ -713,36 +723,318 @@ const joystickSse = (()=>{
         map.className = 'joy-meta-map';
         const tags = document.createElement('div');
         tags.className = 'joy-meta-tags';
-        tags.style.display = 'none';
         const invertTag = document.createElement('span');
         invertTag.className = 'pill joy-meta-tag joy-meta-tag-normal joy-meta-invert';
         invertTag.textContent = 'Normal';
+        invertTag.setAttribute('role', 'button');
+        invertTag.tabIndex = 0;
+        invertTag.title = 'Toggle inversion';
+        invertTag.dataset.channel = String(i + 1);
         tags.append(invertTag);
+        const controlsWrap = document.createElement('div');
+        controlsWrap.className = 'joy-controls';
+        const moveWrap = document.createElement('div');
+        moveWrap.className = 'joy-move';
+        const moveLeft = document.createElement('button');
+        moveLeft.type = 'button';
+        moveLeft.className = 'joy-move-btn joy-move-left';
+        moveLeft.textContent = '←';
+        moveLeft.title = 'Move channel left';
+        moveLeft.setAttribute('aria-label', `Move CH${padIdx(i + 1)} left`);
+        const moveRight = document.createElement('button');
+        moveRight.type = 'button';
+        moveRight.className = 'joy-move-btn joy-move-right';
+        moveRight.textContent = '→';
+        moveRight.title = 'Move channel right';
+        moveRight.setAttribute('aria-label', `Move CH${padIdx(i + 1)} right`);
+        moveWrap.append(moveLeft, moveRight);
+        const deadbandControl = document.createElement('div');
+        deadbandControl.className = 'joy-deadband-control';
+        const deadbandLabel = document.createElement('div');
+        deadbandLabel.textContent = 'Deadband';
+        const deadbandSlider = document.createElement('input');
+        deadbandSlider.type = 'range';
+        deadbandSlider.className = 'joy-deadband-slider';
+        deadbandSlider.min = '0';
+        deadbandSlider.max = '5000';
+        deadbandSlider.step = '50';
+        deadbandSlider.value = '0';
+        deadbandSlider.title = 'Adjust deadband';
+        deadbandSlider.setAttribute('aria-label', `Deadband for CH${padIdx(i + 1)}`);
+        deadbandControl.append(deadbandLabel, deadbandSlider);
+        controlsWrap.append(moveWrap, deadbandControl);
         const dead = document.createElement('div');
         dead.className = 'joy-meta-dead';
         dead.style.display = 'none';
-        meta.append(map, tags, dead);
+        meta.append(map, tags, controlsWrap, dead);
         item.append(label, bar, values, meta);
+        moveLeft.addEventListener('click', ()=>{ void handleMoveChannel(i, -1); });
+        moveRight.addEventListener('click', ()=>{ void handleMoveChannel(i, 1); });
+        invertTag.addEventListener('click', (ev)=>{ ev.preventDefault(); void toggleChannelInvert(i); });
+        invertTag.addEventListener('keydown', (ev)=>{
+          if (ev.key === 'Enter' || ev.key === ' '){
+            ev.preventDefault();
+            void toggleChannelInvert(i);
+          }
+        });
+        deadbandSlider.addEventListener('input', ()=> handleDeadbandInput(i, deadbandSlider.value));
+        deadbandSlider.addEventListener('change', ()=>{ void handleDeadbandCommit(i, deadbandSlider.value); });
+        channelControls[i] = {
+          moveLeftBtn: moveLeft,
+          moveRightBtn: moveRight,
+          deadbandSlider,
+          invertTag,
+          deadEl: dead,
+          meta,
+          mapEl: map,
+          tagsEl: tags
+        };
         frag.append(item);
       }
       gridEl.append(frag);
+      updateControlAvailability();
     }
     cells = Array.from(gridEl.children);
+  }
+
+  function clampDeadbandValue(raw){
+    let num = Number(raw);
+    if (!Number.isFinite(num)) num = 0;
+    num = Math.round(num);
+    if (num < 0) num = 0;
+    if (num > 5000) num = 5000;
+    return num;
+  }
+
+  function updateControlAvailability(){
+    channelControls.forEach((ctl, idx)=>{
+      if (!ctl) return;
+      if (ctl.moveLeftBtn){
+        ctl.moveLeftBtn.disabled = configActionBusy || idx === 0;
+      }
+      if (ctl.moveRightBtn){
+        ctl.moveRightBtn.disabled = configActionBusy || idx === channelControls.length - 1;
+      }
+      if (ctl.invertTag){
+        ctl.invertTag.tabIndex = configActionBusy ? -1 : 0;
+        if (configActionBusy){
+          ctl.invertTag.setAttribute('aria-disabled','true');
+        } else {
+          ctl.invertTag.removeAttribute('aria-disabled');
+        }
+      }
+      if (ctl.deadbandSlider){
+        ctl.deadbandSlider.disabled = configActionBusy;
+      }
+    });
+  }
+
+  function setConfigActionBusy(busy){
+    configActionBusy = !!busy;
+    updateControlAvailability();
+  }
+
+  function setJoystickConfigStatus(text){
+    const statsEl = document.getElementById('joystickConfigStats');
+    if (statsEl) statsEl.textContent = text;
+  }
+
+  function formatTimeStamp(){
+    return new Date().toLocaleTimeString();
+  }
+
+  async function triggerJoystickReload(reason = ''){
+    try {
+      const res = await postExec({ path:'/sys/joystick2crfs/reload', args:[] }, CMD_TIMEOUT_MS, 'joystick');
+      const rc = res?.rc;
+      const ok = rc == null ? true : Number(rc) === 0;
+      const stderr = (res?.stderr ?? '').toString().trim();
+      const stdout = (res?.stdout ?? '').toString().trim();
+      const message = stderr || stdout || (reason ? `${reason} reloaded` : 'Reloaded');
+      return { ok, message };
+    } catch (err){
+      return { ok:false, message: err?.message || 'reload failed' };
+    }
+  }
+
+  async function runConfigUpdate(action, onError){
+    if (!action || !Array.isArray(action.updates) || !action.updates.length) return;
+    if (configActionBusy) return;
+    const label = action.label || 'Updating';
+    setConfigActionBusy(true);
+    setJoystickConfigStatus(`${label}…`);
+    try {
+      for (const upd of action.updates){
+        if (!upd || !upd.key) continue;
+        const res = await joystickManager.setValue(upd.key, upd.value);
+        if (!res || !res.ok){
+          throw new Error(res?.error || `${upd.key} update failed`);
+        }
+      }
+      const reloadRes = await triggerJoystickReload(action.reloadReason || label);
+      if (!reloadRes.ok){
+        throw new Error(reloadRes.message || 'reload failed');
+      }
+      const stamp = formatTimeStamp();
+      const extra = reloadRes.message ? ` • ${reloadRes.message}` : '';
+      setJoystickConfigStatus(`${label} • ${stamp}${extra}`);
+    } catch (err){
+      if (typeof onError === 'function'){
+        try { onError(); }
+        catch {}
+      }
+      const msg = err?.message || 'action failed';
+      setJoystickConfigStatus(`${label} failed: ${msg}`);
+      try { await joystickManager.refreshValues(); }
+      catch {}
+    } finally {
+      setConfigActionBusy(false);
+    }
+  }
+
+  function arraysEqual(a, b){
+    if (a === b) return true;
+    if (!Array.isArray(a) || !Array.isArray(b)) return false;
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++){
+      if (a[i] !== b[i]) return false;
+    }
+    return true;
+  }
+
+  function cloneMapForEdit(snapshot){
+    const arr = Array.isArray(snapshot?.map) ? snapshot.map.slice() : Array.from({length:16}, ()=>null);
+    if (!snapshot?.haveMap){
+      for (let i = 0; i < arr.length; i++){
+        const raw = Number(arr[i]);
+        if (!Number.isFinite(raw) || raw <= 0){
+          arr[i] = i + 1;
+        }
+      }
+    }
+    return arr;
+  }
+
+  function swapChannelValues(arr, a, b){
+    if (!Array.isArray(arr)) return;
+    const tmp = arr[a];
+    arr[a] = arr[b];
+    arr[b] = tmp;
+  }
+
+  async function handleMoveChannel(idx, dir){
+    if (configActionBusy) return;
+    const target = idx + dir;
+    if (target < 0 || target >= channelControls.length) return;
+    const snapshot = joystickConfigInfo.getSnapshot();
+    const map = cloneMapForEdit(snapshot);
+    const invert = Array.isArray(snapshot.invert) ? snapshot.invert.slice() : Array.from({length:16}, ()=>false);
+    const deadband = Array.isArray(snapshot.deadband) ? snapshot.deadband.slice() : Array.from({length:16}, ()=>0);
+    swapChannelValues(map, idx, target);
+    swapChannelValues(invert, idx, target);
+    swapChannelValues(deadband, idx, target);
+    const invertChanged = !arraysEqual(invert, snapshot.invert);
+    const deadbandChanged = !arraysEqual(deadband, snapshot.deadband);
+    joystickConfigInfo.applyArrays({
+      map,
+      haveMap:true,
+      invert,
+      haveInvert: snapshot.haveInvert || invert.some(Boolean),
+      deadband,
+      haveDeadband: snapshot.haveDeadband || deadband.some(v => Math.abs(Number(v)) > 0)
+    });
+    const revertState = {
+      map: Array.isArray(snapshot.map) ? snapshot.map.slice() : Array.from({length:16}, ()=>null),
+      invert: Array.isArray(snapshot.invert) ? snapshot.invert.slice() : Array.from({length:16}, ()=>false),
+      deadband: Array.isArray(snapshot.deadband) ? snapshot.deadband.slice() : Array.from({length:16}, ()=>0),
+      haveMap: snapshot.haveMap,
+      haveInvert: snapshot.haveInvert,
+      haveDeadband: snapshot.haveDeadband
+    };
+    const updates = [{ key:'map', value:formatJoystickMapCsv(map) }];
+    if (invertChanged){
+      updates.push({ key:'invert', value:formatJoystickInvertCsv(invert) });
+    }
+    if (deadbandChanged){
+      updates.push({ key:'deadband', value:formatJoystickDeadbandCsv(deadband) });
+    }
+    const directionLabel = dir < 0 ? 'left' : 'right';
+    const label = `Moved CH${padIdx(idx + 1)} ${directionLabel}`;
+    await runConfigUpdate({ label, updates, reloadReason:'Channel map updated' }, ()=>{
+      joystickConfigInfo.applyArrays(revertState);
+    });
+  }
+
+  async function toggleChannelInvert(idx){
+    if (configActionBusy) return;
+    const snapshot = joystickConfigInfo.getSnapshot();
+    const invert = Array.isArray(snapshot.invert) ? snapshot.invert.slice() : Array.from({length:16}, ()=>false);
+    invert[idx] = !invert[idx];
+    const label = invert[idx] ? `Inverted CH${padIdx(idx + 1)}` : `Normalized CH${padIdx(idx + 1)}`;
+    joystickConfigInfo.applyArrays({ invert, haveInvert:true });
+    await runConfigUpdate({
+      label,
+      updates:[{ key:'invert', value:formatJoystickInvertCsv(invert) }],
+      reloadReason:'Channel inversion updated'
+    }, ()=>{
+      joystickConfigInfo.applyArrays(snapshot);
+    });
+  }
+
+  function handleDeadbandInput(idx, raw){
+    const slider = channelControls[idx]?.deadbandSlider;
+    if (!slider) return;
+    const val = clampDeadbandValue(raw);
+    if (Number(slider.value) !== val){
+      slider.value = String(val);
+    }
+    const deadEl = channelControls[idx]?.deadEl;
+    if (deadEl){
+      deadEl.textContent = val ? `Deadband ±${val}` : 'Deadband off';
+      deadEl.style.display = '';
+      deadEl.classList.toggle('joy-meta-dead-active', !!val);
+    }
+  }
+
+  async function handleDeadbandCommit(idx, raw){
+    if (configActionBusy) return;
+    const val = clampDeadbandValue(raw);
+    const snapshot = joystickConfigInfo.getSnapshot();
+    const prevValRaw = Array.isArray(snapshot.deadband) ? snapshot.deadband[idx] : 0;
+    const prevVal = clampDeadbandValue(prevValRaw);
+    if (val === prevVal && snapshot.haveDeadband){
+      handleDeadbandInput(idx, val);
+      return;
+    }
+    const nextDeadband = Array.isArray(snapshot.deadband) ? snapshot.deadband.slice() : Array.from({length:16}, ()=>0);
+    nextDeadband[idx] = val;
+    joystickConfigInfo.applyArrays({ deadband: nextDeadband, haveDeadband:true });
+    const label = val ? `Deadband ${val} on CH${padIdx(idx + 1)}` : `Deadband off on CH${padIdx(idx + 1)}`;
+    await runConfigUpdate({
+      label,
+      updates:[{ key:'deadband', value:formatJoystickDeadbandCsv(nextDeadband) }],
+      reloadReason:'Deadband updated'
+    }, ()=>{
+      joystickConfigInfo.applyArrays(snapshot);
+    });
   }
 
   function applyConfig(){
     ensureGrid();
     const hasAny = configState.haveMap || configState.haveInvert || configState.haveDeadband;
     cells.forEach((cell, idx)=>{
-      const meta = cell.querySelector('.joy-meta');
-      if (!meta) return;
-      meta.style.display = hasAny ? 'grid' : 'none';
-      if (!hasAny){
+      const ctl = channelControls[idx] || {};
+      const meta = ctl.meta || cell.querySelector('.joy-meta');
+      const showMeta = hasAny || !!ctl.meta;
+      if (meta){
+        meta.style.display = showMeta ? 'grid' : 'none';
+      }
+      if (!showMeta){
         cell.classList.remove('joy-item-inverted','joy-item-unmapped');
         return;
       }
 
-      const mapEl = cell.querySelector('.joy-meta-map');
+      const mapEl = ctl.mapEl || cell.querySelector('.joy-meta-map');
       if (mapEl){
         if (configState.haveMap){
           const axis = configState.map[idx];
@@ -757,47 +1049,50 @@ const joystickSse = (()=>{
           }
           mapEl.style.display = '';
         } else {
-          mapEl.textContent = '';
-          mapEl.style.display = 'none';
+          mapEl.textContent = 'Input —';
+          mapEl.style.display = '';
           mapEl.classList.remove('joy-meta-map-unmapped');
           cell.classList.remove('joy-item-unmapped');
         }
       }
 
-      const tags = cell.querySelector('.joy-meta-tags');
-      const invertTag = cell.querySelector('.joy-meta-invert');
+      const tags = ctl.tagsEl || cell.querySelector('.joy-meta-tags');
+      const invertTag = ctl.invertTag || cell.querySelector('.joy-meta-invert');
       if (tags && invertTag){
-        if (configState.haveInvert){
-          const inverted = !!configState.invert[idx];
-          invertTag.textContent = inverted ? 'Inverted' : 'Normal';
-          invertTag.classList.remove('joy-meta-tag-normal','joy-meta-tag-invert');
-          invertTag.classList.add(inverted ? 'joy-meta-tag-invert' : 'joy-meta-tag-normal');
-          tags.style.display = 'flex';
-          cell.classList.toggle('joy-item-inverted', inverted);
+        const inverted = !!configState.invert[idx];
+        invertTag.textContent = inverted ? 'Inverted' : 'Normal';
+        invertTag.classList.remove('joy-meta-tag-normal','joy-meta-tag-invert');
+        invertTag.classList.add(inverted ? 'joy-meta-tag-invert' : 'joy-meta-tag-normal');
+        invertTag.setAttribute('aria-pressed', inverted ? 'true' : 'false');
+        if (configActionBusy){
+          invertTag.setAttribute('aria-disabled','true');
         } else {
-          tags.style.display = 'none';
-          cell.classList.remove('joy-item-inverted');
+          invertTag.removeAttribute('aria-disabled');
         }
+        tags.style.display = 'flex';
+        cell.classList.toggle('joy-item-inverted', inverted);
       }
 
-      const deadEl = cell.querySelector('.joy-meta-dead');
+      const deadEl = ctl.deadEl || cell.querySelector('.joy-meta-dead');
+      const rawVal = Math.abs(configState.deadband[idx] ?? 0);
+      const deadVal = Number.isFinite(rawVal) ? Math.min(5000, Math.max(0, Math.round(rawVal))) : 0;
       if (deadEl){
-        if (configState.haveDeadband){
-          const val = Math.abs(configState.deadband[idx] ?? 0);
-          deadEl.textContent = val ? `Deadband ±${val}` : 'Deadband off';
-          deadEl.style.display = '';
-          if (val){
-            deadEl.classList.add('joy-meta-dead-active');
-          } else {
-            deadEl.classList.remove('joy-meta-dead-active');
-          }
-        } else {
-          deadEl.textContent = '';
-          deadEl.style.display = 'none';
-          deadEl.classList.remove('joy-meta-dead-active');
+        deadEl.textContent = deadVal ? `Deadband ±${deadVal}` : 'Deadband off';
+        deadEl.style.display = '';
+        deadEl.classList.toggle('joy-meta-dead-active', !!deadVal);
+      }
+
+      const slider = ctl.deadbandSlider;
+      if (slider){
+        if (Number(slider.value) !== deadVal){
+          slider.value = String(deadVal);
         }
+        slider.dataset.lastCommitted = String(deadVal);
+        slider.dataset.lastHaveDeadband = configState.haveDeadband ? '1' : '0';
+        slider.disabled = configActionBusy;
       }
     });
+    updateControlAvailability();
   }
 
   function sanitizeNumeric(value, fallback){
@@ -1013,6 +1308,7 @@ const joystickSse = (()=>{
       active = true;
       if (card) card.style.display = '';
       ensureGrid();
+      setJoystickConfigStatus('—');
       if (endpointEl){
         endpointEl.textContent = `Endpoint: ${url}`;
         endpointEl.title = url;
@@ -1038,6 +1334,8 @@ const joystickSse = (()=>{
       statusEl.textContent = 'Idle';
       statusEl.title = '';
       lastStatus = { mode: '', text: '' };
+      setConfigActionBusy(false);
+      setJoystickConfigStatus('—');
       resetConfigState();
       resetValues();
     },
@@ -1071,6 +1369,20 @@ const joystickConfigInfo = (()=>{
     return values;
   }
 
+  function normalizeMapArray(arr){
+    const values = Array.from({length:16}, ()=>null);
+    if (!Array.isArray(arr)) return values;
+    for (let i = 0; i < values.length; i++){
+      const raw = Number(arr[i]);
+      if (Number.isFinite(raw) && raw > 0){
+        values[i] = Math.trunc(raw);
+      } else {
+        values[i] = null;
+      }
+    }
+    return values;
+  }
+
   function parseInvert(str){
     const flags = Array.from({length:16}, ()=>false);
     if (!str) return flags;
@@ -1086,6 +1398,15 @@ const joystickConfigInfo = (()=>{
     return flags;
   }
 
+  function normalizeInvertArray(arr){
+    const flags = Array.from({length:16}, ()=>false);
+    if (!Array.isArray(arr)) return flags;
+    for (let i = 0; i < flags.length; i++){
+      flags[i] = !!arr[i];
+    }
+    return flags;
+  }
+
   function parseDeadband(str){
     const values = Array.from({length:16}, ()=>0);
     if (!str) return values;
@@ -1096,6 +1417,20 @@ const joystickConfigInfo = (()=>{
       const num = Number.parseInt(raw, 10);
       if (Number.isFinite(num)){
         values[i] = Math.max(0, Math.abs(num));
+      }
+    }
+    return values;
+  }
+
+  function normalizeDeadbandArray(arr){
+    const values = Array.from({length:16}, ()=>0);
+    if (!Array.isArray(arr)) return values;
+    for (let i = 0; i < values.length; i++){
+      const raw = Number(arr[i]);
+      if (Number.isFinite(raw)){
+        values[i] = Math.max(0, Math.abs(Math.trunc(raw)));
+      } else {
+        values[i] = 0;
       }
     }
     return values;
@@ -1143,10 +1478,94 @@ const joystickConfigInfo = (()=>{
     render();
   }
 
+  function applyArrays(partial){
+    if (!partial || typeof partial !== 'object'){ return; }
+    let dirty = false;
+    if (partial.map !== undefined){
+      state.map = normalizeMapArray(partial.map);
+      dirty = true;
+      if (partial.haveMap !== undefined){
+        state.haveMap = !!partial.haveMap;
+      } else {
+        state.haveMap = true;
+      }
+    } else if (partial.haveMap !== undefined){
+      state.haveMap = !!partial.haveMap;
+      dirty = true;
+    }
+
+    if (partial.invert !== undefined){
+      state.invert = normalizeInvertArray(partial.invert);
+      dirty = true;
+      if (partial.haveInvert !== undefined){
+        state.haveInvert = !!partial.haveInvert;
+      } else {
+        state.haveInvert = true;
+      }
+    } else if (partial.haveInvert !== undefined){
+      state.haveInvert = !!partial.haveInvert;
+      dirty = true;
+    }
+
+    if (partial.deadband !== undefined){
+      state.deadband = normalizeDeadbandArray(partial.deadband);
+      dirty = true;
+      if (partial.haveDeadband !== undefined){
+        state.haveDeadband = !!partial.haveDeadband;
+      } else {
+        state.haveDeadband = true;
+      }
+    } else if (partial.haveDeadband !== undefined){
+      state.haveDeadband = !!partial.haveDeadband;
+      dirty = true;
+    }
+
+    if (dirty) render();
+  }
+
+  function getSnapshot(){
+    return {
+      map: state.map.slice(),
+      invert: state.invert.slice(),
+      deadband: state.deadband.slice(),
+      haveMap: state.haveMap,
+      haveInvert: state.haveInvert,
+      haveDeadband: state.haveDeadband
+    };
+  }
+
   reset();
 
-  return { setMap, setInvert, setDeadband, reset };
+  return { setMap, setInvert, setDeadband, reset, applyArrays, getSnapshot };
 })();
+
+function formatJoystickMapCsv(values){
+  const arr = Array.from({length:16}, (_, idx)=>{
+    const raw = Number(values?.[idx]);
+    return Number.isFinite(raw) && raw > 0 ? String(Math.trunc(raw)) : '';
+  });
+  return arr.join(',');
+}
+
+function formatJoystickInvertCsv(flags){
+  const out = [];
+  if (Array.isArray(flags)){
+    flags.forEach((flag, idx)=>{
+      if (flag) out.push(String(idx + 1));
+    });
+  }
+  return out.join(',');
+}
+
+function formatJoystickDeadbandCsv(values){
+  const arr = Array.from({length:16}, (_, idx)=>{
+    const raw = Number(values?.[idx]);
+    if (!Number.isFinite(raw)) return '0';
+    const clamped = Math.max(0, Math.min(5000, Math.round(Math.abs(raw))));
+    return String(clamped);
+  });
+  return arr.join(',');
+}
 
 function miniRkStatusEl(){
   return document.getElementById('pixelpilotMiniRkStatus');
@@ -1990,7 +2409,58 @@ function createCapManager(config){
     await refreshValues();
   }
 
-  return { ensureUI, refreshValues };
+  async function setValue(key, nextVal, opts = {}){
+    if (!key){
+      return { ok:false, error:'missing key' };
+    }
+    if (!state.controls[key]){
+      await ensureUI();
+    }
+    const ctl = state.controls[key];
+    if (!ctl){
+      return { ok:false, error:`unknown setting: ${key}` };
+    }
+    const meta = ctl.meta;
+    const valStr = valueToString(meta, nextVal);
+    try {
+      ctl.errEl.style.display = 'none';
+      const { ok, res, prev } = await execSetCommand(key, String(valStr ?? ''));
+      flashCtl(ctl.el, ok);
+      if (!ok){
+        const detail = combineMessages(responseMessage(res), responseMessage(prev));
+        const label = detail
+          ? (/set failed/i.test(detail) ? detail : `set failed: ${detail}`)
+          : 'set failed: command failed';
+        ctl.errEl.textContent = label;
+        ctl.errEl.style.display = 'block';
+        return { ok:false, error: label };
+      }
+      const verify = opts.verify !== false;
+      if (verify){
+        try {
+          const got = await getWithRetries(key, Math.max(1, Math.min(2, getRetries)));
+          if (got.ok){
+            applyValueToUI(meta, got.value);
+          } else {
+            applyValueToUI(meta, nextVal);
+          }
+        } catch {
+          applyValueToUI(meta, nextVal);
+        }
+      } else {
+        applyValueToUI(meta, nextVal);
+      }
+      return { ok:true };
+    } catch(e){
+      flashCtl(ctl.el, false);
+      const message = e?.message || 'set failed';
+      ctl.errEl.textContent = `set failed: ${message}`;
+      ctl.errEl.style.display = 'block';
+      return { ok:false, error: message };
+    }
+  }
+
+  return { ensureUI, refreshValues, setValue };
 }
 
 const pixelpilotManager = createCapManager({
