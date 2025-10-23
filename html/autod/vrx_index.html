@@ -1183,7 +1183,10 @@ function coerceForKey(meta, raw){
   return String(raw);
 }
 function valueToString(meta, v){
-  if (meta.type==='bool') return v ? '1' : '0';
+  if (meta.type==='bool'){
+    const boolVal = coerceForKey(meta, v);
+    return boolVal ? 'true' : 'false';
+  }
   if (typeof v === 'number') return (Number.isFinite(v)? String(v) : '');
   return String(v ?? '');
 }
