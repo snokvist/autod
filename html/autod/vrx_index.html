@@ -18,8 +18,36 @@
   header .sub{color:var(--mut);font-size:12px}
   main{padding:14px;display:grid;gap:12px;grid-template-columns:1fr}
   .card{background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:hidden}
-  .card h2{margin:0;padding:12px 14px;border-bottom:1px solid var(--line);font-size:14px}
+  .card h2{margin:0;border-bottom:1px solid var(--line);font-size:14px;padding:0}
+  .card h2 .card-toggle{
+    width:100%;
+    background:transparent;
+    border:0;
+    color:inherit;
+    font:inherit;
+    padding:14px 16px;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:12px;
+    cursor:pointer;
+    min-height:44px;
+    text-align:left;
+    touch-action:manipulation;
+    border-radius:12px;
+  }
+  .card h2 .card-toggle:focus-visible{outline:2px solid var(--mut);outline-offset:2px;border-radius:12px}
+  .card h2 .card-toggle-label{flex:1;font-weight:600}
+  .card h2 .card-toggle-icon{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:999px;border:1px solid var(--line);background:#0f1317;transition:background .2s ease,border-color .2s ease}
+  .card h2 .card-toggle-icon::before{content:"";display:inline-block;width:8px;height:8px;border-right:2px solid currentColor;border-bottom:2px solid currentColor;transform:rotate(45deg);transition:transform .2s ease}
+  .collapsible-card:not(.collapsed) .card-toggle-icon{background:rgba(54,194,117,.14);border-color:rgba(54,194,117,.5)}
+  .collapsible-card:not(.collapsed) .card-toggle-icon::before{transform:rotate(-135deg)}
+  @media (hover:hover){
+    .card h2 .card-toggle:hover{background:rgba(255,255,255,.02)}
+  }
   .card .body{padding:12px 14px;display:grid;gap:10px}
+  .collapsible-card.collapsed > .body{display:none}
+  .collapsible-card > .body[hidden]{display:none !important}
   .row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
   .row > label{display:flex;align-items:center;gap:8px;flex:1 1 180px}
   input,button,textarea,select{
@@ -306,12 +334,6 @@
       </section>
 
       <div class="cap-grid" id="udpRelayGrid"></div>
-      <div>
-        <div class="mut">Last request:</div>
-        <pre class="inline" id="udpRelayReqPreview">{}</pre>
-        <div class="mut">Last response:</div>
-        <textarea id="udpRelayResp" readonly></textarea>
-      </div>
     </div>
   </section>
 
@@ -437,6 +459,118 @@ const fmtOneLine = obj => JSON.stringify(obj);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const clamp = (v,min,max)=>Math.max(min,Math.min(max,v));
 const DEFAULT_REMOTE_EXEC_TARGET = 'http://192.168.2.203:55667/exec';
+
+const collapsibleCardBodies = new WeakMap();
+const collapsibleCardButtons = new WeakMap();
+let activeCollapsibleCard = null;
+let collapsibleCardObserver = null;
+let collapsibleCardsInitialized = false;
+let collapsibleCardIdCounter = 0;
+
+function ensureCollapsibleCardObserver(){
+  if (!collapsibleCardObserver){
+    collapsibleCardObserver = new MutationObserver(mutations => {
+      for (const mutation of mutations){
+        const target = mutation.target;
+        if (!(target instanceof HTMLElement)) continue;
+        const isHidden = target.hidden || target.style.display === 'none';
+        if (isHidden){
+          setCollapsibleCardExpanded(target, false);
+        }
+      }
+    });
+  }
+  return collapsibleCardObserver;
+}
+
+function setCollapsibleCardExpanded(card, expanded){
+  const body = collapsibleCardBodies.get(card);
+  const button = collapsibleCardButtons.get(card);
+  if (!body || !button) return;
+
+  if (expanded){
+    if (activeCollapsibleCard && activeCollapsibleCard !== card){
+      setCollapsibleCardExpanded(activeCollapsibleCard, false);
+    }
+    card.classList.remove('collapsed');
+    card.classList.add('expanded');
+    button.setAttribute('aria-expanded', 'true');
+    body.hidden = false;
+    body.removeAttribute('aria-hidden');
+    activeCollapsibleCard = card;
+  } else {
+    card.classList.add('collapsed');
+    card.classList.remove('expanded');
+    button.setAttribute('aria-expanded', 'false');
+    body.hidden = true;
+    body.setAttribute('aria-hidden', 'true');
+    if (activeCollapsibleCard === card) activeCollapsibleCard = null;
+  }
+}
+
+function toggleCollapsibleCard(card){
+  const isExpanded = !card.classList.contains('collapsed');
+  setCollapsibleCardExpanded(card, !isExpanded);
+}
+
+function initCollapsibleCards(){
+  if (collapsibleCardsInitialized) return;
+  const cards = Array.from(document.querySelectorAll('main > section.card'));
+  if (!cards.length){
+    collapsibleCardsInitialized = true;
+    return;
+  }
+  const observer = ensureCollapsibleCardObserver();
+  for (const card of cards){
+    const heading = card.querySelector(':scope > h2');
+    const body = card.querySelector(':scope > .body');
+    if (!heading || !body) continue;
+
+    const label = (heading.textContent || '').replace(/\s+/g, ' ').trim() || card.getAttribute('aria-label') || card.id || 'Section';
+    heading.textContent = '';
+
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'card-toggle';
+
+    const labelSpan = document.createElement('span');
+    labelSpan.className = 'card-toggle-label';
+    labelSpan.textContent = label;
+    button.appendChild(labelSpan);
+
+    const iconSpan = document.createElement('span');
+    iconSpan.className = 'card-toggle-icon';
+    iconSpan.setAttribute('aria-hidden', 'true');
+    button.appendChild(iconSpan);
+
+    let bodyId = body.id;
+    if (!bodyId){
+      const base = card.id ? `${card.id}-body` : `card-body-${++collapsibleCardIdCounter}`;
+      bodyId = base;
+      body.id = bodyId;
+    }
+    button.setAttribute('aria-controls', bodyId);
+    button.setAttribute('aria-expanded', 'false');
+
+    heading.appendChild(button);
+
+    collapsibleCardBodies.set(card, body);
+    collapsibleCardButtons.set(card, button);
+
+    card.classList.add('collapsible-card', 'collapsed');
+    body.hidden = true;
+    body.setAttribute('aria-hidden', 'true');
+
+    button.addEventListener('click', ev => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      toggleCollapsibleCard(card);
+    });
+
+    observer.observe(card, { attributes:true, attributeFilter:['style','hidden'] });
+  }
+  collapsibleCardsInitialized = true;
+}
 
 function joinCaps(caps){
   if (!Array.isArray(caps) || !caps.length) return '—';
@@ -2841,6 +2975,8 @@ async function loadCaps(){
     joystickSse.disable();
   }
 }
+
+initCollapsibleCards();
 
 $('#exec_btn').addEventListener('click', doExec);
 $('#refreshCaps').addEventListener('click', loadCaps);
