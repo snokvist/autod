@@ -18,8 +18,36 @@
   header .sub{color:var(--mut);font-size:12px}
   main{padding:14px;display:grid;gap:12px;grid-template-columns:1fr}
   .card{background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:hidden}
-  .card h2{margin:0;padding:12px 14px;border-bottom:1px solid var(--line);font-size:14px}
+  .card h2{margin:0;border-bottom:1px solid var(--line);font-size:14px;padding:0}
+  .card h2 .card-toggle{
+    width:100%;
+    background:transparent;
+    border:0;
+    color:inherit;
+    font:inherit;
+    padding:14px 16px;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:12px;
+    cursor:pointer;
+    min-height:44px;
+    text-align:left;
+    touch-action:manipulation;
+    border-radius:12px;
+  }
+  .card h2 .card-toggle:focus-visible{outline:2px solid var(--mut);outline-offset:2px;border-radius:12px}
+  .card h2 .card-toggle-label{flex:1;font-weight:600}
+  .card h2 .card-toggle-icon{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:999px;border:1px solid var(--line);background:#0f1317;transition:background .2s ease,border-color .2s ease}
+  .card h2 .card-toggle-icon::before{content:"";display:inline-block;width:8px;height:8px;border-right:2px solid currentColor;border-bottom:2px solid currentColor;transform:rotate(45deg);transition:transform .2s ease}
+  .collapsible-card:not(.collapsed) .card-toggle-icon{background:rgba(54,194,117,.14);border-color:rgba(54,194,117,.5)}
+  .collapsible-card:not(.collapsed) .card-toggle-icon::before{transform:rotate(-135deg)}
+  @media (hover:hover){
+    .card h2 .card-toggle:hover{background:rgba(255,255,255,.02)}
+  }
   .card .body{padding:12px 14px;display:grid;gap:10px}
+  .collapsible-card.collapsed > .body{display:none}
+  .collapsible-card > .body[hidden]{display:none !important}
   .row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
   .row > label{display:flex;align-items:center;gap:8px;flex:1 1 180px}
   input,button,textarea,select{
@@ -42,16 +70,29 @@
   .joy-row{align-items:center}
   .joy-row .mut{font-size:12px}
   #joystickEndpoint{word-break:break-all}
-  .joy-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(90px,1fr));gap:10px;justify-items:center}
-  .joy-item{background:#0f1317;border:1px solid var(--line);border-radius:12px;padding:12px;display:grid;gap:10px;justify-items:center;transition:border-color .2s ease,box-shadow .2s ease}
+  .joy-grid{display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));justify-items:stretch}
+  .joy-item{background:#0f1317;border:1px solid var(--line);border-radius:12px;padding:12px;display:grid;gap:10px;justify-items:center;transition:border-color .2s ease,box-shadow .2s ease;min-width:0}
   .joy-item .joy-idx{color:var(--mut);font-size:12px;letter-spacing:.08em;text-transform:uppercase;text-align:center}
   .joy-bar{position:relative;width:20px;height:120px;border-radius:10px;border:1px solid rgba(154,161,166,.35);background:linear-gradient(180deg,rgba(54,194,117,.08),rgba(54,194,117,.02));overflow:hidden}
   .joy-bar::after{content:"";position:absolute;inset:0;border-radius:10px;border:1px solid rgba(11,13,16,.45);pointer-events:none}
   .joy-bar-fill{position:absolute;left:0;right:0;bottom:0;height:0%;background:linear-gradient(180deg,var(--ok),#1a7d45);transition:height .2s ease}
   .joy-values{display:grid;gap:2px;justify-items:center;width:100%;text-align:center;font-size:12px}
-  .joy-item .joy-val{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-weight:600;font-size:12px}
-  .joy-item .joy-raw{color:var(--mut);font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:10px}
+  .joy-values > div{display:flex;align-items:center;justify-content:center;width:100%;white-space:nowrap}
+  .joy-item .joy-val{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-weight:600;font-size:12px;font-variant-numeric:tabular-nums}
+  .joy-item .joy-raw{color:var(--mut);font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:10px;font-variant-numeric:tabular-nums}
   .joy-item.joy-bump{border-color:rgba(54,194,117,.45);box-shadow:0 0 0 1px rgba(54,194,117,.25)}
+
+  .joy-meta{display:grid;gap:4px;justify-items:center;width:100%;text-align:center;font-size:11px;color:var(--mut);margin-top:4px}
+  .joy-meta-map{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-weight:600;font-size:12px;color:var(--fg)}
+  .joy-meta-map.joy-meta-map-unmapped{color:var(--err)}
+  .joy-meta-tags{display:flex;flex-wrap:wrap;gap:6px;justify-content:center}
+  .joy-meta-tag{font-size:10px}
+  .joy-meta-tag-normal{color:var(--mut);border-color:var(--line);background:rgba(255,255,255,.02)}
+  .joy-meta-tag-invert{color:var(--err);border-color:rgba(255,107,107,.45);background:rgba(255,107,107,.12)}
+  .joy-meta-dead{font-size:11px;color:var(--mut)}
+  .joy-meta-dead.joy-meta-dead-active{color:var(--fg)}
+  .joy-item.joy-item-inverted{border-color:rgba(255,107,107,.35)}
+  .joy-item.joy-item-unmapped .joy-meta-map{color:var(--err)}
 
   .dvr-body{display:grid;grid-template-rows:auto 1fr;gap:10px;height:360px;min-height:0}
   .dvr-scroll{display:grid;gap:6px;overflow:auto;padding-right:4px;min-height:0}
@@ -306,12 +347,6 @@
       </section>
 
       <div class="cap-grid" id="udpRelayGrid"></div>
-      <div>
-        <div class="mut">Last request:</div>
-        <pre class="inline" id="udpRelayReqPreview">{}</pre>
-        <div class="mut">Last response:</div>
-        <textarea id="udpRelayResp" readonly></textarea>
-      </div>
     </div>
   </section>
 
@@ -438,6 +473,118 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 const clamp = (v,min,max)=>Math.max(min,Math.min(max,v));
 const DEFAULT_REMOTE_EXEC_TARGET = 'http://192.168.2.203:55667/exec';
 
+const collapsibleCardBodies = new WeakMap();
+const collapsibleCardButtons = new WeakMap();
+let activeCollapsibleCard = null;
+let collapsibleCardObserver = null;
+let collapsibleCardsInitialized = false;
+let collapsibleCardIdCounter = 0;
+
+function ensureCollapsibleCardObserver(){
+  if (!collapsibleCardObserver){
+    collapsibleCardObserver = new MutationObserver(mutations => {
+      for (const mutation of mutations){
+        const target = mutation.target;
+        if (!(target instanceof HTMLElement)) continue;
+        const isHidden = target.hidden || target.style.display === 'none';
+        if (isHidden){
+          setCollapsibleCardExpanded(target, false);
+        }
+      }
+    });
+  }
+  return collapsibleCardObserver;
+}
+
+function setCollapsibleCardExpanded(card, expanded){
+  const body = collapsibleCardBodies.get(card);
+  const button = collapsibleCardButtons.get(card);
+  if (!body || !button) return;
+
+  if (expanded){
+    if (activeCollapsibleCard && activeCollapsibleCard !== card){
+      setCollapsibleCardExpanded(activeCollapsibleCard, false);
+    }
+    card.classList.remove('collapsed');
+    card.classList.add('expanded');
+    button.setAttribute('aria-expanded', 'true');
+    body.hidden = false;
+    body.removeAttribute('aria-hidden');
+    activeCollapsibleCard = card;
+  } else {
+    card.classList.add('collapsed');
+    card.classList.remove('expanded');
+    button.setAttribute('aria-expanded', 'false');
+    body.hidden = true;
+    body.setAttribute('aria-hidden', 'true');
+    if (activeCollapsibleCard === card) activeCollapsibleCard = null;
+  }
+}
+
+function toggleCollapsibleCard(card){
+  const isExpanded = !card.classList.contains('collapsed');
+  setCollapsibleCardExpanded(card, !isExpanded);
+}
+
+function initCollapsibleCards(){
+  if (collapsibleCardsInitialized) return;
+  const cards = Array.from(document.querySelectorAll('main > section.card'));
+  if (!cards.length){
+    collapsibleCardsInitialized = true;
+    return;
+  }
+  const observer = ensureCollapsibleCardObserver();
+  for (const card of cards){
+    const heading = card.querySelector(':scope > h2');
+    const body = card.querySelector(':scope > .body');
+    if (!heading || !body) continue;
+
+    const label = (heading.textContent || '').replace(/\s+/g, ' ').trim() || card.getAttribute('aria-label') || card.id || 'Section';
+    heading.textContent = '';
+
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'card-toggle';
+
+    const labelSpan = document.createElement('span');
+    labelSpan.className = 'card-toggle-label';
+    labelSpan.textContent = label;
+    button.appendChild(labelSpan);
+
+    const iconSpan = document.createElement('span');
+    iconSpan.className = 'card-toggle-icon';
+    iconSpan.setAttribute('aria-hidden', 'true');
+    button.appendChild(iconSpan);
+
+    let bodyId = body.id;
+    if (!bodyId){
+      const base = card.id ? `${card.id}-body` : `card-body-${++collapsibleCardIdCounter}`;
+      bodyId = base;
+      body.id = bodyId;
+    }
+    button.setAttribute('aria-controls', bodyId);
+    button.setAttribute('aria-expanded', 'false');
+
+    heading.appendChild(button);
+
+    collapsibleCardBodies.set(card, body);
+    collapsibleCardButtons.set(card, button);
+
+    card.classList.add('collapsible-card', 'collapsed');
+    body.hidden = true;
+    body.setAttribute('aria-hidden', 'true');
+
+    button.addEventListener('click', ev => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      toggleCollapsibleCard(card);
+    });
+
+    observer.observe(card, { attributes:true, attributeFilter:['style','hidden'] });
+  }
+  collapsibleCardsInitialized = true;
+}
+
 function joinCaps(caps){
   if (!Array.isArray(caps) || !caps.length) return '—';
   const frag = document.createDocumentFragment();
@@ -523,6 +670,15 @@ const joystickSse = (()=>{
   let url = '';
   let cells = [];
   let lastStatus = { mode: '', text: '' };
+  const configState = {
+    map:Array.from({length:16}, ()=>null),
+    invert:Array.from({length:16}, ()=>false),
+    deadband:Array.from({length:16}, ()=>0),
+    haveMap:false,
+    haveInvert:false,
+    haveDeadband:false
+  };
+  const padIdx = (num)=> String(num).padStart(2,'0');
   const JOY_BAR_MIN = 0;
   const JOY_BAR_MAX = 2000;
 
@@ -535,7 +691,7 @@ const joystickSse = (()=>{
         item.className = 'joy-item';
         const label = document.createElement('div');
         label.className = 'joy-idx';
-        label.textContent = `CH${String(i + 1).padStart(2,'0')}`;
+        label.textContent = `CH${padIdx(i + 1)}`;
         const bar = document.createElement('div');
         bar.className = 'joy-bar';
         const fill = document.createElement('div');
@@ -550,12 +706,149 @@ const joystickSse = (()=>{
         raw.className = 'joy-raw';
         raw.textContent = 'Raw —';
         values.append(scaled, raw);
-        item.append(label, bar, values);
+        const meta = document.createElement('div');
+        meta.className = 'joy-meta';
+        meta.style.display = 'none';
+        const map = document.createElement('div');
+        map.className = 'joy-meta-map';
+        const tags = document.createElement('div');
+        tags.className = 'joy-meta-tags';
+        tags.style.display = 'none';
+        const invertTag = document.createElement('span');
+        invertTag.className = 'pill joy-meta-tag joy-meta-tag-normal joy-meta-invert';
+        invertTag.textContent = 'Normal';
+        tags.append(invertTag);
+        const dead = document.createElement('div');
+        dead.className = 'joy-meta-dead';
+        dead.style.display = 'none';
+        meta.append(map, tags, dead);
+        item.append(label, bar, values, meta);
         frag.append(item);
       }
       gridEl.append(frag);
     }
     cells = Array.from(gridEl.children);
+  }
+
+  function applyConfig(){
+    ensureGrid();
+    const hasAny = configState.haveMap || configState.haveInvert || configState.haveDeadband;
+    cells.forEach((cell, idx)=>{
+      const meta = cell.querySelector('.joy-meta');
+      if (!meta) return;
+      meta.style.display = hasAny ? 'grid' : 'none';
+      if (!hasAny){
+        cell.classList.remove('joy-item-inverted','joy-item-unmapped');
+        return;
+      }
+
+      const mapEl = cell.querySelector('.joy-meta-map');
+      if (mapEl){
+        if (configState.haveMap){
+          const axis = configState.map[idx];
+          if (axis){
+            mapEl.textContent = `Input ${padIdx(axis)}`;
+            mapEl.classList.remove('joy-meta-map-unmapped');
+            cell.classList.remove('joy-item-unmapped');
+          } else {
+            mapEl.textContent = 'Unmapped';
+            mapEl.classList.add('joy-meta-map-unmapped');
+            cell.classList.add('joy-item-unmapped');
+          }
+          mapEl.style.display = '';
+        } else {
+          mapEl.textContent = '';
+          mapEl.style.display = 'none';
+          mapEl.classList.remove('joy-meta-map-unmapped');
+          cell.classList.remove('joy-item-unmapped');
+        }
+      }
+
+      const tags = cell.querySelector('.joy-meta-tags');
+      const invertTag = cell.querySelector('.joy-meta-invert');
+      if (tags && invertTag){
+        if (configState.haveInvert){
+          const inverted = !!configState.invert[idx];
+          invertTag.textContent = inverted ? 'Inverted' : 'Normal';
+          invertTag.classList.remove('joy-meta-tag-normal','joy-meta-tag-invert');
+          invertTag.classList.add(inverted ? 'joy-meta-tag-invert' : 'joy-meta-tag-normal');
+          tags.style.display = 'flex';
+          cell.classList.toggle('joy-item-inverted', inverted);
+        } else {
+          tags.style.display = 'none';
+          cell.classList.remove('joy-item-inverted');
+        }
+      }
+
+      const deadEl = cell.querySelector('.joy-meta-dead');
+      if (deadEl){
+        if (configState.haveDeadband){
+          const val = Math.abs(configState.deadband[idx] ?? 0);
+          deadEl.textContent = val ? `Deadband ±${val}` : 'Deadband off';
+          deadEl.style.display = '';
+          if (val){
+            deadEl.classList.add('joy-meta-dead-active');
+          } else {
+            deadEl.classList.remove('joy-meta-dead-active');
+          }
+        } else {
+          deadEl.textContent = '';
+          deadEl.style.display = 'none';
+          deadEl.classList.remove('joy-meta-dead-active');
+        }
+      }
+    });
+  }
+
+  function sanitizeNumeric(value, fallback){
+    const num = Number(value);
+    return Number.isFinite(num) ? num : fallback;
+  }
+
+  function resetConfigState(){
+    configState.map = Array.from({length:16}, ()=>null);
+    configState.invert = Array.from({length:16}, ()=>false);
+    configState.deadband = Array.from({length:16}, ()=>0);
+    configState.haveMap = false;
+    configState.haveInvert = false;
+    configState.haveDeadband = false;
+    applyConfig();
+  }
+
+  function setConfig(partial){
+    if (!partial || typeof partial !== 'object'){
+      resetConfigState();
+      return;
+    }
+
+    if (Array.isArray(partial.map)){
+      configState.map = Array.from({length:16}, (_, idx)=>{
+        const raw = sanitizeNumeric(partial.map[idx], NaN);
+        return Number.isFinite(raw) && raw > 0 ? Math.trunc(raw) : null;
+      });
+    } else {
+      configState.map = Array.from({length:16}, ()=>null);
+    }
+    configState.haveMap = !!partial.haveMap;
+
+    if (Array.isArray(partial.invert)){
+      configState.invert = Array.from({length:16}, (_, idx)=> !!partial.invert[idx]);
+    } else {
+      configState.invert = Array.from({length:16}, ()=>false);
+    }
+    configState.haveInvert = !!partial.haveInvert;
+
+    if (Array.isArray(partial.deadband)){
+      configState.deadband = Array.from({length:16}, (_, idx)=>{
+        const raw = sanitizeNumeric(partial.deadband[idx], 0);
+        return Math.max(0, Math.abs(Math.trunc(raw)));
+      });
+    } else {
+      configState.deadband = Array.from({length:16}, ()=>0);
+    }
+    configState.haveDeadband = !!partial.haveDeadband;
+
+    applyConfig();
   }
 
   function resetValues(){
@@ -745,9 +1038,114 @@ const joystickSse = (()=>{
       statusEl.textContent = 'Idle';
       statusEl.title = '';
       lastStatus = { mode: '', text: '' };
+      resetConfigState();
       resetValues();
-    }
+    },
+    setConfig,
+    resetConfig:resetConfigState
   };
+})();
+
+const joystickConfigInfo = (()=>{
+  const state = {
+    map:Array.from({length:16}, ()=>null),
+    invert:Array.from({length:16}, ()=>false),
+    deadband:Array.from({length:16}, ()=>0),
+    haveMap:false,
+    haveInvert:false,
+    haveDeadband:false
+  };
+
+  function parseMap(str){
+    const values = Array.from({length:16}, ()=>null);
+    if (!str) return values;
+    const parts = String(str).split(',');
+    for (let i = 0; i < values.length; i++){
+      const raw = (parts[i] ?? '').trim();
+      if (!raw) continue;
+      const num = Number.parseInt(raw, 10);
+      if (Number.isFinite(num) && num > 0){
+        values[i] = num;
+      }
+    }
+    return values;
+  }
+
+  function parseInvert(str){
+    const flags = Array.from({length:16}, ()=>false);
+    if (!str) return flags;
+    const parts = String(str).split(',');
+    for (const part of parts){
+      const raw = part.trim();
+      if (!raw) continue;
+      const num = Number.parseInt(raw, 10);
+      if (Number.isFinite(num) && num >= 1 && num <= 16){
+        flags[num - 1] = true;
+      }
+    }
+    return flags;
+  }
+
+  function parseDeadband(str){
+    const values = Array.from({length:16}, ()=>0);
+    if (!str) return values;
+    const parts = String(str).split(',');
+    for (let i = 0; i < values.length; i++){
+      const raw = (parts[i] ?? '').trim();
+      if (!raw) continue;
+      const num = Number.parseInt(raw, 10);
+      if (Number.isFinite(num)){
+        values[i] = Math.max(0, Math.abs(num));
+      }
+    }
+    return values;
+  }
+
+  function render(){
+    joystickSse.setConfig({
+      map:state.map,
+      invert:state.invert,
+      deadband:state.deadband,
+      haveMap:state.haveMap,
+      haveInvert:state.haveInvert,
+      haveDeadband:state.haveDeadband
+    });
+  }
+
+  function setMap(str){
+    const raw = typeof str === 'string' ? str.trim() : '';
+    state.haveMap = !!raw;
+    state.map = parseMap(raw);
+    render();
+  }
+
+  function setInvert(str){
+    const raw = typeof str === 'string' ? str.trim() : '';
+    state.haveInvert = !!raw;
+    state.invert = parseInvert(raw);
+    render();
+  }
+
+  function setDeadband(str){
+    const raw = typeof str === 'string' ? str.trim() : '';
+    state.haveDeadband = !!raw;
+    state.deadband = parseDeadband(raw);
+    render();
+  }
+
+  function reset(){
+    state.map = Array.from({length:16}, ()=>null);
+    state.invert = Array.from({length:16}, ()=>false);
+    state.deadband = Array.from({length:16}, ()=>0);
+    state.haveMap = false;
+    state.haveInvert = false;
+    state.haveDeadband = false;
+    render();
+  }
+
+  reset();
+
+  return { setMap, setInvert, setDeadband, reset };
 })();
 
 function miniRkStatusEl(){
@@ -1354,49 +1752,56 @@ function createCapManager(config){
   }
 
   function applyValueToUI(meta, value){
-    const ctl = state.controls[meta.key];
-    if (!ctl) return;
-    ctl.errEl.style.display='none';
     const coerced = coerceForKey(meta, value);
-
-    if (ctl.kind==='toggle'){
-      ctl.input.checked = !!coerced;
-      ctl.valEl.textContent = ctl.input.checked ? 'true' : 'false';
-      return;
-    }
-    if (ctl.kind==='range'){
-      const num = Number(coerced);
-      const v = clamp(Number.isFinite(num)?num:Number(ctl.input.min), ctl.min, ctl.max);
-      ctl.input.value = String(v);
-      ctl.valEl.textContent = v + (meta.control?.unit?(' '+meta.control.unit):'');
-      return;
-    }
-    if (ctl.kind==='select'){
-      const s = String(coerced ?? '');
-      let matched = false;
-      for (const opt of ctl.input.options){
-        if (opt.value !== "__free__" && opt.value === s){
-          ctl.input.value = s; matched = true; break;
+    const ctl = state.controls[meta.key];
+    if (ctl){
+      ctl.errEl.style.display='none';
+      if (ctl.kind==='toggle'){
+        ctl.input.checked = !!coerced;
+        ctl.valEl.textContent = ctl.input.checked ? 'true' : 'false';
+      }
+      else if (ctl.kind==='range'){
+        const num = Number(coerced);
+        const v = clamp(Number.isFinite(num)?num:Number(ctl.input.min), ctl.min, ctl.max);
+        ctl.input.value = String(v);
+        ctl.valEl.textContent = v + (meta.control?.unit?(' '+meta.control.unit):'');
+      }
+      else if (ctl.kind==='select'){
+        const s = String(coerced ?? '');
+        let matched = false;
+        for (const opt of ctl.input.options){
+          if (opt.value !== "__free__" && opt.value === s){
+            ctl.input.value = s; matched = true; break;
+          }
+        }
+        if (matched){
+          if (ctl.allowFree && ctl.freeWrap) ctl.freeWrap.style.display='none';
+          ctl.valEl.textContent = ctl.input.value;
+        } else if (ctl.allowFree){
+          ctl.input.value = "__free__";
+          if (ctl.freeWrap) ctl.freeWrap.style.display='block';
+          if (ctl.freeInput) ctl.freeInput.value = s;
+          ctl.valEl.textContent = s;
+        } else {
+          ctl.valEl.textContent = s;
         }
       }
-      if (matched){
-        if (ctl.allowFree && ctl.freeWrap) ctl.freeWrap.style.display='none';
-        ctl.valEl.textContent = ctl.input.value;
-      } else if (ctl.allowFree){
-        ctl.input.value = "__free__";
-        if (ctl.freeWrap) ctl.freeWrap.style.display='block';
-        if (ctl.freeInput) ctl.freeInput.value = s;
-        ctl.valEl.textContent = s;
-      } else {
+      else if (ctl.kind==='text'){
+        const s = String(coerced ?? '');
+        ctl.input.value = s;
         ctl.valEl.textContent = s;
       }
-      return;
+      else {
+        const str = valueToString(meta, value);
+        if (ctl.input && typeof ctl.input.value === 'string'){
+          ctl.input.value = str;
+        }
+        ctl.valEl.textContent = str;
+      }
     }
-    if (ctl.kind==='text'){
-      const s = String(coerced ?? '');
-      ctl.input.value = s;
-      ctl.valEl.textContent = s;
-      return;
+    if (typeof config.onValue === 'function'){
+      try { config.onValue(meta, coerced, value, state); }
+      catch(e){}
     }
   }
 
@@ -1604,7 +2009,18 @@ const joystickManager = createCapManager({
   cmdsId:'joystickCmds',
   helpTimeoutMs:500,
   getTimeoutMs:800,
-  setTimeoutMs:1500
+  setTimeoutMs:1500,
+  onValue(meta, value){
+    if (!meta || !meta.key) return;
+    const strVal = value == null ? '' : String(value);
+    if (meta.key === 'map'){
+      joystickConfigInfo.setMap(strVal);
+    } else if (meta.key === 'invert'){
+      joystickConfigInfo.setInvert(strVal);
+    } else if (meta.key === 'deadband'){
+      joystickConfigInfo.setDeadband(strVal);
+    }
+  }
 });
 
 const udpRelayManager = createCapManager({
@@ -2769,6 +3185,7 @@ async function loadCaps(){
       if (gridEl) gridEl.innerHTML = '';
       const cmdsEl = document.getElementById('joystickCmds');
       if (cmdsEl) cmdsEl.innerHTML = '';
+      joystickConfigInfo.reset();
     }
 
     if (capList.includes('udp_relay')){
@@ -2841,6 +3258,8 @@ async function loadCaps(){
     joystickSse.disable();
   }
 }
+
+initCollapsibleCards();
 
 $('#exec_btn').addEventListener('click', doExec);
 $('#refreshCaps').addEventListener('click', loadCaps);
