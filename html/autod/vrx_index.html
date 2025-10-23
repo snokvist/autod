@@ -70,15 +70,16 @@
   .joy-row{align-items:center}
   .joy-row .mut{font-size:12px}
   #joystickEndpoint{word-break:break-all}
-  .joy-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(90px,1fr));gap:10px;justify-items:center}
-  .joy-item{background:#0f1317;border:1px solid var(--line);border-radius:12px;padding:12px;display:grid;gap:10px;justify-items:center;transition:border-color .2s ease,box-shadow .2s ease}
+  .joy-grid{display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));justify-items:stretch}
+  .joy-item{background:#0f1317;border:1px solid var(--line);border-radius:12px;padding:12px;display:grid;gap:10px;justify-items:center;transition:border-color .2s ease,box-shadow .2s ease;min-width:0}
   .joy-item .joy-idx{color:var(--mut);font-size:12px;letter-spacing:.08em;text-transform:uppercase;text-align:center}
   .joy-bar{position:relative;width:20px;height:120px;border-radius:10px;border:1px solid rgba(154,161,166,.35);background:linear-gradient(180deg,rgba(54,194,117,.08),rgba(54,194,117,.02));overflow:hidden}
   .joy-bar::after{content:"";position:absolute;inset:0;border-radius:10px;border:1px solid rgba(11,13,16,.45);pointer-events:none}
   .joy-bar-fill{position:absolute;left:0;right:0;bottom:0;height:0%;background:linear-gradient(180deg,var(--ok),#1a7d45);transition:height .2s ease}
   .joy-values{display:grid;gap:2px;justify-items:center;width:100%;text-align:center;font-size:12px}
-  .joy-item .joy-val{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-weight:600;font-size:12px}
-  .joy-item .joy-raw{color:var(--mut);font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:10px}
+  .joy-values > div{display:flex;align-items:center;justify-content:center;width:100%;white-space:nowrap}
+  .joy-item .joy-val{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-weight:600;font-size:12px;font-variant-numeric:tabular-nums}
+  .joy-item .joy-raw{color:var(--mut);font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:10px;font-variant-numeric:tabular-nums}
   .joy-item.joy-bump{border-color:rgba(54,194,117,.45);box-shadow:0 0 0 1px rgba(54,194,117,.25)}
 
   .dvr-body{display:grid;grid-template-rows:auto 1fr;gap:10px;height:360px;min-height:0}
