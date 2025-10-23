@@ -239,8 +239,16 @@
         <div class="spacer"></div>
         <button id="joystickReconnectBtn" type="button">Reconnect</button>
       </div>
-      <div class="joy-grid" id="joystickGrid"></div>
+      <div class="joy-grid" id="joystickSseGrid"></div>
       <div class="mut">Streaming scaled channels and raw values from the joystick SSE feed.</div>
+      <div class="cap-toolbar">
+        <div id="joystickCmds" class="row"></div>
+        <button id="joystickRefreshBtn" type="button">Refresh values</button>
+        <div class="spacer"></div>
+        <div class="cap-stats" id="joystickConfigStats">—</div>
+      </div>
+      <div class="cap-grid" id="joystickConfigGrid"></div>
+      <div class="mut">Configuration changes persist to /etc/joystick2crfs.conf. Reload to apply without restarting.</div>
     </div>
   </section>
 
@@ -503,7 +511,7 @@ const joystickSse = (()=>{
   const statusEl = document.getElementById('joystickStatus');
   const lastEl = document.getElementById('joystickLastUpdate');
   const endpointEl = document.getElementById('joystickEndpoint');
-  const gridEl = document.getElementById('joystickGrid');
+  const gridEl = document.getElementById('joystickSseGrid');
   const reconnectBtn = document.getElementById('joystickReconnectBtn');
   if (!card || !statusEl || !gridEl){
     return { enable(){}, disable(){} };
@@ -1482,8 +1490,8 @@ function createCapManager(config){
     if (!holder) return;
     holder.innerHTML = '';
     const names = new Set((help?.commands||[]).map(c=>c.name));
-    const labelMap = { start:'Start', stop:'Stop', restart:'Restart', apply:'Apply', status:'Status', mode:'Mode', toggle_record:'Toggle record' };
-    for (const cmd of ['start','stop','restart','apply','status','toggle_record']){
+    const labelMap = { start:'Start', stop:'Stop', restart:'Restart', reload:'Reload', apply:'Apply', status:'Status', mode:'Mode', toggle_record:'Toggle record' };
+    for (const cmd of ['start','stop','restart','reload','apply','status','toggle_record']){
       if (!names.has(cmd)) continue;
       const btn = document.createElement('button');
       btn.textContent = labelMap[cmd] || cmd;
@@ -1583,6 +1591,17 @@ const pixelpilotManager = createCapManager({
   gridId:'pixelpilotGrid',
   statsId:'pixelpilotStats',
   cmdsId:'pixelpilotCmds'
+});
+
+const joystickManager = createCapManager({
+  cap:'joystick2crfs',
+  prefix:'joystick',
+  gridId:'joystickConfigGrid',
+  statsId:'joystickConfigStats',
+  cmdsId:'joystickCmds',
+  helpTimeoutMs:500,
+  getTimeoutMs:800,
+  setTimeoutMs:1500
 });
 
 const udpRelayManager = createCapManager({
@@ -2733,9 +2752,20 @@ async function loadCaps(){
     }
 
     if (hasJoystick){
+      const card = document.getElementById('joystickCard');
+      if (card) card.style.display = '';
+      await joystickManager.ensureUI();
       joystickSse.enable(caps.sse);
     } else {
       joystickSse.disable();
+      const card = document.getElementById('joystickCard');
+      if (card) card.style.display = 'none';
+      const statsEl = document.getElementById('joystickConfigStats');
+      if (statsEl) statsEl.textContent = 'cap missing';
+      const gridEl = document.getElementById('joystickConfigGrid');
+      if (gridEl) gridEl.innerHTML = '';
+      const cmdsEl = document.getElementById('joystickCmds');
+      if (cmdsEl) cmdsEl.innerHTML = '';
     }
 
     if (capList.includes('udp_relay')){
@@ -2814,6 +2844,7 @@ $('#refreshCaps').addEventListener('click', loadCaps);
 $('#exec_args').addEventListener('keydown',e=>{ if(e.key==='Enter') doExec(); });
 $('#nodesScanBtn').addEventListener('click', triggerNodesScan);
 $('#pixelpilotRefreshBtn').addEventListener('click', ()=> pixelpilotManager.refreshValues());
+$('#joystickRefreshBtn').addEventListener('click', ()=> joystickManager.refreshValues());
 $('#udpRelayRefreshBtn').addEventListener('click', ()=> udpRelayManager.refreshValues());
 $('#udpRelayReloadEmbedBtn').addEventListener('click', reloadUdpRelayEmbed);
 

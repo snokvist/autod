@@ -70,26 +70,31 @@ Each flavour drops intermediates under `build/<flavour>/` and strips binaries au
 
 ### Installing on Debian/`systemd`
 
-`make install` builds the native daemon and the bundled `udp_relay` helper, then stages a simple system-wide layout that targets Debian 11:
+`make install` builds the native daemon and the bundled `udp_relay` and `joystick2crfs` helpers, then stages a simple system-wide layout that targets Debian 11:
 
 - `autod` → `$(PREFIX)/bin/autod` (default prefix `/usr/local`).
 - VRX web UI and helpers → `$(PREFIX)/share/autod/vrx/` (`vrx_index.html`, `exec-handler.sh`, `*.msg`).
 - Configuration → `/etc/autod/autod.conf` (the shipped version overwrites any existing file so updates land immediately).
 - Service unit → `/etc/systemd/system/autod.service` pointing at the installed binary and config, running as `root` so helper scripts can signal privileged daemons.
 - `udp_relay` → `$(PREFIX)/bin/udp_relay`.
+- `joystick2crfs` → `$(PREFIX)/bin/joystick2crfs`.
 - `ip2uart` → build with `make ip2uart` or via the `make tools` aggregate target when you need the UART↔IP bridge.
 - `udp_relay` configuration → `/etc/udp_relay/udp_relay.conf` (overwritten in-place during each install).
+- `joystick2crfs` configuration → `/etc/joystick2crfs.conf` (overwritten in-place during each install).
 - `ip2uart` configuration → `/etc/ip2uart.conf` (not installed automatically; see [Helper Tools](#helper-tools)).
 - `udp_relay` service unit → `/etc/systemd/system/udp_relay.service` which runs the helper as `root` for consistent behaviour with the UI bindings.
+- `joystick2crfs` service unit → `/etc/systemd/system/joystick2crfs.service` (includes an `ExecReload` that delivers `SIGHUP` so the daemon can re-read its config without a full restart).
 - VRX udp_relay UI asset → `$(PREFIX)/share/autod/udp_relay/vrx_udp_relay.html` (the service runs the binary with `--ui` pointing at this file).
 
-During installation on a host with `systemctl` available (and no `DESTDIR`), the recipe stops any running `autod`/`udp_relay` services, installs the new assets and configuration in place, reloads `systemd`, and starts the services again without enabling them. If you staged into a `DESTDIR`, reload manually once the files land on the target system, then enable the daemon:
+During installation on a host with `systemctl` available (and no `DESTDIR`), the recipe stops any running `autod`/`udp_relay`/`joystick2crfs` services, installs the new assets and configuration in place, reloads `systemd`, and starts the services again without enabling them. If you staged into a `DESTDIR`, reload manually once the files land on the target system, then enable the daemon:
 
 ```bash
 sudo systemctl daemon-reload
 sudo systemctl enable --now autod
 # Optional helper
 sudo systemctl enable --now udp_relay
+# Optional joystick bridge
+sudo systemctl enable --now joystick2crfs
 ```
 
 The service starts in the VRX data directory so the bundled helper scripts can find their message payloads without additional configuration.

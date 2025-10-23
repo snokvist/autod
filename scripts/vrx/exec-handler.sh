@@ -10,6 +10,7 @@
 #   /sys/pixelpilot/help|start|stop|toggle_record
 #   /sys/pixelpilot_mini_rk/help|toggle_osd|toggle_recording|start|stop|restart
 #   /sys/udp_relay/help|start|stop|status
+#   /sys/joystick2crfs/help|get|set|reload|start|stop|restart|status
 #   /sys/link/help|mode|select|start|stop|status
 #   /sys/ping                                    (utility passthrough)
 #
@@ -26,6 +27,7 @@ HELP_DIR="${HELP_DIR:-$SCRIPT_DIR}"
 STATE_DIR="${VRX_STATE_DIR:-/tmp/vrx}"
 LINK_STATE_FILE="$STATE_DIR/link.env"
 DVR_MEDIA_DIR="${DVR_MEDIA_DIR:-/media}"
+JOYSTICK2CRFS_CONF="${JOYSTICK2CRFS_CONF:-/etc/joystick2crfs.conf}"
 
 if [ "$(id -u)" -ne 0 ]; then
   echo "exec-handler.sh requires root privileges; ensure autod.service runs as root" 1>&2
@@ -208,6 +210,273 @@ udp_relay_status(){
   else
     echo "udp relay not running"
   fi
+  return 0
+}
+
+# ======================= Joystick2CRFS =======================
+joystick2crfs_conf_path(){ echo "$JOYSTICK2CRFS_CONF"; }
+
+joystick2crfs_conf_get(){
+  key="$1"
+  file="$(joystick2crfs_conf_path)"
+  if [ ! -r "$file" ]; then
+    echo "joystick2crfs config not found: $file" 1>&2
+    return 4
+  fi
+  result="$(awk -v key="$key" '
+    BEGIN{found=0;}
+    {
+      line=$0;
+      trimmed=line;
+      sub(/^[ \t]+/, "", trimmed);
+      if (trimmed=="" || substr(trimmed,1,1)=="#") next;
+      if (index(trimmed, key "=")==1){
+        rest=substr(trimmed, length(key)+2);
+        commentStart=index(rest, "#");
+        if(commentStart>0){
+          rest=substr(rest,1,commentStart-1);
+        }
+        gsub(/^[ \t]+/, "", rest);
+        gsub(/[ \t]+$/, "", rest);
+        printf("FOUND:%s\n", rest);
+        found=1;
+        exit;
+      }
+    }
+    END{ if(!found) print "MISSING"; }
+  ' "$file" 2>/dev/null)"
+  rc=$?
+  if [ $rc -ne 0 ]; then
+    echo "failed to read joystick2crfs config" 1>&2
+    return 4
+  fi
+  case "$result" in
+    MISSING)
+      echo "joystick2crfs config key not found: $key" 1>&2
+      return 4
+      ;;
+    FOUND:*)
+      value="${result#FOUND:}"
+      printf '%s=%s\n' "$key" "$value"
+      return 0
+      ;;
+    *)
+      echo "failed to read joystick2crfs config" 1>&2
+      return 4
+      ;;
+  esac
+}
+
+joystick2crfs_conf_set(){
+  key="$1"; value="$2"
+  file="$(joystick2crfs_conf_path)"
+  ensure_parent_dir "$(dirname "$file")"
+  tmp="$file.tmp.$$"
+  if [ -f "$file" ]; then
+    if ! awk -v key="$key" -v value="$value" '
+      BEGIN{found=0;}
+      {
+        line=$0;
+        trimmed=line;
+        sub(/^[ \t]+/, "", trimmed);
+        if (trimmed=="" || substr(trimmed,1,1)=="#"){
+          print line;
+          next;
+        }
+        if(!found && index(trimmed, key "=")==1){
+          match(line, /^[ \t]*/);
+          prefix=substr(line, 1, RLENGTH);
+          rest=substr(trimmed, length(key)+2);
+          comment="";
+          commentStart=index(rest, "#");
+          pre=rest;
+          if(commentStart>0){
+            comment=substr(rest, commentStart);
+            pre=substr(rest, 1, commentStart-1);
+          }
+          spacing="";
+          if(match(pre, /[ \t]+$/)){
+            spacing=substr(pre, RSTART, RLENGTH);
+          }
+          printf("%s%s=%s%s%s\n", prefix, key, value, spacing, comment);
+          found=1;
+        } else {
+          print line;
+        }
+      }
+      END{
+        if(!found){
+          printf("%s=%s\n", key, value);
+        }
+      }
+    ' "$file" >"$tmp"; then
+      rm -f "$tmp"
+      echo "failed to update joystick2crfs config" 1>&2
+      return 4
+    fi
+  else
+    if ! printf '%s=%s\n' "$key" "$value" >"$tmp"; then
+      rm -f "$tmp"
+      echo "failed to write joystick2crfs config" 1>&2
+      return 4
+    fi
+  fi
+  if ! mv "$tmp" "$file"; then
+    rm -f "$tmp"
+    echo "failed to write joystick2crfs config" 1>&2
+    return 4
+  fi
+  chmod 644 "$file" 2>/dev/null || true
+  return 0
+}
+
+joystick2crfs_pids(){ pidof joystick2crfs 2>/dev/null; }
+
+joystick2crfs_unit_candidates(){
+  echo "joystick2crfs.service"
+  echo "joystick2crfs"
+}
+
+joystick2crfs_start(){
+  if have systemctl; then
+    for unit in $(joystick2crfs_unit_candidates); do
+      if systemctl start "$unit" >/dev/null 2>&1; then
+        echo "joystick2crfs started"
+        return 0
+      fi
+    done
+  fi
+  if have service; then
+    if service joystick2crfs start >/dev/null 2>&1; then
+      echo "joystick2crfs started"
+      return 0
+    fi
+  fi
+  echo "joystick2crfs start unsupported on this device" 1>&2
+  return 3
+}
+
+joystick2crfs_stop(){
+  if have systemctl; then
+    for unit in $(joystick2crfs_unit_candidates); do
+      if systemctl stop "$unit" >/dev/null 2>&1; then
+        echo "joystick2crfs stopped"
+        return 0
+      fi
+    done
+  fi
+  if have service; then
+    if service joystick2crfs stop >/dev/null 2>&1; then
+      echo "joystick2crfs stopped"
+      return 0
+    fi
+  fi
+  echo "joystick2crfs stop unsupported on this device" 1>&2
+  return 3
+}
+
+joystick2crfs_restart(){
+  if have systemctl; then
+    for unit in $(joystick2crfs_unit_candidates); do
+      if systemctl restart "$unit" >/dev/null 2>&1; then
+        echo "joystick2crfs restarted"
+        return 0
+      fi
+    done
+  fi
+  if joystick2crfs_stop; then
+    sleep 1
+    if joystick2crfs_start; then
+      echo "joystick2crfs restarted"
+      return 0
+    fi
+  fi
+  echo "joystick2crfs restart unsupported on this device" 1>&2
+  return 3
+}
+
+joystick2crfs_status(){
+  if have systemctl; then
+    for unit in $(joystick2crfs_unit_candidates); do
+      if systemctl is-active --quiet "$unit" >/dev/null 2>&1; then
+        echo "joystick2crfs running (systemd)"
+        return 0
+      fi
+    done
+  fi
+  pids="$(joystick2crfs_pids)"
+  if [ -n "$pids" ]; then
+    echo "joystick2crfs running (pid $pids)"
+  else
+    echo "joystick2crfs not running"
+  fi
+  return 0
+}
+
+joystick2crfs_reload(){
+  if have systemctl; then
+    for unit in $(joystick2crfs_unit_candidates); do
+      if systemctl reload "$unit" >/dev/null 2>&1; then
+        echo "joystick2crfs reloaded via systemctl"
+        return 0
+      fi
+    done
+  fi
+  pids="$(joystick2crfs_pids)"
+  if [ -z "$pids" ]; then
+    echo "joystick2crfs not running" 1>&2
+    return 3
+  fi
+  if kill -HUP $pids 2>/dev/null; then
+    echo "joystick2crfs reloaded via SIGHUP ($pids)"
+    return 0
+  fi
+  echo "failed to signal joystick2crfs" 1>&2
+  return 4
+}
+
+joystick2crfs_get(){
+  if [ $# -ne 1 ]; then
+    echo "usage: joystick2crfs/get <key>" 1>&2
+    return 2
+  fi
+  key="$1"
+  if [ -z "$key" ]; then
+    echo "usage: joystick2crfs/get <key>" 1>&2
+    return 2
+  fi
+  joystick2crfs_conf_get "$key"
+}
+
+joystick2crfs_set(){
+  if [ $# -eq 1 ]; then
+    case "$1" in
+      *=*)
+        key="${1%%=*}"
+        value="${1#*=}"
+        ;;
+      *)
+        echo "usage: joystick2crfs/set key=value" 1>&2
+        return 2
+        ;;
+    esac
+  elif [ $# -eq 2 ]; then
+    key="$1"
+    value="$2"
+  else
+    echo "usage: joystick2crfs/set key=value" 1>&2
+    return 2
+  fi
+  if [ -z "$key" ]; then
+    echo "missing key" 1>&2
+    return 2
+  fi
+  joystick2crfs_conf_set "$key" "$value"
+  rc=$?
+  if [ $rc -ne 0 ]; then
+    return $rc
+  fi
+  echo "ok"
   return 0
 }
 
@@ -514,6 +783,16 @@ case "$1" in
   /sys/udp_relay/start)    shift; udp_relay_start "$@" ;;
   /sys/udp_relay/stop)     shift; udp_relay_stop "$@" ;;
   /sys/udp_relay/status)   shift; udp_relay_status "$@" ;;
+
+  # joystick2crfs
+  /sys/joystick2crfs/help)     print_help_msg "joystick2crfs_help.msg" ;;
+  /sys/joystick2crfs/get)      shift; joystick2crfs_get "$@" ;;
+  /sys/joystick2crfs/set)      shift; joystick2crfs_set "$@" ;;
+  /sys/joystick2crfs/reload)   shift; joystick2crfs_reload "$@" ;;
+  /sys/joystick2crfs/start)    shift; joystick2crfs_start "$@" ;;
+  /sys/joystick2crfs/stop)     shift; joystick2crfs_stop "$@" ;;
+  /sys/joystick2crfs/restart)  shift; joystick2crfs_restart "$@" ;;
+  /sys/joystick2crfs/status)   shift; joystick2crfs_status "$@" ;;
 
   # link aggregation
   /sys/link/help)          print_help_msg "link_help.msg" ;;

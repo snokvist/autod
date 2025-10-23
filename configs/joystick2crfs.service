@@ -1,0 +1,16 @@
+[Unit]
+Description=joystick2crfs joystick bridge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=@JOYSTICK2CRFS_BIN@ @JOYSTICK2CRFS_CONF@
+ExecReload=/bin/kill -HUP $MAINPID
+User=root
+Group=root
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
