@@ -226,12 +226,12 @@ $(JOYSTICK2CRFS_OBJ): $(SRC_DIR)/joystick2crfs.c | $(JOYSTICK2CRFS_BUILD)
 -include $(JOYSTICK2CRFS_OBJ:.o=.d)
 
 install: native udp_relay joystick2crfs
-        @if command -v systemctl >/dev/null 2>&1 && [ -z "$(DESTDIR)" ]; then \
-                systemctl stop $(APP).service 2>/dev/null || true; \
-                systemctl stop $(UDP_APP).service 2>/dev/null || true; \
-                systemctl stop joystick2crfs.service 2>/dev/null || true; \
-                systemctl stop joystick2crfs 2>/dev/null || true; \
-        fi
+	@if command -v systemctl >/dev/null 2>&1 && [ -z "$(DESTDIR)" ]; then \
+	systemctl stop $(APP).service 2>/dev/null || true; \
+	systemctl stop $(UDP_APP).service 2>/dev/null || true; \
+	systemctl stop joystick2crfs.service 2>/dev/null || true; \
+	systemctl stop joystick2crfs 2>/dev/null || true; \
+	fi
 	install -Dm755 $(APP) $(DESTDIR)$(BINDIR)/$(APP)
 	install -d $(DESTDIR)$(VRXDIR)
 	install -m644 html/autod/vrx_index.html $(DESTDIR)$(VRXDIR)/vrx_index.html
@@ -251,13 +251,13 @@ install: native udp_relay joystick2crfs
 		-e 's#^ui_path=.*#ui_path=$(VRXDIR)/vrx_index.html#' \
 		"$$target"
 	install -d $(DESTDIR)$(SYSTEMD_DIR)
-        sed \
-                -e 's#@AUTOD_BIN@#$(BINDIR)/$(APP)#g' \
-                -e 's#@AUTOD_CONF@#$(SYSCONFDIR)/$(APP)/autod.conf#g' \
-                -e 's#@VRX_DIR@#$(VRXDIR)#g' \
-                configs/autod.service > $(DESTDIR)$(SYSTEMD_DIR)/$(APP).service
-        chmod 644 $(DESTDIR)$(SYSTEMD_DIR)/$(APP).service
-        install -Dm755 $(JOYSTICK2CRFS_BIN) $(DESTDIR)$(BINDIR)/$(JOYSTICK2CRFS_BIN)
+	sed \
+		-e 's#@AUTOD_BIN@#$(BINDIR)/$(APP)#g' \
+		-e 's#@AUTOD_CONF@#$(SYSCONFDIR)/$(APP)/autod.conf#g' \
+		-e 's#@VRX_DIR@#$(VRXDIR)#g' \
+		configs/autod.service > $(DESTDIR)$(SYSTEMD_DIR)/$(APP).service
+	chmod 644 $(DESTDIR)$(SYSTEMD_DIR)/$(APP).service
+	install -Dm755 $(JOYSTICK2CRFS_BIN) $(DESTDIR)$(BINDIR)/$(JOYSTICK2CRFS_BIN)
         install -Dm644 configs/joystick2crfs.conf $(DESTDIR)$(JOYSTICK2CRFS_CONF)
         sed \
                 -e 's#@JOYSTICK2CRFS_BIN@#$(BINDIR)/$(JOYSTICK2CRFS_BIN)#g' \
