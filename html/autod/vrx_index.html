@@ -82,19 +82,17 @@
   .joy-item .joy-raw{color:var(--mut);font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:10px;font-variant-numeric:tabular-nums}
   .joy-item.joy-bump{border-color:rgba(54,194,117,.45);box-shadow:0 0 0 1px rgba(54,194,117,.25)}
 
-  .joy-config-summary{display:grid;gap:8px;margin-top:6px}
-  .joy-config-grid{display:grid;gap:8px;grid-template-columns:repeat(auto-fit,minmax(160px,1fr))}
-  .joy-config-item{background:#0f1317;border:1px solid var(--line);border-radius:12px;padding:10px;display:grid;gap:6px;justify-items:center;text-align:center}
-  .joy-config-ch{font-size:12px;letter-spacing:.08em;color:var(--mut);text-transform:uppercase}
-  .joy-config-axis{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-weight:600;font-size:13px}
-  .joy-config-tags{display:flex;flex-wrap:wrap;gap:6px;justify-content:center}
-  .joy-config-tag{font-size:11px}
-  .joy-config-tag-normal{color:var(--mut);border-color:var(--line);background:rgba(255,255,255,.02)}
-  .joy-config-tag-invert{color:var(--err);border-color:rgba(255,107,107,.45);background:rgba(255,107,107,.12)}
-  .joy-config-dead{font-size:12px;color:var(--mut)}
-  .joy-config-item.joy-config-inverted{border-color:rgba(255,107,107,.35)}
-  .joy-config-item.joy-config-unmapped .joy-config-axis{color:var(--err)}
-  .joy-config-raw{font-size:12px;color:var(--mut);word-break:break-all}
+  .joy-meta{display:grid;gap:4px;justify-items:center;width:100%;text-align:center;font-size:11px;color:var(--mut);margin-top:4px}
+  .joy-meta-map{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-weight:600;font-size:12px;color:var(--fg)}
+  .joy-meta-map.joy-meta-map-unmapped{color:var(--err)}
+  .joy-meta-tags{display:flex;flex-wrap:wrap;gap:6px;justify-content:center}
+  .joy-meta-tag{font-size:10px}
+  .joy-meta-tag-normal{color:var(--mut);border-color:var(--line);background:rgba(255,255,255,.02)}
+  .joy-meta-tag-invert{color:var(--err);border-color:rgba(255,107,107,.45);background:rgba(255,107,107,.12)}
+  .joy-meta-dead{font-size:11px;color:var(--mut)}
+  .joy-meta-dead.joy-meta-dead-active{color:var(--fg)}
+  .joy-item.joy-item-inverted{border-color:rgba(255,107,107,.35)}
+  .joy-item.joy-item-unmapped .joy-meta-map{color:var(--err)}
 
   .dvr-body{display:grid;grid-template-rows:auto 1fr;gap:10px;height:360px;min-height:0}
   .dvr-scroll{display:grid;gap:6px;overflow:auto;padding-right:4px;min-height:0}
@@ -291,11 +289,6 @@
         <div class="cap-stats" id="joystickConfigStats">—</div>
       </div>
       <div class="cap-grid" id="joystickConfigGrid"></div>
-      <div class="joy-config-summary" id="joystickConfigSummary" style="display:none">
-        <div class="mut">Channel map, inversion, and deadband from /etc/joystick2crfs.conf</div>
-        <div class="joy-config-grid" id="joystickConfigSummaryGrid"></div>
-        <div class="joy-config-raw" id="joystickConfigSummaryRaw" style="display:none"></div>
-      </div>
       <div class="mut">Configuration changes persist to /etc/joystick2crfs.conf. Reload to apply without restarting.</div>
     </div>
   </section>
@@ -677,6 +670,15 @@ const joystickSse = (()=>{
   let url = '';
   let cells = [];
   let lastStatus = { mode: '', text: '' };
+  const configState = {
+    map:Array.from({length:16}, ()=>null),
+    invert:Array.from({length:16}, ()=>false),
+    deadband:Array.from({length:16}, ()=>0),
+    haveMap:false,
+    haveInvert:false,
+    haveDeadband:false
+  };
+  const padIdx = (num)=> String(num).padStart(2,'0');
   const JOY_BAR_MIN = 0;
   const JOY_BAR_MAX = 2000;
 
@@ -689,7 +691,7 @@ const joystickSse = (()=>{
         item.className = 'joy-item';
         const label = document.createElement('div');
         label.className = 'joy-idx';
-        label.textContent = `CH${String(i + 1).padStart(2,'0')}`;
+        label.textContent = `CH${padIdx(i + 1)}`;
         const bar = document.createElement('div');
         bar.className = 'joy-bar';
         const fill = document.createElement('div');
@@ -704,12 +706,149 @@ const joystickSse = (()=>{
         raw.className = 'joy-raw';
         raw.textContent = 'Raw —';
         values.append(scaled, raw);
-        item.append(label, bar, values);
+        const meta = document.createElement('div');
+        meta.className = 'joy-meta';
+        meta.style.display = 'none';
+        const map = document.createElement('div');
+        map.className = 'joy-meta-map';
+        const tags = document.createElement('div');
+        tags.className = 'joy-meta-tags';
+        tags.style.display = 'none';
+        const invertTag = document.createElement('span');
+        invertTag.className = 'pill joy-meta-tag joy-meta-tag-normal joy-meta-invert';
+        invertTag.textContent = 'Normal';
+        tags.append(invertTag);
+        const dead = document.createElement('div');
+        dead.className = 'joy-meta-dead';
+        dead.style.display = 'none';
+        meta.append(map, tags, dead);
+        item.append(label, bar, values, meta);
         frag.append(item);
       }
       gridEl.append(frag);
     }
     cells = Array.from(gridEl.children);
+  }
+
+  function applyConfig(){
+    ensureGrid();
+    const hasAny = configState.haveMap || configState.haveInvert || configState.haveDeadband;
+    cells.forEach((cell, idx)=>{
+      const meta = cell.querySelector('.joy-meta');
+      if (!meta) return;
+      meta.style.display = hasAny ? 'grid' : 'none';
+      if (!hasAny){
+        cell.classList.remove('joy-item-inverted','joy-item-unmapped');
+        return;
+      }
+
+      const mapEl = cell.querySelector('.joy-meta-map');
+      if (mapEl){
+        if (configState.haveMap){
+          const axis = configState.map[idx];
+          if (axis){
+            mapEl.textContent = `Input ${padIdx(axis)}`;
+            mapEl.classList.remove('joy-meta-map-unmapped');
+            cell.classList.remove('joy-item-unmapped');
+          } else {
+            mapEl.textContent = 'Unmapped';
+            mapEl.classList.add('joy-meta-map-unmapped');
+            cell.classList.add('joy-item-unmapped');
+          }
+          mapEl.style.display = '';
+        } else {
+          mapEl.textContent = '';
+          mapEl.style.display = 'none';
+          mapEl.classList.remove('joy-meta-map-unmapped');
+          cell.classList.remove('joy-item-unmapped');
+        }
+      }
+
+      const tags = cell.querySelector('.joy-meta-tags');
+      const invertTag = cell.querySelector('.joy-meta-invert');
+      if (tags && invertTag){
+        if (configState.haveInvert){
+          const inverted = !!configState.invert[idx];
+          invertTag.textContent = inverted ? 'Inverted' : 'Normal';
+          invertTag.classList.remove('joy-meta-tag-normal','joy-meta-tag-invert');
+          invertTag.classList.add(inverted ? 'joy-meta-tag-invert' : 'joy-meta-tag-normal');
+          tags.style.display = 'flex';
+          cell.classList.toggle('joy-item-inverted', inverted);
+        } else {
+          tags.style.display = 'none';
+          cell.classList.remove('joy-item-inverted');
+        }
+      }
+
+      const deadEl = cell.querySelector('.joy-meta-dead');
+      if (deadEl){
+        if (configState.haveDeadband){
+          const val = Math.abs(configState.deadband[idx] ?? 0);
+          deadEl.textContent = val ? `Deadband ±${val}` : 'Deadband off';
+          deadEl.style.display = '';
+          if (val){
+            deadEl.classList.add('joy-meta-dead-active');
+          } else {
+            deadEl.classList.remove('joy-meta-dead-active');
+          }
+        } else {
+          deadEl.textContent = '';
+          deadEl.style.display = 'none';
+          deadEl.classList.remove('joy-meta-dead-active');
+        }
+      }
+    });
+  }
+
+  function sanitizeNumeric(value, fallback){
+    const num = Number(value);
+    return Number.isFinite(num) ? num : fallback;
+  }
+
+  function resetConfigState(){
+    configState.map = Array.from({length:16}, ()=>null);
+    configState.invert = Array.from({length:16}, ()=>false);
+    configState.deadband = Array.from({length:16}, ()=>0);
+    configState.haveMap = false;
+    configState.haveInvert = false;
+    configState.haveDeadband = false;
+    applyConfig();
+  }
+
+  function setConfig(partial){
+    if (!partial || typeof partial !== 'object'){
+      resetConfigState();
+      return;
+    }
+
+    if (Array.isArray(partial.map)){
+      configState.map = Array.from({length:16}, (_, idx)=>{
+        const raw = sanitizeNumeric(partial.map[idx], NaN);
+        return Number.isFinite(raw) && raw > 0 ? Math.trunc(raw) : null;
+      });
+    } else {
+      configState.map = Array.from({length:16}, ()=>null);
+    }
+    configState.haveMap = !!partial.haveMap;
+
+    if (Array.isArray(partial.invert)){
+      configState.invert = Array.from({length:16}, (_, idx)=> !!partial.invert[idx]);
+    } else {
+      configState.invert = Array.from({length:16}, ()=>false);
+    }
+    configState.haveInvert = !!partial.haveInvert;
+
+    if (Array.isArray(partial.deadband)){
+      configState.deadband = Array.from({length:16}, (_, idx)=>{
+        const raw = sanitizeNumeric(partial.deadband[idx], 0);
+        return Math.max(0, Math.abs(Math.trunc(raw)));
+      });
+    } else {
+      configState.deadband = Array.from({length:16}, ()=>0);
+    }
+    configState.haveDeadband = !!partial.haveDeadband;
+
+    applyConfig();
   }
 
   function resetValues(){
@@ -899,29 +1038,23 @@ const joystickSse = (()=>{
       statusEl.textContent = 'Idle';
       statusEl.title = '';
       lastStatus = { mode: '', text: '' };
+      resetConfigState();
       resetValues();
-    }
+    },
+    setConfig,
+    resetConfig:resetConfigState
   };
 })();
 
-const joystickConfigSummary = (()=>{
-  const wrap = document.getElementById('joystickConfigSummary');
-  const grid = document.getElementById('joystickConfigSummaryGrid');
-  const rawEl = document.getElementById('joystickConfigSummaryRaw');
-
+const joystickConfigInfo = (()=>{
   const state = {
     map:Array.from({length:16}, ()=>null),
     invert:Array.from({length:16}, ()=>false),
     deadband:Array.from({length:16}, ()=>0),
-    rawMap:'',
-    rawInvert:'',
-    rawDeadband:'',
     haveMap:false,
     haveInvert:false,
     haveDeadband:false
   };
-
-  const pad = (num)=> String(num).padStart(2,'0');
 
   function parseMap(str){
     const values = Array.from({length:16}, ()=>null);
@@ -969,84 +1102,34 @@ const joystickConfigSummary = (()=>{
   }
 
   function render(){
-    if (!wrap || !grid) return;
-    const hasData = state.haveMap || state.haveInvert || state.haveDeadband;
-    if (!hasData){
-      wrap.style.display = 'none';
-      grid.innerHTML = '';
-      if (rawEl){
-        rawEl.style.display = 'none';
-        rawEl.textContent = '';
-      }
-      return;
-    }
-
-    wrap.style.display = 'grid';
-    const frag = document.createDocumentFragment();
-    for (let i = 0; i < 16; i++){
-      const item = document.createElement('div');
-      item.className = 'joy-config-item';
-      const chEl = document.createElement('div');
-      chEl.className = 'joy-config-ch';
-      chEl.textContent = `CH${pad(i + 1)}`;
-
-      const axis = state.map[i];
-      const axisEl = document.createElement('div');
-      axisEl.className = 'joy-config-axis';
-      if (axis){
-        axisEl.textContent = `Input ${pad(axis)}`;
-      } else {
-        axisEl.textContent = 'Unmapped';
-        item.classList.add('joy-config-unmapped');
-      }
-
-      const tagsEl = document.createElement('div');
-      tagsEl.className = 'joy-config-tags';
-      const tag = document.createElement('span');
-      const inverted = !!state.invert[i];
-      tag.className = `pill joy-config-tag ${inverted ? 'joy-config-tag-invert' : 'joy-config-tag-normal'}`;
-      tag.textContent = inverted ? 'Inverted' : 'Normal';
-      tagsEl.append(tag);
-      if (inverted) item.classList.add('joy-config-inverted');
-
-      const deadVal = state.deadband[i] ?? 0;
-      const deadEl = document.createElement('div');
-      deadEl.className = 'joy-config-dead';
-      deadEl.textContent = deadVal ? `Deadband ±${deadVal}` : 'Deadband off';
-
-      item.append(chEl, axisEl, tagsEl, deadEl);
-      frag.append(item);
-    }
-    grid.replaceChildren(frag);
-
-    if (rawEl){
-      const parts = [];
-      if (state.haveMap) parts.push(`map=${state.rawMap || '—'}`);
-      if (state.haveInvert) parts.push(`invert=${state.rawInvert || '—'}`);
-      if (state.haveDeadband) parts.push(`deadband=${state.rawDeadband || '—'}`);
-      rawEl.textContent = parts.join(' • ');
-      rawEl.style.display = parts.length ? 'block' : 'none';
-    }
+    joystickSse.setConfig({
+      map:state.map,
+      invert:state.invert,
+      deadband:state.deadband,
+      haveMap:state.haveMap,
+      haveInvert:state.haveInvert,
+      haveDeadband:state.haveDeadband
+    });
   }
 
   function setMap(str){
-    state.rawMap = typeof str === 'string' ? str.trim() : '';
-    state.haveMap = !!state.rawMap;
-    state.map = parseMap(state.rawMap);
+    const raw = typeof str === 'string' ? str.trim() : '';
+    state.haveMap = !!raw;
+    state.map = parseMap(raw);
     render();
   }
 
   function setInvert(str){
-    state.rawInvert = typeof str === 'string' ? str.trim() : '';
-    state.haveInvert = !!state.rawInvert;
-    state.invert = parseInvert(state.rawInvert);
+    const raw = typeof str === 'string' ? str.trim() : '';
+    state.haveInvert = !!raw;
+    state.invert = parseInvert(raw);
     render();
   }
 
   function setDeadband(str){
-    state.rawDeadband = typeof str === 'string' ? str.trim() : '';
-    state.haveDeadband = !!state.rawDeadband;
-    state.deadband = parseDeadband(state.rawDeadband);
+    const raw = typeof str === 'string' ? str.trim() : '';
+    state.haveDeadband = !!raw;
+    state.deadband = parseDeadband(raw);
     render();
   }
 
@@ -1054,9 +1137,6 @@ const joystickConfigSummary = (()=>{
     state.map = Array.from({length:16}, ()=>null);
     state.invert = Array.from({length:16}, ()=>false);
     state.deadband = Array.from({length:16}, ()=>0);
-    state.rawMap = '';
-    state.rawInvert = '';
-    state.rawDeadband = '';
     state.haveMap = false;
     state.haveInvert = false;
     state.haveDeadband = false;
@@ -1934,11 +2014,11 @@ const joystickManager = createCapManager({
     if (!meta || !meta.key) return;
     const strVal = value == null ? '' : String(value);
     if (meta.key === 'map'){
-      joystickConfigSummary.setMap(strVal);
+      joystickConfigInfo.setMap(strVal);
     } else if (meta.key === 'invert'){
-      joystickConfigSummary.setInvert(strVal);
+      joystickConfigInfo.setInvert(strVal);
     } else if (meta.key === 'deadband'){
-      joystickConfigSummary.setDeadband(strVal);
+      joystickConfigInfo.setDeadband(strVal);
     }
   }
 });
@@ -3105,7 +3185,7 @@ async function loadCaps(){
       if (gridEl) gridEl.innerHTML = '';
       const cmdsEl = document.getElementById('joystickCmds');
       if (cmdsEl) cmdsEl.innerHTML = '';
-      joystickConfigSummary.reset();
+      joystickConfigInfo.reset();
     }
 
     if (capList.includes('udp_relay')){
