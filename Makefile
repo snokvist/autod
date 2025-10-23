@@ -258,13 +258,13 @@ install: native udp_relay joystick2crfs
 		configs/autod.service > $(DESTDIR)$(SYSTEMD_DIR)/$(APP).service
 	chmod 644 $(DESTDIR)$(SYSTEMD_DIR)/$(APP).service
 	install -Dm755 $(JOYSTICK2CRFS_BIN) $(DESTDIR)$(BINDIR)/$(JOYSTICK2CRFS_BIN)
-        install -Dm644 configs/joystick2crfs.conf $(DESTDIR)$(JOYSTICK2CRFS_CONF)
-        sed \
-                -e 's#@JOYSTICK2CRFS_BIN@#$(BINDIR)/$(JOYSTICK2CRFS_BIN)#g' \
-                -e 's#@JOYSTICK2CRFS_CONF@#$(JOYSTICK2CRFS_CONF)#g' \
-                configs/joystick2crfs.service > $(DESTDIR)$(SYSTEMD_DIR)/joystick2crfs.service
-        chmod 644 $(DESTDIR)$(SYSTEMD_DIR)/joystick2crfs.service
-        install -Dm755 $(UDP_APP) $(DESTDIR)$(BINDIR)/$(UDP_APP)
+	install -Dm644 configs/joystick2crfs.conf $(DESTDIR)$(JOYSTICK2CRFS_CONF)
+	sed \
+		-e 's#@JOYSTICK2CRFS_BIN@#$(BINDIR)/$(JOYSTICK2CRFS_BIN)#g' \
+		-e 's#@JOYSTICK2CRFS_CONF@#$(JOYSTICK2CRFS_CONF)#g' \
+		configs/joystick2crfs.service > $(DESTDIR)$(SYSTEMD_DIR)/joystick2crfs.service
+	chmod 644 $(DESTDIR)$(SYSTEMD_DIR)/joystick2crfs.service
+	install -Dm755 $(UDP_APP) $(DESTDIR)$(BINDIR)/$(UDP_APP)
 	@set -e; \
 	udp_confdir="$(DESTDIR)$(UDP_CONFDIR)"; \
 	install -d "$$udp_confdir"; \
@@ -277,12 +277,12 @@ install: native udp_relay joystick2crfs
 		-e 's#@UDP_UI_PATH@#$(UDP_UI_PATH)#g' \
 		configs/udp_relay.service > $(DESTDIR)$(SYSTEMD_DIR)/$(UDP_APP).service
 	chmod 644 $(DESTDIR)$(SYSTEMD_DIR)/$(UDP_APP).service
-        @if command -v systemctl >/dev/null 2>&1 && [ -z "$(DESTDIR)" ]; then \
-                systemctl daemon-reload; \
-                systemctl start $(APP).service 2>/dev/null || true; \
-                systemctl start $(UDP_APP).service 2>/dev/null || true; \
-                systemctl start joystick2crfs.service 2>/dev/null || true; \
-        fi
+	@if command -v systemctl >/dev/null 2>&1 && [ -z "$(DESTDIR)" ]; then \
+		systemctl daemon-reload; \
+		systemctl start $(APP).service 2>/dev/null || true; \
+		systemctl start $(UDP_APP).service 2>/dev/null || true; \
+		systemctl start joystick2crfs.service 2>/dev/null || true; \
+	fi
 
 help:
 	@echo "Builds:"
