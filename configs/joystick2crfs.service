@@ -7,6 +7,7 @@ Wants=network-online.target
 Type=simple
 ExecStart=@JOYSTICK2CRFS_BIN@ @JOYSTICK2CRFS_CONF@
 ExecReload=/bin/kill -HUP $MAINPID
+KillSignal=SIGINT
 User=root
 Group=root
 Restart=on-failure
