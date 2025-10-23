@@ -39,6 +39,16 @@
   .mut{color:var(--mut)}
   .sse a{color:inherit;text-decoration:underline dotted;word-break:break-all}
 
+  .joy-row{align-items:center}
+  .joy-row .mut{font-size:12px}
+  #joystickEndpoint{word-break:break-all}
+  .joy-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px}
+  .joy-item{background:#0f1317;border:1px solid var(--line);border-radius:10px;padding:8px;display:grid;gap:4px;transition:border-color .2s ease,box-shadow .2s ease}
+  .joy-item .joy-idx{color:var(--mut);font-size:12px;letter-spacing:.08em;text-transform:uppercase}
+  .joy-item .joy-val{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-weight:600;font-size:16px}
+  .joy-item .joy-raw{color:var(--mut);font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px}
+  .joy-item.joy-bump{border-color:rgba(54,194,117,.45);box-shadow:0 0 0 1px rgba(54,194,117,.25)}
+
   .dvr-body{display:grid;grid-template-rows:auto 1fr;gap:10px;height:360px;min-height:0}
   .dvr-scroll{display:grid;gap:6px;overflow:auto;padding-right:4px;min-height:0}
   .dvr-list{display:grid;gap:6px}
@@ -212,6 +222,21 @@
         <div class="mut">Last response:</div>
         <textarea id="pixelpilotResp" readonly></textarea>
       </div>
+    </div>
+  </section>
+
+  <section class="card" id="joystickCard" style="display:none">
+    <h2>Joystick (joystick2crfs)</h2>
+    <div class="body grid">
+      <div class="row joy-row">
+        <div class="status-indicator" id="joystickStatus">Idle</div>
+        <div class="mut" id="joystickLastUpdate">Last update: —</div>
+        <div class="mut" id="joystickEndpoint">Endpoint: —</div>
+        <div class="spacer"></div>
+        <button id="joystickReconnectBtn" type="button">Reconnect</button>
+      </div>
+      <div class="joy-grid" id="joystickGrid"></div>
+      <div class="mut">Streaming scaled channels and raw values from the joystick SSE feed.</div>
     </div>
   </section>
 
@@ -448,6 +473,221 @@ function flashCtl(ctlEl, ok){
   ctlEl.classList.add(cls);
   setTimeout(()=> ctlEl.classList.remove(cls), 700);
 }
+
+const JOYSTICK_RECONNECT_MS = 4000;
+
+function findJoystickSseUrl(entries){
+  if (!Array.isArray(entries)) return null;
+  for (const entry of entries){
+    if (!entry || typeof entry !== 'object') continue;
+    const name = String(entry.name ?? '').toLowerCase();
+    if (!entry.url) continue;
+    if (name === 'joystick2crfs' || name.includes('joystick')){
+      return entry.url;
+    }
+  }
+  for (const entry of entries){
+    if (entry && typeof entry === 'object' && entry.url){
+      return entry.url;
+    }
+  }
+  return null;
+}
+
+const joystickSse = (()=>{
+  const card = document.getElementById('joystickCard');
+  const statusEl = document.getElementById('joystickStatus');
+  const lastEl = document.getElementById('joystickLastUpdate');
+  const endpointEl = document.getElementById('joystickEndpoint');
+  const gridEl = document.getElementById('joystickGrid');
+  const reconnectBtn = document.getElementById('joystickReconnectBtn');
+  if (!card || !statusEl || !gridEl){
+    return { enable(){}, disable(){} };
+  }
+
+  let source = null;
+  let reconnectTimer = null;
+  let active = false;
+  let url = '';
+  let cells = [];
+
+  function ensureGrid(){
+    if (!gridEl) return;
+    if (!gridEl.childElementCount){
+      const frag = document.createDocumentFragment();
+      for (let i = 0; i < 16; i++){
+        const item = document.createElement('div');
+        item.className = 'joy-item';
+        const label = document.createElement('div');
+        label.className = 'joy-idx';
+        label.textContent = `CH${String(i + 1).padStart(2,'0')}`;
+        const scaled = document.createElement('div');
+        scaled.className = 'joy-val';
+        scaled.textContent = '—';
+        const raw = document.createElement('div');
+        raw.className = 'joy-raw';
+        raw.textContent = 'raw —';
+        item.append(label, scaled, raw);
+        frag.append(item);
+      }
+      gridEl.append(frag);
+    }
+    cells = Array.from(gridEl.children);
+  }
+
+  function resetValues(){
+    ensureGrid();
+    cells.forEach(cell => {
+      cell.classList.remove('joy-bump');
+      const scaledEl = cell.querySelector('.joy-val');
+      const rawEl = cell.querySelector('.joy-raw');
+      if (scaledEl) scaledEl.textContent = '—';
+      if (rawEl) rawEl.textContent = 'raw —';
+    });
+    if (lastEl) lastEl.textContent = 'Last update: —';
+  }
+
+  function setStatus(mode, text){
+    if (!statusEl) return;
+    statusEl.classList.remove('running','ok','err','flash');
+    if (mode === 'running') statusEl.classList.add('running');
+    else if (mode === 'ok') statusEl.classList.add('ok');
+    else if (mode === 'err') statusEl.classList.add('err');
+    statusEl.textContent = text;
+    statusEl.title = text || '';
+    if (mode === 'ok' || mode === 'err'){
+      void statusEl.offsetWidth;
+      statusEl.classList.add('flash');
+    }
+  }
+
+  function clearReconnect(){
+    if (reconnectTimer){
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+  }
+
+  function cleanupSource(){
+    if (source){
+      source.close();
+      source = null;
+    }
+  }
+
+  function scheduleReconnect(){
+    if (!active) return;
+    clearReconnect();
+    reconnectTimer = setTimeout(()=>{
+      if (!active) return;
+      connect();
+    }, JOYSTICK_RECONNECT_MS);
+  }
+
+  function updateGrid(channels, rawVals){
+    ensureGrid();
+    const chArr = Array.isArray(channels) ? channels : [];
+    const rawArr = Array.isArray(rawVals) ? rawVals : [];
+    cells.forEach((cell, idx)=>{
+      const scaledEl = cell.querySelector('.joy-val');
+      const rawEl = cell.querySelector('.joy-raw');
+      if (!scaledEl || !rawEl) return;
+      const scaledVal = Number.isFinite(chArr[idx]) ? String(chArr[idx]) : '—';
+      const rawVal = Number.isFinite(rawArr[idx]) ? `raw ${rawArr[idx]}` : 'raw —';
+      if (scaledEl.textContent !== scaledVal || rawEl.textContent !== rawVal){
+        cell.classList.add('joy-bump');
+        setTimeout(()=> cell.classList.remove('joy-bump'), 220);
+      }
+      scaledEl.textContent = scaledVal;
+      rawEl.textContent = rawVal;
+    });
+    if (lastEl){
+      lastEl.textContent = `Last update: ${new Date().toLocaleTimeString()}`;
+    }
+  }
+
+  function handleEvent(ev){
+    if (!active || !ev || !ev.data) return;
+    let payload = null;
+    try { payload = JSON.parse(ev.data); }
+    catch { return; }
+    updateGrid(payload.channels, payload.raw);
+    const stamp = new Date().toLocaleTimeString();
+    setStatus('ok', `Connected • ${stamp}`);
+  }
+
+  function connect(){
+    if (!active || !url) return;
+    clearReconnect();
+    cleanupSource();
+    setStatus('running','Connecting…');
+    try {
+      const es = new EventSource(url);
+      source = es;
+      if (typeof es.addEventListener === 'function'){
+        es.addEventListener('joystick2crfs', handleEvent);
+      }
+      es.onmessage = handleEvent;
+      es.onopen = ()=>{
+        if (!active) return;
+        setStatus('ok','Connected');
+      };
+      es.onerror = ()=>{
+        if (!active) return;
+        setStatus('err','Disconnected');
+        cleanupSource();
+        scheduleReconnect();
+      };
+    }catch(err){
+      setStatus('err','Failed to connect');
+      scheduleReconnect();
+    }
+  }
+
+  if (reconnectBtn){
+    reconnectBtn.addEventListener('click', ()=>{
+      if (!active) return;
+      connect();
+    });
+  }
+
+  return {
+    enable(sseEntries){
+      const nextUrlRaw = findJoystickSseUrl(sseEntries);
+      const nextUrl = (typeof nextUrlRaw === 'string' && nextUrlRaw) ? nextUrlRaw : '/sse';
+      const urlChanged = nextUrl !== url;
+      url = nextUrl;
+      active = true;
+      if (card) card.style.display = '';
+      ensureGrid();
+      if (endpointEl){
+        endpointEl.textContent = `Endpoint: ${url}`;
+        endpointEl.title = url;
+      }
+      if (!source || urlChanged){
+        connect();
+      } else if (source){
+        setStatus('ok','Connected');
+      } else {
+        setStatus('running','Connecting…');
+      }
+    },
+    disable(){
+      active = false;
+      clearReconnect();
+      cleanupSource();
+      if (card) card.style.display = 'none';
+      if (endpointEl){
+        endpointEl.textContent = 'Endpoint: —';
+        endpointEl.title = '';
+      }
+      statusEl.classList.remove('running','ok','err','flash');
+      statusEl.textContent = 'Idle';
+      statusEl.title = '';
+      resetValues();
+    }
+  };
+})();
 
 function miniRkStatusEl(){
   return document.getElementById('pixelpilotMiniRkStatus');
@@ -2396,6 +2636,7 @@ async function loadCaps(){
     const capList = Array.isArray(caps.caps) ? caps.caps : [];
     const hasExec = capList.includes('exec');
     const hasPixelpilotMiniRk = capList.includes('pixelpilot_mini_rk');
+    const hasJoystick = capList.includes('joystick2crfs');
 
     const deviceCard = document.getElementById('capsCard');
     if (deviceCard){
@@ -2436,6 +2677,12 @@ async function loadCaps(){
     } else {
       $('#pixelpilotCard').style.display = 'none';
       $('#pixelpilotStats').textContent = 'cap missing';
+    }
+
+    if (hasJoystick){
+      joystickSse.enable(caps.sse);
+    } else {
+      joystickSse.disable();
     }
 
     if (capList.includes('udp_relay')){
@@ -2505,6 +2752,7 @@ async function loadCaps(){
 
   }catch(e){
     $('#subtitle').textContent = 'failed to load /caps';
+    joystickSse.disable();
   }
 }
 
