@@ -13,6 +13,7 @@
 #include <getopt.h>
 #include <glob.h>
 #include <stdbool.h>
+#include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -95,7 +96,7 @@ typedef struct {
     const char *tx_power_key;
 } cfg_t;
 
-static cfg_t cfg = {
+static const cfg_t cfg_default = {
     .info_files={DEF_INFO_FILE,NULL}, .out_file=DEF_OUT_FILE, .interval=DEF_INTERVAL, .bar_width=DEF_BAR_WIDTH, .top=DEF_TOP, .bottom=DEF_BOTTOM,
     .osd_hdr=DEF_OSD_HDR, .osd_hdr2=DEF_OSD_HDR2, .sys_msg_hdr=DEF_SYS_MSG_HDR, .system_msg="", .show_stats_line=DEF_SHOW_STATS, .sys_msg_timeout=DEF_SYS_MSG_TIMEOUT,
     .rssi_control=DEF_RSSI_CONTROL, .rssi_hdr={DEF_RSSI_RANGE0,DEF_RSSI_RANGE1,DEF_RSSI_RANGE2,DEF_RSSI_RANGE3,DEF_RSSI_RANGE4,DEF_RSSI_RANGE5},
@@ -103,19 +104,79 @@ static cfg_t cfg = {
     .curr_tx_rate_key=DEF_CURR_TX_RATE_KEY, .curr_tx_bw_key=DEF_CURR_TX_BW_KEY, .rssi_udp_enable=DEF_RSSI_UDP_ENABLE, .rssi_udp_key=DEF_RSSI_UDP_KEY, .tx_power_key=DEF_TX_POWER_KEY
 };
 
+static cfg_t cfg;
+static volatile sig_atomic_t reload_requested = 0;
+static const char *config_path = DEF_CFG_FILE;
+
+static void reset_info_buffers(void)
+{
+    for (int i = 0; i < MAX_INFO_SOURCES; ++i) {
+        free(info_buf[i]);
+        info_buf[i] = NULL;
+        info_size[i] = 0;
+        info_buf_valid[i] = false;
+        last_info_attempt[i] = 0;
+    }
+}
+
+static void free_config_strings(void)
+{
+    for (int i = 0; i < MAX_INFO_SOURCES; ++i) {
+        if (cfg.info_files[i] && cfg.info_files[i] != cfg_default.info_files[i]) {
+            free((void *)cfg.info_files[i]);
+        }
+    }
+    if (cfg.out_file && cfg.out_file != cfg_default.out_file) free((void *)cfg.out_file);
+    if (cfg.osd_hdr && cfg.osd_hdr != cfg_default.osd_hdr) free((void *)cfg.osd_hdr);
+    if (cfg.osd_hdr2 && cfg.osd_hdr2 != cfg_default.osd_hdr2) free((void *)cfg.osd_hdr2);
+    if (cfg.sys_msg_hdr && cfg.sys_msg_hdr != cfg_default.sys_msg_hdr) free((void *)cfg.sys_msg_hdr);
+    if (cfg.start_sym && cfg.start_sym != cfg_default.start_sym) free((void *)cfg.start_sym);
+    if (cfg.end_sym && cfg.end_sym != cfg_default.end_sym) free((void *)cfg.end_sym);
+    if (cfg.empty_sym && cfg.empty_sym != cfg_default.empty_sym) free((void *)cfg.empty_sym);
+    for (int i = 0; i < 6; ++i) {
+        if (cfg.rssi_hdr[i] && cfg.rssi_hdr[i] != cfg_default.rssi_hdr[i]) {
+            free((void *)cfg.rssi_hdr[i]);
+        }
+    }
+    if (cfg.rssi_key && cfg.rssi_key != cfg_default.rssi_key) free((void *)cfg.rssi_key);
+    if (cfg.curr_tx_rate_key && cfg.curr_tx_rate_key != cfg_default.curr_tx_rate_key) free((void *)cfg.curr_tx_rate_key);
+    if (cfg.curr_tx_bw_key && cfg.curr_tx_bw_key != cfg_default.curr_tx_bw_key) free((void *)cfg.curr_tx_bw_key);
+    if (cfg.rssi_udp_key && cfg.rssi_udp_key != cfg_default.rssi_udp_key) free((void *)cfg.rssi_udp_key);
+    if (cfg.tx_power_key && cfg.tx_power_key != cfg_default.tx_power_key) free((void *)cfg.tx_power_key);
+}
+
+static void reset_config_defaults(void)
+{
+    free_config_strings();
+    cfg = cfg_default;
+}
+
+static void request_reload(int sig)
+{
+    if (sig == SIGHUP) reload_requested = 1;
+}
+
+static void set_cfg_string(const char **field, const char *value, const char *default_value)
+{
+    char *dup = strdup(value);
+    if (!dup) return;
+    if (*field && *field != default_value) free((void *)*field);
+    *field = dup;
+}
+
 static void set_cfg_field(const char *k, const char *v)
 {
 #define EQ(a,b) (strcmp((a),(b))==0)
-    if (EQ(k, "info_file")) cfg.info_files[0] = strdup(v);
-    else if (EQ(k, "info_file2") || EQ(k, "info_file_alt") || EQ(k, "info_file_secondary")) cfg.info_files[1] = strdup(v);
-    else if (EQ(k, "out_file")) cfg.out_file = strdup(v);
+    if (EQ(k, "info_file")) { set_cfg_string(&cfg.info_files[0], v, cfg_default.info_files[0]); info_buf_valid[0] = false; last_info_attempt[0] = 0; }
+    else if (EQ(k, "info_file2") || EQ(k, "info_file_alt") || EQ(k, "info_file_secondary")) { set_cfg_string(&cfg.info_files[1], v, cfg_default.info_files[1]); info_buf_valid[1] = false; last_info_attempt[1] = 0; }
+    else if (EQ(k, "out_file")) set_cfg_string(&cfg.out_file, v, cfg_default.out_file);
     else if (EQ(k, "interval")) cfg.interval = atof(v);
     else if (EQ(k, "bar_width")) cfg.bar_width = atoi(v);
     else if (EQ(k, "top")) cfg.top = atoi(v);
     else if (EQ(k, "bottom")) cfg.bottom = atoi(v);
-    else if (EQ(k, "osd_hdr")) cfg.osd_hdr = strdup(v);
-    else if (EQ(k, "osd_hdr2")) cfg.osd_hdr2 = strdup(v);
-    else if (EQ(k, "sys_msg_hdr")) cfg.sys_msg_hdr = strdup(v);
+    else if (EQ(k, "osd_hdr")) set_cfg_string(&cfg.osd_hdr, v, cfg_default.osd_hdr);
+    else if (EQ(k, "osd_hdr2")) set_cfg_string(&cfg.osd_hdr2, v, cfg_default.osd_hdr2);
+    else if (EQ(k, "sys_msg_hdr")) set_cfg_string(&cfg.sys_msg_hdr, v, cfg_default.sys_msg_hdr);
     else if (EQ(k, "show_stats_line")) {
         if (!strcasecmp(v, "true")) cfg.show_stats_line = 3;
         else if (!strcasecmp(v, "false")) cfg.show_stats_line = 0;
@@ -128,21 +189,21 @@ static void set_cfg_field(const char *k, const char *v)
     }
     else if (EQ(k, "sys_msg_timeout")) cfg.sys_msg_timeout = atoi(v);
     else if (EQ(k, "rssi_control")) cfg.rssi_control = atoi(v) != 0;
-    else if (EQ(k, "rssi_range0_hdr")) cfg.rssi_hdr[0] = strdup(v);
-    else if (EQ(k, "rssi_range1_hdr")) cfg.rssi_hdr[1] = strdup(v);
-    else if (EQ(k, "rssi_range2_hdr")) cfg.rssi_hdr[2] = strdup(v);
-    else if (EQ(k, "rssi_range3_hdr")) cfg.rssi_hdr[3] = strdup(v);
-    else if (EQ(k, "rssi_range4_hdr")) cfg.rssi_hdr[4] = strdup(v);
-    else if (EQ(k, "rssi_range5_hdr")) cfg.rssi_hdr[5] = strdup(v);
-    else if (EQ(k, "start_sym")) cfg.start_sym = strdup(v);
-    else if (EQ(k, "end_sym")) cfg.end_sym = strdup(v);
-    else if (EQ(k, "empty_sym")) cfg.empty_sym = strdup(v);
-    else if (EQ(k, "rssi_key")) cfg.rssi_key = strdup(v);
-    else if (EQ(k, "curr_tx_rate_key")) cfg.curr_tx_rate_key = strdup(v);
-    else if (EQ(k, "curr_tx_bw_key")) cfg.curr_tx_bw_key = strdup(v);
+    else if (EQ(k, "rssi_range0_hdr")) set_cfg_string(&cfg.rssi_hdr[0], v, cfg_default.rssi_hdr[0]);
+    else if (EQ(k, "rssi_range1_hdr")) set_cfg_string(&cfg.rssi_hdr[1], v, cfg_default.rssi_hdr[1]);
+    else if (EQ(k, "rssi_range2_hdr")) set_cfg_string(&cfg.rssi_hdr[2], v, cfg_default.rssi_hdr[2]);
+    else if (EQ(k, "rssi_range3_hdr")) set_cfg_string(&cfg.rssi_hdr[3], v, cfg_default.rssi_hdr[3]);
+    else if (EQ(k, "rssi_range4_hdr")) set_cfg_string(&cfg.rssi_hdr[4], v, cfg_default.rssi_hdr[4]);
+    else if (EQ(k, "rssi_range5_hdr")) set_cfg_string(&cfg.rssi_hdr[5], v, cfg_default.rssi_hdr[5]);
+    else if (EQ(k, "start_sym")) set_cfg_string(&cfg.start_sym, v, cfg_default.start_sym);
+    else if (EQ(k, "end_sym")) set_cfg_string(&cfg.end_sym, v, cfg_default.end_sym);
+    else if (EQ(k, "empty_sym")) set_cfg_string(&cfg.empty_sym, v, cfg_default.empty_sym);
+    else if (EQ(k, "rssi_key")) set_cfg_string(&cfg.rssi_key, v, cfg_default.rssi_key);
+    else if (EQ(k, "curr_tx_rate_key")) set_cfg_string(&cfg.curr_tx_rate_key, v, cfg_default.curr_tx_rate_key);
+    else if (EQ(k, "curr_tx_bw_key")) set_cfg_string(&cfg.curr_tx_bw_key, v, cfg_default.curr_tx_bw_key);
     else if (EQ(k, "rssi_udp_enable")) cfg.rssi_udp_enable = atoi(v) != 0;
-    else if (EQ(k, "rssi_udp_key")) cfg.rssi_udp_key = strdup(v);
-    else if (EQ(k, "tx_power_key")) cfg.tx_power_key = strdup(v);
+    else if (EQ(k, "rssi_udp_key")) set_cfg_string(&cfg.rssi_udp_key, v, cfg_default.rssi_udp_key);
+    else if (EQ(k, "tx_power_key")) set_cfg_string(&cfg.tx_power_key, v, cfg_default.tx_power_key);
 #undef EQ
 }
 
@@ -397,7 +458,18 @@ int main(int argc, char **argv){
         cfg_path = argv[optind];
     }
 
-    load_config(cfg_path);
+    config_path = cfg_path;
+
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = request_reload;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    sigaction(SIGHUP, &sa, NULL);
+
+    reset_config_defaults();
+    load_config(config_path);
+    reset_info_buffers();
 
     if (cfg.interval < 0.02) cfg.interval = 0.02;
     int64_t osd_period_ms = (int64_t)(cfg.interval*1000.0 + 0.5);
@@ -407,6 +479,21 @@ int main(int argc, char **argv){
     char last_mcs[32]="NA", last_bw[32]="NA", last_tx[32]="NA";
 
     for(;;){
+        if (reload_requested) {
+            reload_requested = 0;
+            reset_config_defaults();
+            load_config(config_path);
+            reset_info_buffers();
+            sys_msg_last_update = 0;
+            if (cfg.interval < 0.02) cfg.interval = 0.02;
+            osd_period_ms = (int64_t)(cfg.interval*1000.0 + 0.5);
+            if (osd_period_ms < 20) osd_period_ms = 20;
+            next_osd_ms = now_ms();
+            strcpy(last_mcs,"NA");
+            strcpy(last_bw,"NA");
+            strcpy(last_tx,"NA");
+        }
+
         int64_t t_now_ms = now_ms();
         if (t_now_ms < next_osd_ms){
             int64_t diff = next_osd_ms - t_now_ms;
