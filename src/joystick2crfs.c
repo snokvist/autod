@@ -63,6 +63,7 @@ typedef struct {
     int sse_enabled;
     char sse_bind[256];
     char sse_path[64];
+    char profile[64];
     int map[16];
     int invert[16];
     int dead[16];
@@ -535,6 +536,146 @@ static int sse_send_frame(int fd, const uint16_t ch[16], const int32_t raw[16])
     return 0;
 }
 
+static void close_outputs(int *serial_fd, int *udp_fd, int *sse_fd, int *sse_client_fd)
+{
+    if (serial_fd && *serial_fd >= 0) {
+        close(*serial_fd);
+        *serial_fd = -1;
+    }
+    if (udp_fd && *udp_fd >= 0) {
+        close(*udp_fd);
+        *udp_fd = -1;
+    }
+    if (sse_client_fd && *sse_client_fd >= 0) {
+        close(*sse_client_fd);
+        *sse_client_fd = -1;
+    }
+    if (sse_fd && *sse_fd >= 0) {
+        close(*sse_fd);
+        *sse_fd = -1;
+    }
+}
+
+static int init_outputs(const config_t *cfg,
+                        int *serial_fd,
+                        int *udp_fd,
+                        struct sockaddr_storage *udp_addr,
+                        socklen_t *udp_addrlen,
+                        int *sse_fd,
+                        int *sse_client_fd)
+{
+    int new_serial = -1;
+    int new_udp = -1;
+    int new_sse = -1;
+    struct sockaddr_storage addr_tmp;
+    socklen_t addrlen_tmp = 0;
+
+    if (cfg->serial_enabled && !cfg->simulation) {
+        new_serial = open_serial(cfg->serial_device, cfg->serial_baud);
+        if (new_serial < 0) {
+            goto fail;
+        }
+    }
+
+    if (cfg->udp_enabled) {
+        if (cfg->udp_target[0] == '\0') {
+            fprintf(stderr, "UDP enabled but udp_target is empty\n");
+            fprintf(stderr, "Continuing without UDP output.\n");
+        } else {
+            int fd = open_udp_target(cfg->udp_target, &addr_tmp, &addrlen_tmp);
+            if (fd < 0) {
+                fprintf(stderr, "Continuing without UDP output.\n");
+            } else {
+                new_udp = fd;
+            }
+        }
+    }
+
+    if (cfg->sse_enabled) {
+        if (cfg->sse_bind[0] == '\0') {
+            fprintf(stderr, "SSE enabled but sse_bind is empty\n");
+            goto fail;
+        }
+        new_sse = open_sse_listener(cfg->sse_bind);
+        if (new_sse < 0) {
+            goto fail;
+        }
+    }
+
+    if (serial_fd) {
+        *serial_fd = new_serial;
+    } else if (new_serial >= 0) {
+        close(new_serial);
+    }
+
+    if (udp_fd) {
+        *udp_fd = new_udp;
+    } else if (new_udp >= 0) {
+        close(new_udp);
+    }
+
+    if (udp_addr && udp_addrlen) {
+        if (new_udp >= 0) {
+            memcpy(udp_addr, &addr_tmp, sizeof(addr_tmp));
+            *udp_addrlen = addrlen_tmp;
+        } else {
+            memset(udp_addr, 0, sizeof(*udp_addr));
+            *udp_addrlen = 0;
+        }
+    }
+
+    if (sse_fd) {
+        *sse_fd = new_sse;
+    } else if (new_sse >= 0) {
+        close(new_sse);
+    }
+
+    if (sse_client_fd) {
+        if (*sse_client_fd >= 0) {
+            close(*sse_client_fd);
+        }
+        *sse_client_fd = -1;
+    }
+
+    if (cfg->sse_enabled && new_sse >= 0) {
+        fprintf(stderr, "SSE listening on %s%s\n", cfg->sse_bind, cfg->sse_path);
+    }
+
+    if (new_udp >= 0) {
+        char hostbuf[NI_MAXHOST];
+        char servbuf[NI_MAXSERV];
+        int gi = getnameinfo((struct sockaddr *)&addr_tmp, addrlen_tmp,
+                             hostbuf, sizeof(hostbuf),
+                             servbuf, sizeof(servbuf),
+                             NI_NUMERICHOST | NI_NUMERICSERV);
+        if (gi == 0) {
+            fprintf(stderr, "UDP target %s resolved to %s:%s\n",
+                    cfg->udp_target, hostbuf, servbuf);
+        } else {
+            fprintf(stderr, "UDP target %s ready (resolution error: %s)\n",
+                    cfg->udp_target, gai_strerror(gi));
+        }
+    }
+
+    if (new_serial < 0 && new_udp < 0 && (!cfg->sse_enabled || new_sse < 0)) {
+        fprintf(stderr, "Warning: no output destinations configured; frames will stay local.\n");
+    }
+
+    return 0;
+
+fail:
+    if (new_serial >= 0) {
+        close(new_serial);
+    }
+    if (new_udp >= 0) {
+        close(new_udp);
+    }
+    if (new_sse >= 0) {
+        close(new_sse);
+    }
+    return -1;
+}
+
 static void try_rt(int prio)
 {
     struct sched_param sp = { .sched_priority = prio };
@@ -718,6 +859,24 @@ static void parse_dead_list(const char *str, int out[16])
     free(dup);
 }
 
+static int parse_arm_toggle_value(const char *str, int *out)
+{
+    if (!str || !out) {
+        return -1;
+    }
+
+    int ch = atoi(str);
+    if (ch >= 1 && ch <= 16) {
+        *out = ch - 1;
+        return 0;
+    }
+    if (ch <= 0) {
+        *out = -1;
+        return 0;
+    }
+    return -1;
+}
+
 static void config_defaults(config_t *cfg)
 {
     cfg->rate = 125;
@@ -732,6 +891,7 @@ static void config_defaults(config_t *cfg)
     cfg->sse_enabled = 0;
     snprintf(cfg->sse_bind, sizeof(cfg->sse_bind), "%s", "127.0.0.1:8070");
     snprintf(cfg->sse_path, sizeof(cfg->sse_path), "%s", "/sse");
+    cfg->profile[0] = '\0';
     cfg->arm_toggle = 4;
     cfg->joystick_index = 0;
     cfg->rescan_interval = 5;
@@ -744,14 +904,32 @@ static void config_defaults(config_t *cfg)
 
 static int config_load(config_t *cfg, const char *path)
 {
+    typedef struct profile_cfg {
+        char *name;
+        int map[16];
+        int invert[16];
+        int dead[16];
+        int arm_toggle;
+        int have_map;
+        int have_invert;
+        int have_dead;
+        int have_arm;
+    } profile_cfg_t;
+
     FILE *fp = fopen(path, "r");
     if (!fp) {
         fprintf(stderr, "Failed to open config %s: %s\n", path, strerror(errno));
         return -1;
     }
 
+    profile_cfg_t *profiles = NULL;
+    size_t profiles_len = 0;
+    profile_cfg_t *current_profile = NULL;
+
     char line[MAX_LINE_LEN];
     int lineno = 0;
+    int rc = -1;
+
     while (fgets(line, sizeof(line), fp)) {
         lineno++;
         char *hash = strchr(line, '#');
@@ -762,6 +940,67 @@ static int config_load(config_t *cfg, const char *path)
         if (!line[0]) {
             continue;
         }
+
+        size_t len = strlen(line);
+        if (line[0] == '[' && len > 1) {
+            if (line[len - 1] != ']') {
+                fprintf(stderr, "%s:%d: ignoring unterminated section header\n", path, lineno);
+                current_profile = NULL;
+                continue;
+            }
+            line[len - 1] = '\0';
+            char *section = line + 1;
+            trim(section);
+            if (!strncasecmp(section, "profile", 7)) {
+                char *name = section + 7;
+                while (*name && isspace((unsigned char)*name)) {
+                    name++;
+                }
+                if (!*name) {
+                    current_profile = NULL;
+                    continue;
+                }
+
+                profile_cfg_t *profile = NULL;
+                for (size_t i = 0; i < profiles_len; i++) {
+                    if (!strcasecmp(profiles[i].name, name)) {
+                        profile = &profiles[i];
+                        break;
+                    }
+                }
+                if (!profile) {
+                    profile_cfg_t *tmp = realloc(profiles, (profiles_len + 1) * sizeof(*profiles));
+                    if (!tmp) {
+                        fprintf(stderr, "%s:%d: out of memory while storing profile '%s'\n", path, lineno, name);
+                        goto out;
+                    }
+                    profiles = tmp;
+                    profile = &profiles[profiles_len++];
+                    profile->name = strdup(name);
+                    if (!profile->name) {
+                        fprintf(stderr, "%s:%d: out of memory while storing profile '%s'\n", path, lineno, name);
+                        goto out;
+                    }
+                }
+
+                for (int i = 0; i < 16; i++) {
+                    profile->map[i] = i;
+                    profile->invert[i] = 0;
+                    profile->dead[i] = 0;
+                }
+                profile->arm_toggle = -1;
+                profile->have_map = 0;
+                profile->have_invert = 0;
+                profile->have_dead = 0;
+                profile->have_arm = 0;
+                current_profile = profile;
+            } else {
+                fprintf(stderr, "%s:%d: unknown section '%s'\n", path, lineno, section);
+                current_profile = NULL;
+            }
+            continue;
+        }
+
         char *eq = strchr(line, '=');
         if (!eq) {
             fprintf(stderr, "%s:%d: ignoring line without '='\n", path, lineno);
@@ -772,6 +1011,31 @@ static int config_load(config_t *cfg, const char *path)
         char *val = eq + 1;
         trim(key);
         trim(val);
+
+        if (current_profile) {
+            if (!strcasecmp(key, "map")) {
+                parse_map_list(val, current_profile->map);
+                current_profile->have_map = 1;
+            } else if (!strcasecmp(key, "invert")) {
+                parse_invert_list(val, current_profile->invert);
+                current_profile->have_invert = 1;
+            } else if (!strcasecmp(key, "deadband")) {
+                parse_dead_list(val, current_profile->dead);
+                current_profile->have_dead = 1;
+            } else if (!strcasecmp(key, "arm_toggle")) {
+                if (parse_arm_toggle_value(val, &current_profile->arm_toggle) == 0) {
+                    current_profile->have_arm = 1;
+                } else {
+                    fprintf(stderr,
+                            "%s:%d: profile '%s': arm_toggle must be 1-16 (or 0 to disable)\n",
+                            path, lineno, current_profile->name);
+                }
+            } else {
+                fprintf(stderr, "%s:%d: profile '%s': unknown key '%s'\n",
+                        path, lineno, current_profile->name, key);
+            }
+            continue;
+        }
 
         if (!strcasecmp(key, "rate")) {
             cfg->rate = atoi(val);
@@ -816,12 +1080,7 @@ static int config_load(config_t *cfg, const char *path)
         } else if (!strcasecmp(key, "sse_path")) {
             snprintf(cfg->sse_path, sizeof(cfg->sse_path), "%s", val);
         } else if (!strcasecmp(key, "arm_toggle")) {
-            int ch = atoi(val);
-            if (ch >= 1 && ch <= 16) {
-                cfg->arm_toggle = ch - 1;
-            } else if (ch <= 0) {
-                cfg->arm_toggle = -1;
-            } else {
+            if (parse_arm_toggle_value(val, &cfg->arm_toggle) != 0) {
                 fprintf(stderr, "%s:%d: arm_toggle must be 1-16 (or 0 to disable)\n", path, lineno);
             }
         } else if (!strcasecmp(key, "map")) {
@@ -834,12 +1093,60 @@ static int config_load(config_t *cfg, const char *path)
             cfg->joystick_index = atoi(val);
         } else if (!strcasecmp(key, "rescan_interval")) {
             cfg->rescan_interval = atoi(val);
+        } else if (!strcasecmp(key, "profile")) {
+            snprintf(cfg->profile, sizeof(cfg->profile), "%s", val);
         } else {
             fprintf(stderr, "%s:%d: unknown key '%s'\n", path, lineno, key);
         }
     }
 
+    rc = 0;
+
+out:
     fclose(fp);
+
+    if (rc == 0 && cfg->profile[0]) {
+        profile_cfg_t *selected = NULL;
+        for (size_t i = 0; i < profiles_len; i++) {
+            if (!strcasecmp(profiles[i].name, cfg->profile)) {
+                selected = &profiles[i];
+                break;
+            }
+        }
+        if (!selected) {
+            fprintf(stderr, "%s: profile '%s' not found; keeping current settings.\n", path, cfg->profile);
+        } else {
+            if (selected->have_map) {
+                for (int i = 0; i < 16; i++) {
+                    cfg->map[i] = selected->map[i];
+                }
+            }
+            if (selected->have_invert) {
+                for (int i = 0; i < 16; i++) {
+                    cfg->invert[i] = selected->invert[i];
+                }
+            }
+            if (selected->have_dead) {
+                for (int i = 0; i < 16; i++) {
+                    cfg->dead[i] = selected->dead[i];
+                }
+            }
+            if (selected->have_arm) {
+                cfg->arm_toggle = selected->arm_toggle;
+            }
+            fprintf(stderr, "%s: applied profile '%s'.\n", path, cfg->profile);
+        }
+    }
+
+    for (size_t i = 0; i < profiles_len; i++) {
+        free(profiles[i].name);
+    }
+    free(profiles);
+
+    if (rc != 0) {
+        return -1;
+    }
+
     if (cfg->rescan_interval <= 0) {
         cfg->rescan_interval = 5;
     }
@@ -923,61 +1230,14 @@ int main(int argc, char **argv)
     int sse_fd = -1;
     int sse_client_fd = -1;
     struct sockaddr_storage udp_addr;
+    memset(&udp_addr, 0, sizeof(udp_addr));
     socklen_t udp_addrlen = 0;
     SDL_Joystick *js = NULL;
 
-    if (cfg.serial_enabled && !cfg.simulation) {
-        serial_fd = open_serial(cfg.serial_device, cfg.serial_baud);
-        if (serial_fd < 0) {
-            exit_code = 1;
-            goto done;
-        }
-    }
-
-    if (cfg.udp_enabled) {
-        if (cfg.udp_target[0] == '\0') {
-            fprintf(stderr, "UDP enabled but udp_target is empty\n");
-            fprintf(stderr, "Continuing without UDP output.\n");
-        } else {
-            udp_fd = open_udp_target(cfg.udp_target, &udp_addr, &udp_addrlen);
-            if (udp_fd < 0) {
-                fprintf(stderr, "Continuing without UDP output.\n");
-            }
-        }
-    }
-
-    if (cfg.sse_enabled) {
-        if (cfg.sse_bind[0] == '\0') {
-            fprintf(stderr, "SSE enabled but sse_bind is empty\n");
-            exit_code = 1;
-            goto done;
-        }
-        sse_fd = open_sse_listener(cfg.sse_bind);
-        if (sse_fd < 0) {
-            exit_code = 1;
-            goto done;
-        }
-        fprintf(stderr, "SSE listening on %s%s\n", cfg.sse_bind, cfg.sse_path);
-    }
-
-    if (serial_fd < 0 && udp_fd < 0 && (!cfg.sse_enabled || sse_fd < 0)) {
-        fprintf(stderr, "Warning: no output destinations configured; frames will stay local.\n");
-    }
-
-    if (udp_fd >= 0) {
-        char hostbuf[NI_MAXHOST];
-        char servbuf[NI_MAXSERV];
-        int gi = getnameinfo((struct sockaddr *)&udp_addr, udp_addrlen,
-                             hostbuf, sizeof(hostbuf),
-                             servbuf, sizeof(servbuf),
-                             NI_NUMERICHOST | NI_NUMERICSERV);
-        if (gi == 0) {
-            fprintf(stderr, "UDP target %s resolved to %s:%s\n",
-                    cfg.udp_target, hostbuf, servbuf);
-        } else {
-            fprintf(stderr, "UDP target %s ready (resolution error: %s)\n",
-                    cfg.udp_target, gai_strerror(gi));
-        }
+    if (init_outputs(&cfg, &serial_fd, &udp_fd, &udp_addr, &udp_addrlen,
+                     &sse_fd, &sse_client_fd) < 0) {
+        exit_code = 1;
+        goto done;
     }
 
     try_rt(10);
@@ -986,6 +1246,8 @@ int main(int argc, char **argv)
     clock_gettime(CLOCK_MONOTONIC, &next_rescan);
     struct timespec next_tick = next_rescan;
     struct timespec next_sse_emit = timespec_add(next_rescan, 0, SSE_INTERVAL_NS);
+    int restart_pending = 0;
+    struct timespec restart_deadline = timespec_add(next_rescan, cfg.rescan_interval, 0);
 
     uint64_t loops = 0;
     uint64_t every = LOOP_HZ / (uint64_t)cfg.rate;
@@ -1011,6 +1273,41 @@ int main(int argc, char **argv)
     while (g_run) {
         struct timespec now;
         clock_gettime(CLOCK_MONOTONIC, &now);
+
+        if (!js && restart_pending && timespec_cmp(&now, &restart_deadline) >= 0) {
+            config_t new_cfg;
+            config_defaults(&new_cfg);
+            if (config_load(&new_cfg, conf_path) < 0) {
+                fprintf(stderr, "Rediscovery reload failed; retrying in %d seconds.\n",
+                        cfg.rescan_interval);
+                restart_deadline = timespec_add(now, cfg.rescan_interval, 0);
+            } else if (new_cfg.rate != 50 && new_cfg.rate != 125 && new_cfg.rate != 250) {
+                fprintf(stderr, "Rediscovery reload ignored: rate must be 50, 125, or 250.\n");
+                restart_deadline = timespec_add(now, cfg.rescan_interval, 0);
+            } else {
+                close_outputs(&serial_fd, &udp_fd, &sse_fd, &sse_client_fd);
+                memset(&udp_addr, 0, sizeof(udp_addr));
+                udp_addrlen = 0;
+                if (init_outputs(&new_cfg, &serial_fd, &udp_fd, &udp_addr, &udp_addrlen,
+                                 &sse_fd, &sse_client_fd) < 0) {
+                    exit_code = 1;
+                    goto done;
+                }
+                cfg = new_cfg;
+                every = LOOP_HZ / (uint64_t)cfg.rate;
+                loops = 0;
+                arm_channel = (cfg.arm_toggle >= 0 && cfg.arm_toggle < 16) ? cfg.arm_toggle : -1;
+                arm_sticky = 0;
+                arm_press_active = 0;
+                arm_press_start.tv_sec = 0;
+                arm_press_start.tv_nsec = 0;
+                next_tick = timespec_add(now, 0, LOOP_NS);
+                next_sse_emit = timespec_add(now, 0, SSE_INTERVAL_NS);
+                restart_pending = 0;
+                next_rescan = now;
+                fprintf(stderr, "Joystick rediscovery triggered configuration reload.\n");
+            }
+        }
 
         if (g_reload) {
             g_reload = 0;
@@ -1050,6 +1347,7 @@ int main(int argc, char **argv)
                 cfg.rate = new_cfg.rate;
                 cfg.stats = new_cfg.stats;
                 cfg.channels = new_cfg.channels;
+                snprintf(cfg.profile, sizeof(cfg.profile), "%s", new_cfg.profile);
                 cfg.arm_toggle = new_cfg.arm_toggle;
                 cfg.joystick_index = new_cfg.joystick_index;
                 cfg.rescan_interval = new_cfg.rescan_interval;
@@ -1081,6 +1379,10 @@ int main(int argc, char **argv)
                     next_rescan = timespec_add(now, cfg.rescan_interval, 0);
                 }
 
+                if (restart_pending) {
+                    restart_deadline = timespec_add(now, cfg.rescan_interval, 0);
+                }
+
                 next_tick = timespec_add(now, 0, LOOP_NS);
                 next_sse_emit = timespec_add(now, 0, SSE_INTERVAL_NS);
                 fprintf(stderr, "Reloaded joystick configuration.\n");
@@ -1092,10 +1394,11 @@ int main(int argc, char **argv)
             fprintf(stderr, "Joystick %d detached\n", cfg.joystick_index);
             SDL_JoystickClose(js);
             js = NULL;
-            next_rescan = timespec_add(now, cfg.rescan_interval, 0);
+            restart_pending = 1;
+            restart_deadline = timespec_add(now, cfg.rescan_interval, 0);
         }
 
-        if (!js && timespec_cmp(&now, &next_rescan) >= 0) {
+        if (!js && !restart_pending && timespec_cmp(&now, &next_rescan) >= 0) {
             int count = SDL_NumJoysticks();
             if (cfg.joystick_index < count) {
                 SDL_Joystick *candidate = SDL_JoystickOpen(cfg.joystick_index);
@@ -1104,13 +1407,17 @@ int main(int argc, char **argv)
                     const char *name = SDL_JoystickName(js);
                     fprintf(stderr, "Joystick %d connected: %s\n",
                             cfg.joystick_index, name ? name : "unknown");
+                    restart_pending = 0;
                 } else {
                     fprintf(stderr, "Failed to open joystick %d: %s\n", cfg.joystick_index, SDL_GetError());
-                    next_rescan = timespec_add(now, cfg.rescan_interval, 0);
+                    restart_pending = 1;
+                    restart_deadline = timespec_add(now, cfg.rescan_interval, 0);
                 }
             } else {
-                next_rescan = timespec_add(now, cfg.rescan_interval, 0);
+                restart_pending = 1;
+                restart_deadline = timespec_add(now, cfg.rescan_interval, 0);
             }
+            next_rescan = timespec_add(now, cfg.rescan_interval, 0);
         }
 
         if (js) {
