@@ -1030,6 +1030,7 @@ int main(int argc, char **argv)
                 int sse_changed = (new_cfg.sse_enabled != cfg.sse_enabled) ||
                                   (strcmp(new_cfg.sse_bind, cfg.sse_bind) != 0) ||
                                   (strcmp(new_cfg.sse_path, cfg.sse_path) != 0);
+                int simulation_changed = (new_cfg.simulation != cfg.simulation);
 
                 if (serial_changed) {
                     fprintf(stderr, "Reload ignored serial changes; restart required.\n");
@@ -1040,12 +1041,14 @@ int main(int argc, char **argv)
                 if (sse_changed) {
                     fprintf(stderr, "Reload ignored SSE changes; restart required.\n");
                 }
+                if (simulation_changed) {
+                    fprintf(stderr, "Reload ignored simulation mode change; restart required.\n");
+                }
 
                 int joystick_changed = (new_cfg.joystick_index != cfg.joystick_index);
 
                 cfg.rate = new_cfg.rate;
                 cfg.stats = new_cfg.stats;
-                cfg.simulation = new_cfg.simulation;
                 cfg.channels = new_cfg.channels;
                 cfg.arm_toggle = new_cfg.arm_toggle;
                 cfg.joystick_index = new_cfg.joystick_index;
