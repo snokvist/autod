@@ -41,6 +41,7 @@
 #define MAX_KEY      64
 #define MAX_VAL      256
 #define MAX_EVENTS   18
+#define CADENCE_WINDOW 32
 
 typedef enum { UART_TTY, UART_STDIO } uart_backend_t;
 typedef enum { NET_TCP_SERVER, NET_TCP_CLIENT, NET_UDP_PEER } net_mode_t;
@@ -133,6 +134,7 @@ typedef struct {
     char log_file[128];
     int  dump_on_start;       // 1/0
     int  status_interval_ms;  // 0 = disabled
+    double expected_hz;       // optional cadence target
 
     // Buffers
     size_t rx_buf; // scratch RX buffers
@@ -181,6 +183,15 @@ typedef struct {
 
     bool running;
     bool reconnect_pending;
+
+    struct timespec last_pkt_uart_to_net;
+    struct timespec last_pkt_net_to_uart;
+    uint64_t intervals_uart_to_net[CADENCE_WINDOW];
+    uint64_t intervals_net_to_uart[CADENCE_WINDOW];
+    size_t intervals_uart_to_net_count;
+    size_t intervals_net_to_uart_count;
+    size_t intervals_uart_to_net_pos;
+    size_t intervals_net_to_uart_pos;
 } state_t;
 
 /* ------------------------------- Signals ------------------------------------ */
@@ -226,6 +237,103 @@ static int set_custom_baud(int fd, int baud){
 }
 static void get_mono(struct timespec *ts){ clock_gettime(CLOCK_MONOTONIC, ts); }
 static long long diff_ms(const struct timespec *a, const struct timespec *b){ return (a->tv_sec-b->tv_sec)*1000LL + (a->tv_nsec-b->tv_nsec)/1000000LL; }
+static uint64_t diff_us(const struct timespec *a, const struct timespec *b){
+    long long sec = (long long)a->tv_sec - (long long)b->tv_sec;
+    long long nsec = (long long)a->tv_nsec - (long long)b->tv_nsec;
+    long long total = sec*1000000LL + nsec/1000LL;
+    if(total < 0) total = 0;
+    return (uint64_t)total;
+}
+
+static void reset_cadence_stats(state_t *st){
+    memset(&st->last_pkt_uart_to_net, 0, sizeof(st->last_pkt_uart_to_net));
+    memset(&st->last_pkt_net_to_uart, 0, sizeof(st->last_pkt_net_to_uart));
+    memset(st->intervals_uart_to_net, 0, sizeof(st->intervals_uart_to_net));
+    memset(st->intervals_net_to_uart, 0, sizeof(st->intervals_net_to_uart));
+    st->intervals_uart_to_net_count = 0;
+    st->intervals_net_to_uart_count = 0;
+    st->intervals_uart_to_net_pos = 0;
+    st->intervals_net_to_uart_pos = 0;
+}
+
+static void record_cadence_sample(struct timespec *last, uint64_t *buf, size_t *pos, size_t *count, const struct timespec *now){
+    if(last->tv_sec || last->tv_nsec){
+        uint64_t us = diff_us(now, last);
+        buf[*pos] = us;
+        if(*count < CADENCE_WINDOW) (*count)++;
+        *pos = (*pos + 1) % CADENCE_WINDOW;
+    }
+    *last = *now;
+}
+
+static void cadence_note_packet(state_t *st, bool uart_to_net){
+    struct timespec now;
+    get_mono(&now);
+    if(uart_to_net){
+        record_cadence_sample(&st->last_pkt_uart_to_net, st->intervals_uart_to_net,
+                              &st->intervals_uart_to_net_pos, &st->intervals_uart_to_net_count, &now);
+    } else {
+        record_cadence_sample(&st->last_pkt_net_to_uart, st->intervals_net_to_uart,
+                              &st->intervals_net_to_uart_pos, &st->intervals_net_to_uart_count, &now);
+    }
+}
+
+typedef struct {
+    size_t samples;
+    uint64_t min_us;
+    uint64_t max_us;
+    uint64_t p95_us;
+    double avg_interval_us;
+} cadence_stats_t;
+
+static int cmp_u64(const void *a, const void *b){
+    uint64_t ua = *(const uint64_t*)a;
+    uint64_t ub = *(const uint64_t*)b;
+    if(ua < ub) return -1;
+    if(ua > ub) return 1;
+    return 0;
+}
+
+static void cadence_collect_stats(const state_t *st, bool uart_to_net, cadence_stats_t *out){
+    const uint64_t *buf = uart_to_net ? st->intervals_uart_to_net : st->intervals_net_to_uart;
+    size_t count = uart_to_net ? st->intervals_uart_to_net_count : st->intervals_net_to_uart_count;
+    size_t pos = uart_to_net ? st->intervals_uart_to_net_pos : st->intervals_net_to_uart_pos;
+    out->samples = count;
+    out->min_us = 0;
+    out->max_us = 0;
+    out->p95_us = 0;
+    out->avg_interval_us = 0.0;
+    if(!count) return;
+
+    uint64_t scratch[CADENCE_WINDOW];
+    size_t start = (count==CADENCE_WINDOW)?pos:0;
+    for(size_t i=0;i<count;i++){
+        size_t idx = (start + i) % CADENCE_WINDOW;
+        scratch[i] = buf[idx];
+    }
+
+    uint64_t min = scratch[0];
+    uint64_t max = scratch[0];
+    long double sum = 0.0;
+    for(size_t i=0;i<count;i++){
+        uint64_t v = scratch[i];
+        if(v < min) min = v;
+        if(v > max) max = v;
+        sum += (long double)v;
+    }
+
+    out->min_us = min;
+    out->max_us = max;
+    out->avg_interval_us = (double)(sum / (long double)count);
+
+    uint64_t sorted[CADENCE_WINDOW];
+    memcpy(sorted, scratch, count * sizeof(uint64_t));
+    qsort(sorted, count, sizeof(uint64_t), cmp_u64);
+    size_t idx = (count * 95 + 99) / 100;
+    if(idx == 0) idx = 1;
+    if(idx > count) idx = count;
+    out->p95_us = sorted[idx-1];
+}
 
 /* --------------------------------- Config ----------------------------------- */
 static int parse_config(const char *path, config_t *cfg){
@@ -244,6 +352,7 @@ static int parse_config(const char *path, config_t *cfg){
     cfg->udp_coalesce_bytes=1200; cfg->udp_coalesce_idle_ms=5; cfg->udp_max_datagram=1200;
 
     strcpy(cfg->log_file,"/tmp/ip2uart.log"); cfg->dump_on_start=1; cfg->status_interval_ms=0;
+    cfg->expected_hz=0.0;
     cfg->rx_buf=65536; cfg->tx_buf=65536;
 
     FILE *f=fopen(path,"r"); if(!f) return -1;
@@ -295,6 +404,7 @@ static int parse_config(const char *path, config_t *cfg){
         else if(!strcmp(key,"log_file")){ strncpy(cfg->log_file,val,sizeof(cfg->log_file)-1); cfg->log_file[sizeof(cfg->log_file)-1]=0; }
         else if(!strcmp(key,"dump_on_start")) cfg->dump_on_start=parse_bool(val);
         else if(!strcmp(key,"status_interval_ms")) cfg->status_interval_ms=atoi(val);
+        else if(!strcmp(key,"expected_hz")) cfg->expected_hz=strtod(val,NULL);
         else if(!strcmp(key,"rx_buf")) cfg->rx_buf=(size_t)strtoul(val,NULL,10);
         else if(!strcmp(key,"tx_buf")) cfg->tx_buf=(size_t)strtoul(val,NULL,10);
     }
@@ -479,6 +589,7 @@ static int reopen_everything(const config_t *cfg, state_t *st){
     st->tcp_connected=false; st->tcp_peer_ip[0]=0; st->tcp_peer_port=0; st->udp_peer_set=false;
     st->reconnect_pending=false; memset(&st->next_reconnect,0,sizeof(st->next_reconnect));
     st->udp_out_len=0;
+    reset_cadence_stats(st);
 
     ring_free(&st->tcp_out); ring_free(&st->uart_out);
     if(ring_init(&st->tcp_out,cfg->tx_buf)<0 || ring_init(&st->uart_out,cfg->tx_buf)<0){
@@ -566,6 +677,53 @@ static void dump_ini(const config_t *cfg, const state_t *st){
     fprintf(f,"tcp_out_queued=%zu\n", st->tcp_out.len);
     fprintf(f,"uart_out_queued=%zu\n", st->uart_out.len);
     fprintf(f,"udp_out_len=%zu\n", st->udp_out_len);
+
+    cadence_stats_t stats_utn; cadence_collect_stats(st, true, &stats_utn);
+    cadence_stats_t stats_ntu; cadence_collect_stats(st, false, &stats_ntu);
+
+    fprintf(f,"interval_uart_to_net_samples=%zu\n", stats_utn.samples);
+    fprintf(f,"interval_us_uart_to_net_min=%llu\n", (unsigned long long)stats_utn.min_us);
+    fprintf(f,"interval_us_uart_to_net_max=%llu\n", (unsigned long long)stats_utn.max_us);
+    fprintf(f,"interval_us_uart_to_net_p95=%llu\n", (unsigned long long)stats_utn.p95_us);
+    fprintf(f,"pps_uart_to_net_recent=%.3f\n", (stats_utn.avg_interval_us>0.0)?(1000000.0/stats_utn.avg_interval_us):0.0);
+
+    fprintf(f,"interval_net_to_uart_samples=%zu\n", stats_ntu.samples);
+    fprintf(f,"interval_us_net_to_uart_min=%llu\n", (unsigned long long)stats_ntu.min_us);
+    fprintf(f,"interval_us_net_to_uart_max=%llu\n", (unsigned long long)stats_ntu.max_us);
+    fprintf(f,"interval_us_net_to_uart_p95=%llu\n", (unsigned long long)stats_ntu.p95_us);
+    fprintf(f,"pps_net_to_uart_recent=%.3f\n", (stats_ntu.avg_interval_us>0.0)?(1000000.0/stats_ntu.avg_interval_us):0.0);
+
+    if(cfg->expected_hz > 0.0){
+        double actual_utn = (stats_utn.avg_interval_us>0.0)?(1000000.0/stats_utn.avg_interval_us):0.0;
+        double actual_ntu = (stats_ntu.avg_interval_us>0.0)?(1000000.0/stats_ntu.avg_interval_us):0.0;
+        int score_utn = 0;
+        int score_ntu = 0;
+        if(stats_utn.samples>0){
+            double pct = actual_utn / cfg->expected_hz;
+            if(pct >= 1.0) score_utn = 100;
+            else if(pct <= 0.0) score_utn = 0;
+            else {
+                double scaled = pct * 100.0;
+                if(scaled < 0.0) scaled = 0.0;
+                score_utn = (int)(scaled + 0.5);
+                if(score_utn > 100) score_utn = 100;
+            }
+        }
+        if(stats_ntu.samples>0){
+            double pct = actual_ntu / cfg->expected_hz;
+            if(pct >= 1.0) score_ntu = 100;
+            else if(pct <= 0.0) score_ntu = 0;
+            else {
+                double scaled = pct * 100.0;
+                if(scaled < 0.0) scaled = 0.0;
+                score_ntu = (int)(scaled + 0.5);
+                if(score_ntu > 100) score_ntu = 100;
+            }
+        }
+        fprintf(f,"expected_hz=%.3f\n", cfg->expected_hz);
+        fprintf(f,"cadence_score_uart_to_net=%d\n", score_utn);
+        fprintf(f,"cadence_score_net_to_uart=%d\n", score_ntu);
+    }
     fclose(f);
     vlog(3, "stats: wrote %s", cfg->log_file);
 }
@@ -592,6 +750,7 @@ static void udp_flush_if_ready(const config_t *cfg, state_t *st, bool force, uin
                        (struct sockaddr*)&st->udp_peer, sizeof(st->udp_peer));
     if(w==(ssize_t)st->udp_out_len){
         st->bytes_uart_to_net += (uint64_t)w; st->pkts_uart_to_net += 1;
+        cadence_note_packet(st, true);
         vlog(3, "UDP: sent datagram bytes=%zd reason=%s", w, reason?reason:"(unknown)");
         st->udp_out_len=0;
         mod_ep(st->epfd, st->fd_net, base_events);
@@ -636,6 +795,7 @@ int main(int argc, char **argv){
          (cfg.net_mode==NET_TCP_SERVER?"tcp_server":(cfg.net_mode==NET_TCP_CLIENT?"tcp_client":"udp_peer")));
 
     state_t st; memset(&st,0,sizeof(st));
+    reset_cadence_stats(&st);
     st.fd_uart=st.fd_listen=st.fd_net=-1; st.fd_stdout=-1;
     st.epfd=epoll_create1(0); if(st.epfd<0){ perror("epoll_create1"); return 1; }
 
@@ -881,6 +1041,7 @@ int main(int argc, char **argv){
                             ssize_t w=send(st.fd_net, buf_uart, (size_t)r, MSG_NOSIGNAL);
                             if(w>0){
                                 st.bytes_uart_to_net+=(uint64_t)w; st.pkts_uart_to_net+=1;
+                                cadence_note_packet(&st, true);
                                 if(w<r){
                                     size_t rem=(size_t)r-(size_t)w;
                                     size_t wr=ring_write(&st.tcp_out, buf_uart+w, rem);
@@ -918,6 +1079,7 @@ int main(int argc, char **argv){
                         ssize_t w=write(outfd, buf_net, (size_t)r);
                         if(w>0){
                             st.bytes_net_to_uart+=(uint64_t)w; st.pkts_net_to_uart+=1;
+                            cadence_note_packet(&st, false);
                             if(w<r){
                                 size_t rem=(size_t)r-(size_t)w;
                                 size_t wr=ring_write(&st.uart_out, buf_net+w, rem);
