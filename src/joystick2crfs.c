@@ -984,11 +984,11 @@ static int config_load(config_t *cfg, const char *path)
                 }
 
                 for (int i = 0; i < 16; i++) {
-                    profile->map[i] = i;
-                    profile->invert[i] = 0;
-                    profile->dead[i] = 0;
+                    profile->map[i] = cfg->map[i];
+                    profile->invert[i] = cfg->invert[i];
+                    profile->dead[i] = cfg->dead[i];
                 }
-                profile->arm_toggle = -1;
+                profile->arm_toggle = cfg->arm_toggle;
                 profile->have_map = 0;
                 profile->have_invert = 0;
                 profile->have_dead = 0;
@@ -1128,24 +1128,12 @@ out:
         if (!selected) {
             fprintf(stderr, "%s: profile '%s' not found; keeping current settings.\n", path, cfg->profile);
         } else {
-            if (selected->have_map) {
-                for (int i = 0; i < 16; i++) {
-                    cfg->map[i] = selected->map[i];
-                }
+            for (int i = 0; i < 16; i++) {
+                cfg->map[i] = selected->map[i];
+                cfg->invert[i] = selected->invert[i];
+                cfg->dead[i] = selected->dead[i];
             }
-            if (selected->have_invert) {
-                for (int i = 0; i < 16; i++) {
-                    cfg->invert[i] = selected->invert[i];
-                }
-            }
-            if (selected->have_dead) {
-                for (int i = 0; i < 16; i++) {
-                    cfg->dead[i] = selected->dead[i];
-                }
-            }
-            if (selected->have_arm) {
-                cfg->arm_toggle = selected->arm_toggle;
-            }
+            cfg->arm_toggle = selected->arm_toggle;
             fprintf(stderr, "%s: applied profile '%s'.\n", path, cfg->profile);
         }
     }
