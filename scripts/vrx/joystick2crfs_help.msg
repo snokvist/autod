@@ -22,6 +22,7 @@
     {"key":"map","type":"string","default":"1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16","description":"Channel map (CSV of joystick axes → CRSF)","control":{"kind":"text","placeholder":"1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16"}},
     {"key":"invert","type":"string","default":"0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0","description":"Channel inversion flags (0/1 CSV)","control":{"kind":"text","placeholder":"0,0,0,…"}},
     {"key":"deadband","type":"string","default":"0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0","description":"Deadband per channel (CSV, raw units)","control":{"kind":"text","placeholder":"0,0,0,…"}},
+    {"key":"profile","type":"string","default":"","description":"Profile template to apply (blank keeps current mapping)","control":{"kind":"text","placeholder":"xbox"}},
     {"key":"arm_toggle","type":"int","default":5,"description":"Momentary index that latches channel 5 high (0 disables)","control":{"kind":"range","min":0,"max":16,"step":1}},
     {"key":"serial_enabled","type":"bool","default":false,"description":"Enable CRSF UART output","control":{"kind":"toggle"}},
     {"key":"serial_device","type":"string","default":"/dev/ttyUSB0","description":"UART device path","control":{"kind":"text","placeholder":"/dev/ttyUSB0"}},

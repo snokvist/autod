@@ -1012,29 +1012,36 @@ static int config_load(config_t *cfg, const char *path)
         trim(key);
         trim(val);
 
-        if (current_profile) {
+        profile_cfg_t *profile_scope = current_profile;
+        if (profile_scope) {
             if (!strcasecmp(key, "map")) {
-                parse_map_list(val, current_profile->map);
-                current_profile->have_map = 1;
+                parse_map_list(val, profile_scope->map);
+                profile_scope->have_map = 1;
+                continue;
             } else if (!strcasecmp(key, "invert")) {
-                parse_invert_list(val, current_profile->invert);
-                current_profile->have_invert = 1;
+                parse_invert_list(val, profile_scope->invert);
+                profile_scope->have_invert = 1;
+                continue;
             } else if (!strcasecmp(key, "deadband")) {
-                parse_dead_list(val, current_profile->dead);
-                current_profile->have_dead = 1;
+                parse_dead_list(val, profile_scope->dead);
+                profile_scope->have_dead = 1;
+                continue;
             } else if (!strcasecmp(key, "arm_toggle")) {
-                if (parse_arm_toggle_value(val, &current_profile->arm_toggle) == 0) {
-                    current_profile->have_arm = 1;
+                if (parse_arm_toggle_value(val, &profile_scope->arm_toggle) == 0) {
+                    profile_scope->have_arm = 1;
                 } else {
                     fprintf(stderr,
                             "%s:%d: profile '%s': arm_toggle must be 1-16 (or 0 to disable)\n",
-                            path, lineno, current_profile->name);
+                            path, lineno, profile_scope->name);
                 }
-            } else {
-                fprintf(stderr, "%s:%d: profile '%s': unknown key '%s'\n",
-                        path, lineno, current_profile->name, key);
+                continue;
             }
-            continue;
+
+            /* Any other key should terminate the profile section so the value
+             * is treated as part of the top-level config. This allows global
+             * keys to follow a [profile NAME] block without triggering
+             * spurious "unknown key" errors. */
+            current_profile = NULL;
         }
 
         if (!strcasecmp(key, "rate")) {
@@ -1096,7 +1103,12 @@ static int config_load(config_t *cfg, const char *path)
         } else if (!strcasecmp(key, "profile")) {
             snprintf(cfg->profile, sizeof(cfg->profile), "%s", val);
         } else {
-            fprintf(stderr, "%s:%d: unknown key '%s'\n", path, lineno, key);
+            if (profile_scope) {
+                fprintf(stderr, "%s:%d: profile '%s': unknown key '%s'\n",
+                        path, lineno, profile_scope->name, key);
+            } else {
+                fprintf(stderr, "%s:%d: unknown key '%s'\n", path, lineno, key);
+            }
         }
     }
 
