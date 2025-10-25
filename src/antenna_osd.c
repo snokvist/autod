@@ -8,6 +8,7 @@
  */
 
 #define _GNU_SOURCE
+#include <ctype.h>
 #include <errno.h>
 #include <getopt.h>
 #include <glob.h>
@@ -21,8 +22,13 @@
 #include <time.h>
 #include <unistd.h>
 
+#define MAX_INFO_SOURCES 2
+
 static int last_valid_rssi=0, neg1_count_rssi=0, last_valid_udp=0, neg1_count_udp=0;
-static char *info_buf=NULL; static size_t info_size=0; static time_t last_info_attempt=0; static bool info_buf_valid=false;
+static char *info_buf[MAX_INFO_SOURCES]={NULL,NULL};
+static size_t info_size[MAX_INFO_SOURCES]={0,0};
+static time_t last_info_attempt[MAX_INFO_SOURCES]={0,0};
+static bool info_buf_valid[MAX_INFO_SOURCES]={false,false};
 static int rssi_hist[3]={-1,-1,-1}, udp_hist[3]={-1,-1,-1};
 
 #define DEF_CFG_FILE        "/etc/antenna_osd.conf"
@@ -64,7 +70,7 @@ static const char *FULL="\u2588";
 static const char *PART[7]={"\u2581","\u2582","\u2583","\u2584","\u2585","\u2586","\u2587"};
 
 typedef struct {
-    const char *info_file;
+    const char *info_files[MAX_INFO_SOURCES];
     const char *out_file;
     double      interval;
     int         bar_width;
@@ -90,7 +96,7 @@ typedef struct {
 } cfg_t;
 
 static cfg_t cfg = {
-    .info_file=DEF_INFO_FILE, .out_file=DEF_OUT_FILE, .interval=DEF_INTERVAL, .bar_width=DEF_BAR_WIDTH, .top=DEF_TOP, .bottom=DEF_BOTTOM,
+    .info_files={DEF_INFO_FILE,NULL}, .out_file=DEF_OUT_FILE, .interval=DEF_INTERVAL, .bar_width=DEF_BAR_WIDTH, .top=DEF_TOP, .bottom=DEF_BOTTOM,
     .osd_hdr=DEF_OSD_HDR, .osd_hdr2=DEF_OSD_HDR2, .sys_msg_hdr=DEF_SYS_MSG_HDR, .system_msg="", .show_stats_line=DEF_SHOW_STATS, .sys_msg_timeout=DEF_SYS_MSG_TIMEOUT,
     .rssi_control=DEF_RSSI_CONTROL, .rssi_hdr={DEF_RSSI_RANGE0,DEF_RSSI_RANGE1,DEF_RSSI_RANGE2,DEF_RSSI_RANGE3,DEF_RSSI_RANGE4,DEF_RSSI_RANGE5},
     .start_sym=DEF_START, .end_sym=DEF_END, .empty_sym=DEF_EMPTY, .rssi_key=DEF_RSSI_KEY,
@@ -100,7 +106,8 @@ static cfg_t cfg = {
 static void set_cfg_field(const char *k, const char *v)
 {
 #define EQ(a,b) (strcmp((a),(b))==0)
-    if (EQ(k, "info_file")) cfg.info_file = strdup(v);
+    if (EQ(k, "info_file")) cfg.info_files[0] = strdup(v);
+    else if (EQ(k, "info_file2") || EQ(k, "info_file_alt") || EQ(k, "info_file_secondary")) cfg.info_files[1] = strdup(v);
     else if (EQ(k, "out_file")) cfg.out_file = strdup(v);
     else if (EQ(k, "interval")) cfg.interval = atof(v);
     else if (EQ(k, "bar_width")) cfg.bar_width = atoi(v);
@@ -219,23 +226,36 @@ static FILE *fopen_glob_first(const char *pattern,const char *mode){
     FILE *fp=fopen(g.gl_pathv[0],mode); globfree(&g); return fp;
 }
 
-static bool load_info_buffer(void){
-    FILE *fp=fopen_glob_first(cfg.info_file,"r"); if(!fp) return false;
-    free(info_buf); info_buf=NULL; info_size=0;
+static bool load_info_buffer(int idx){
+    if(idx < 0 || idx >= MAX_INFO_SOURCES) return false;
+    const char *path = cfg.info_files[idx];
+    if(!path) return false;
+    FILE *fp=fopen_glob_first(path,"r"); if(!fp) return false;
+    free(info_buf[idx]); info_buf[idx]=NULL; info_size[idx]=0;
     size_t cap=0; char tmp[256];
     while(fgets(tmp,sizeof(tmp),fp)){
         size_t len=strlen(tmp);
-        if(info_size+len+1>cap){cap=(cap+len+1)*2; char *nb=realloc(info_buf,cap); if(!nb){free(info_buf); fclose(fp); return false;} info_buf=nb;}
-        memcpy(info_buf+info_size,tmp,len); info_size+=len;
+        if(info_size[idx]+len+1>cap){
+            cap=(cap+len+1)*2;
+            char *nb=realloc(info_buf[idx],cap);
+            if(!nb){free(info_buf[idx]); info_buf[idx]=NULL; fclose(fp); return false;}
+            info_buf[idx]=nb;
+        }
+        memcpy(info_buf[idx]+info_size[idx],tmp,len); info_size[idx]+=len;
     }
-    if(info_buf) info_buf[info_size]='\0'; else {info_buf=strdup(""); info_size=0;}
+    if(info_buf[idx]) info_buf[idx][info_size[idx]]='\0';
+    else {
+        info_buf[idx]=strdup("");
+        if(!info_buf[idx]){fclose(fp); return false;}
+        info_size[idx]=0;
+    }
     fclose(fp); return true;
 }
 
 static int parse_int_from_buf(const char *buf,const char *key){
     const char *p=buf;
     while((p=strcasestr(p,key))!=NULL){
-        const char *sep=strchr(p,':'); if(!sep) sep=strchr(p,'='); if(sep){sep++; while(*sep==' '||*sep=='\t') sep++; return (int)strtol(sep,NULL,10);} 
+        const char *sep=strchr(p,':'); if(!sep) sep=strchr(p,'='); if(sep){sep++; while(*sep==' '||*sep=='\t') sep++; return (int)strtol(sep,NULL,10);}
         p+=strlen(key);
     }
     return -1;
@@ -250,6 +270,60 @@ static void parse_value_from_buf(const char *buf,const char *key,char *out,size_
         size_t len=end-sep; if(len>=outlen) len=outlen-1; memcpy(out,sep,len); out[len]='\0'; return;
     }
     snprintf(out,outlen,"NA");
+}
+
+static int resolve_source_from_spec(const char *spec,const char **key_out){
+    if(!spec){
+        *key_out=NULL;
+        return 0;
+    }
+    const char *colon=strchr(spec,':');
+    if(!colon||colon==spec){
+        *key_out=spec;
+        return 0;
+    }
+    size_t prefix_len=(size_t)(colon-spec);
+    if(prefix_len>=16){
+        *key_out=spec;
+        return 0;
+    }
+    char prefix[16];
+    for(size_t i=0;i<prefix_len;++i){
+        prefix[i]=(char)tolower((unsigned char)spec[i]);
+    }
+    prefix[prefix_len]='\0';
+    int idx=-1;
+    if(strcmp(prefix,"file1")==0||strcmp(prefix,"info1")==0||strcmp(prefix,"primary")==0||strcmp(prefix,"main")==0||strcmp(prefix,"0")==0||strcmp(prefix,"1")==0){
+        idx=0;
+    } else if(strcmp(prefix,"file2")==0||strcmp(prefix,"info2")==0||strcmp(prefix,"secondary")==0||strcmp(prefix,"alt")==0||strcmp(prefix,"2")==0){
+        idx=1;
+    }
+    if(idx>=0){
+        *key_out=colon+1;
+        return idx;
+    }
+    *key_out=spec;
+    return 0;
+}
+
+static int parse_int_from_spec(const char *spec,const bool have_info[]){
+    const char *key=NULL;
+    int idx=resolve_source_from_spec(spec,&key);
+    if(idx<0||idx>=MAX_INFO_SOURCES) idx=0;
+    if(!key||!*key) return -1;
+    if(!have_info[idx]||!info_buf[idx]) return -1;
+    return parse_int_from_buf(info_buf[idx],key);
+}
+
+static void parse_value_from_spec(const char *spec,const bool have_info[],char *out,size_t outlen){
+    const char *key=NULL;
+    int idx=resolve_source_from_spec(spec,&key);
+    if(idx<0||idx>=MAX_INFO_SOURCES) idx=0;
+    if(!key||!*key||!have_info[idx]||!info_buf[idx]){
+        snprintf(out,outlen,"NA");
+        return;
+    }
+    parse_value_from_buf(info_buf[idx],key,out,outlen);
 }
 
 static void build_bar(char *o,size_t sz,int pct){
@@ -349,38 +423,43 @@ int main(int argc, char **argv){
         read_system_msg();
         time_t now_sec = time(NULL);
 
-        bool have_info = false;
-        if(info_buf_valid){
-            if(load_info_buffer()){
-                last_info_attempt = now_sec;
-                have_info = true;
-            } else {
-                info_buf_valid=false;
-                last_info_attempt = now_sec;
+        bool have_info[MAX_INFO_SOURCES]={false,false};
+        bool any_info=false;
+        for(int i=0;i<MAX_INFO_SOURCES;++i){
+            if(!cfg.info_files[i]) continue;
+            if(info_buf_valid[i]){
+                if(load_info_buffer(i)){
+                    last_info_attempt[i]=now_sec;
+                    have_info[i]=true;
+                } else {
+                    info_buf_valid[i]=false;
+                    last_info_attempt[i]=now_sec;
+                }
+            } else if(now_sec - last_info_attempt[i] >= 3){
+                if(load_info_buffer(i)){
+                    info_buf_valid[i]=true;
+                    have_info[i]=true;
+                }
+                last_info_attempt[i]=now_sec;
             }
-        } else if(now_sec - last_info_attempt >= 3){
-            if(load_info_buffer()){
-                info_buf_valid=true;
-                have_info = true;
-            }
-            last_info_attempt = now_sec;
+            if(have_info[i]) any_info=true;
         }
 
-        if(!have_info || !info_buf){
+        if(!any_info){
             strcpy(last_mcs,"NA"); strcpy(last_bw,"NA"); strcpy(last_tx,"NA");
             int disp_rssi = smooth_rssi_sample(rssi_hist, get_display_rssi(-1));
             int disp_udp  = cfg.rssi_udp_enable ? smooth_rssi_sample(udp_hist, get_display_udp(-1)) : -1;
             write_osd(disp_rssi, disp_udp, last_mcs, last_bw, last_tx);
         } else {
-            int raw_rssi = parse_int_from_buf(info_buf,cfg.rssi_key);
-            int raw_udp  = cfg.rssi_udp_enable ? parse_int_from_buf(info_buf,cfg.rssi_udp_key) : -1;
+            int raw_rssi = parse_int_from_spec(cfg.rssi_key,have_info);
+            int raw_udp  = cfg.rssi_udp_enable ? parse_int_from_spec(cfg.rssi_udp_key,have_info) : -1;
 
             int disp_rssi = get_display_rssi(raw_rssi); disp_rssi = smooth_rssi_sample(rssi_hist, disp_rssi);
             int disp_udp  = get_display_udp(raw_udp);   disp_udp  = smooth_rssi_sample(udp_hist,  disp_udp);
 
-            parse_value_from_buf(info_buf,cfg.curr_tx_rate_key,last_mcs,sizeof(last_mcs));
-            parse_value_from_buf(info_buf,cfg.curr_tx_bw_key,  last_bw, sizeof(last_bw));
-            parse_value_from_buf(info_buf,cfg.tx_power_key,    last_tx, sizeof(last_tx));
+            parse_value_from_spec(cfg.curr_tx_rate_key,have_info,last_mcs,sizeof(last_mcs));
+            parse_value_from_spec(cfg.curr_tx_bw_key,  have_info,last_bw, sizeof(last_bw));
+            parse_value_from_spec(cfg.tx_power_key,    have_info,last_tx, sizeof(last_tx));
 
             write_osd(disp_rssi, disp_udp, last_mcs, last_bw, last_tx);
         }
