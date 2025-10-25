@@ -1058,16 +1058,14 @@ int main(int argc, char **argv)
                 break;
             }
 
-            if (js) {
-                SDL_JoystickUpdate();
-                if (!SDL_JoystickGetAttached(js)) {
-                    fprintf(stderr, "Joystick %d detached\n", cfg.joystick_index);
-                    SDL_JoystickClose(js);
-                    js = NULL;
-                    restart_requested = 1;
-                    restart_sleep = 1;
-                    break;
-                }
+            SDL_JoystickUpdate();
+            if (js && !SDL_JoystickGetAttached(js)) {
+                fprintf(stderr, "Joystick %d detached\n", cfg.joystick_index);
+                SDL_JoystickClose(js);
+                js = NULL;
+                restart_requested = 1;
+                restart_sleep = 1;
+                break;
             }
 
             if (!js && timespec_cmp(&now, &next_rescan) >= 0) {
@@ -1093,6 +1091,7 @@ int main(int argc, char **argv)
                     restart_sleep = 1;
                     break;
                 }
+                next_rescan = timespec_add(now, cfg.rescan_interval, 0);
             }
 
             if (!js) {
