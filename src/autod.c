@@ -590,6 +590,41 @@ static void add_cors_options(struct mg_connection *c) {
       "Connection: close\r\n\r\n");
 }
 
+static const char *guess_mime_type(const char *path) {
+    if (!path) return "application/octet-stream";
+    const char *dot = strrchr(path, '.');
+    if (!dot || !dot[1]) return "application/octet-stream";
+    dot++;
+    if (!strcasecmp(dot, "html") || !strcasecmp(dot, "htm")) {
+        return "text/html; charset=utf-8";
+    } else if (!strcasecmp(dot, "css")) {
+        return "text/css; charset=utf-8";
+    } else if (!strcasecmp(dot, "js")) {
+        return "application/javascript; charset=utf-8";
+    } else if (!strcasecmp(dot, "json")) {
+        return "application/json; charset=utf-8";
+    } else if (!strcasecmp(dot, "svg")) {
+        return "image/svg+xml";
+    } else if (!strcasecmp(dot, "png")) {
+        return "image/png";
+    } else if (!strcasecmp(dot, "jpg") || !strcasecmp(dot, "jpeg")) {
+        return "image/jpeg";
+    } else if (!strcasecmp(dot, "gif")) {
+        return "image/gif";
+    } else if (!strcasecmp(dot, "webp")) {
+        return "image/webp";
+    } else if (!strcasecmp(dot, "mp4") || !strcasecmp(dot, "m4v")) {
+        return "video/mp4";
+    } else if (!strcasecmp(dot, "webm")) {
+        return "video/webm";
+    } else if (!strcasecmp(dot, "wasm")) {
+        return "application/wasm";
+    } else if (!strcasecmp(dot, "txt")) {
+        return "text/plain; charset=utf-8";
+    }
+    return "application/octet-stream";
+}
+
 static int read_body(struct mg_connection *c, upload_t *u) {
     u->body = NULL;
     u->len  = 0;
@@ -662,17 +697,52 @@ static int h_health(struct mg_connection *c, void *ud){
     return 1;
 }
 
-static int stream_file(struct mg_connection *c, const char *path, int cors_public){
-    int fd = open(path, O_RDONLY);
-    if (fd < 0) {
-        JSON_Value *v=json_value_init_object(); JSON_Object *o=json_object(v);
-        json_object_set_string(o,"error","ui_not_found");
-        send_json(c, v, 404, cors_public);
-        json_value_free(v);
+static int stream_file(struct mg_connection *c, const char *path, int cors_public, int json_on_missing){
+    const struct mg_request_info *ri = mg_get_request_info(c);
+    const char *method = (ri && ri->request_method) ? ri->request_method : "";
+    int is_head = (strcmp(method, "HEAD") == 0);
+    if (!is_head && strcmp(method, "GET") != 0) {
+        send_plain(c, 405, "method_not_allowed", cors_public);
         return 1;
     }
-    struct stat st; if (fstat(fd,&st)!=0){ close(fd); return 0; }
-    add_common_headers(c, 200, "text/html; charset=utf-8", (size_t)st.st_size, cors_public);
+
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) {
+        if (json_on_missing) {
+            JSON_Value *v=json_value_init_object(); JSON_Object *o=json_object(v);
+            json_object_set_string(o,"error","ui_not_found");
+            send_json(c, v, 404, cors_public);
+            json_value_free(v);
+        } else {
+            send_plain(c, 404, "not_found", cors_public);
+        }
+        return 1;
+    }
+
+    struct stat st;
+    if (fstat(fd,&st)!=0 || !S_ISREG(st.st_mode)){
+        close(fd);
+        send_plain(c, 404, "not_found", cors_public);
+        return 1;
+    }
+
+    const char *ctype = guess_mime_type(path);
+    char extra[192];
+    extra[0] = '\0';
+    char http_date[64];
+    if (format_http_date(st.st_mtime, http_date, sizeof(http_date)) == 0) {
+        int n = snprintf(extra, sizeof(extra), "Last-Modified: %s\r\n", http_date);
+        if (n < 0 || n >= (int)sizeof(extra)) extra[0] = '\0';
+    }
+
+    add_common_headers_extra(c, 200, ctype, (size_t)st.st_size, cors_public,
+                             extra[0] ? extra : NULL);
+
+    if (is_head) {
+        close(fd);
+        return 1;
+    }
+
     off_t off=0; char buf[64*1024];
     while (off < st.st_size) {
         ssize_t r = read(fd, buf, sizeof(buf));
@@ -813,7 +883,97 @@ static int h_root(struct mg_connection *c, void *ud){
         json_value_free(v);
         return 1;
     }
-    return stream_file(c, app->cfg.ui_path, app->cfg.ui_public);
+
+    const struct mg_request_info *ri = mg_get_request_info(c);
+    const char *method = (ri && ri->request_method) ? ri->request_method : "";
+    int is_head = (strcmp(method, "HEAD") == 0);
+    if (!is_head && strcmp(method, "GET") != 0) {
+        send_plain(c, 405, "method_not_allowed", app->cfg.ui_public);
+        return 1;
+    }
+
+    const char *req_uri = (ri && ri->local_uri) ? ri->local_uri :
+                          (ri && ri->request_uri) ? ri->request_uri : "/";
+    if (!req_uri) req_uri = "/";
+
+    char decoded_uri[PATH_MAX];
+    int dec = mg_url_decode(req_uri, (int)strlen(req_uri),
+                            decoded_uri, (int)sizeof(decoded_uri), 0);
+    if (dec <= 0 || dec >= (int)sizeof(decoded_uri)) {
+        send_plain(c, 400, "bad_request", app->cfg.ui_public);
+        return 1;
+    }
+    decoded_uri[dec] = '\0';
+    const char *uri = decoded_uri;
+
+    const char *basename = app->cfg.ui_path;
+    const char *slash = strrchr(basename, '/');
+    if (slash && slash[1]) basename = slash + 1;
+
+    if (!strcmp(uri, "/") ||
+        (basename && *basename && uri[0]=='/' && strcmp(uri + 1, basename) == 0)) {
+        return stream_file(c, app->cfg.ui_path, app->cfg.ui_public, 1);
+    }
+
+    const char *rel = uri;
+    while (*rel == '/') rel++;
+    if (!*rel) {
+        return stream_file(c, app->cfg.ui_path, app->cfg.ui_public, 1);
+    }
+
+    char rel_copy[PATH_MAX];
+    strncpy(rel_copy, rel, sizeof(rel_copy) - 1);
+    rel_copy[sizeof(rel_copy) - 1] = '\0';
+
+    char tmp[PATH_MAX];
+    strncpy(tmp, rel_copy, sizeof(tmp) - 1);
+    tmp[sizeof(tmp) - 1] = '\0';
+    char *save = NULL;
+    for (char *tok = strtok_r(tmp, "/", &save); tok; tok = strtok_r(NULL, "/", &save)) {
+        if (!strcmp(tok, "..")) {
+            send_plain(c, 403, "forbidden", app->cfg.ui_public);
+            return 1;
+        }
+    }
+
+    char base_dir[PATH_MAX];
+    strncpy(base_dir, app->cfg.ui_path, sizeof(base_dir) - 1);
+    base_dir[sizeof(base_dir) - 1] = '\0';
+    char *last = strrchr(base_dir, '/');
+    if (last) {
+        if (last == base_dir) {
+            last[1] = '\0';
+        } else {
+            *last = '\0';
+        }
+    } else {
+        snprintf(base_dir, sizeof(base_dir), ".");
+    }
+
+    char base_real[PATH_MAX];
+    if (!realpath(base_dir, base_real)) {
+        send_plain(c, 404, "not_found", app->cfg.ui_public);
+        return 1;
+    }
+
+    char joined[PATH_MAX];
+    if (snprintf(joined, sizeof(joined), "%s/%s", base_real, rel_copy) >= (int)sizeof(joined)) {
+        send_plain(c, 400, "path_too_long", app->cfg.ui_public);
+        return 1;
+    }
+
+    char resolved[PATH_MAX];
+    if (realpath(joined, resolved)) {
+        size_t base_len = strlen(base_real);
+        if (strncmp(resolved, base_real, base_len) != 0 ||
+            (resolved[base_len] != '\0' && resolved[base_len] != '/')) {
+            send_plain(c, 403, "forbidden", app->cfg.ui_public);
+            return 1;
+        }
+        return stream_file(c, resolved, app->cfg.ui_public, 0);
+    }
+
+    return stream_file(c, joined, app->cfg.ui_public, 0);
 }
 
 static int h_caps(struct mg_connection *c, void *ud){

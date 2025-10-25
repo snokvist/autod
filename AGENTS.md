@@ -7,3 +7,8 @@
 - When editing any `scripts/**/exec-handler.sh`, ensure the `/sys/help` payload enumerates every available help endpoint so
   clients can discover them consistently (see `scripts/vtx/sys_help.msg` for the expected structure).
 - UI screenshots are not required unless explicitly requested.
+- When touching anything under `html/`, especially the segmented web UI assets,
+  audit related HTML, CSS, and JS files in the same feature bundle so the views
+  stay in sync. Treat the VRX/VTX bundles and shared assets as a unit: ensure
+  new resources are referenced, installed, and served correctly before
+  submitting changes.

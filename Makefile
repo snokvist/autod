@@ -235,6 +235,16 @@ install: native udp_relay joystick2crfs
 	install -Dm755 $(APP) $(DESTDIR)$(BINDIR)/$(APP)
 	install -d $(DESTDIR)$(VRXDIR)
 	install -m644 html/autod/vrx_index.html $(DESTDIR)$(VRXDIR)/vrx_index.html
+	@set -e; \
+	for dir in $$(find html/autod/assets -type d); do \
+		rel="$${dir#html/autod/}"; \
+		install -d "$(DESTDIR)$(VRXDIR)/$$rel"; \
+	done
+	@set -e; \
+	for file in $$(find html/autod/assets -type f); do \
+		rel="$${file#html/autod/}"; \
+		install -m644 "$$file" "$(DESTDIR)$(VRXDIR)/$$rel"; \
+	done
 	install -m755 scripts/vrx/exec-handler.sh $(DESTDIR)$(VRXDIR)/exec-handler.sh
 	@set -e; \
 	for helper in scripts/vrx/*.msg; do \
