@@ -902,379 +902,421 @@ int main(int argc, char **argv)
     signal(SIGINT, on_sigint);
     signal(SIGHUP, on_sighup);
 
+    config_t cfg;
+    config_defaults(&cfg);
+    if (config_load(&cfg, conf_path) < 0) {
+        return 1;
+    }
+    if (cfg.rate != 50 && cfg.rate != 125 && cfg.rate != 250) {
+        fprintf(stderr, "Config rate must be 50, 125, or 250\n");
+        return 1;
+    }
+
+    if (SDL_Init(SDL_INIT_JOYSTICK) < 0) {
+        fprintf(stderr, "SDL: %s\n", SDL_GetError());
+        return 1;
+    }
+
     int exit_code = 0;
+    int serial_fd = -1;
+    int udp_fd = -1;
+    int sse_fd = -1;
+    int sse_client_fd = -1;
+    struct sockaddr_storage udp_addr;
+    socklen_t udp_addrlen = 0;
+    SDL_Joystick *js = NULL;
+
+    if (cfg.serial_enabled && !cfg.simulation) {
+        serial_fd = open_serial(cfg.serial_device, cfg.serial_baud);
+        if (serial_fd < 0) {
+            exit_code = 1;
+            goto done;
+        }
+    }
+
+    if (cfg.udp_enabled) {
+        if (cfg.udp_target[0] == '\0') {
+            fprintf(stderr, "UDP enabled but udp_target is empty\n");
+            fprintf(stderr, "Continuing without UDP output.\n");
+        } else {
+            udp_fd = open_udp_target(cfg.udp_target, &udp_addr, &udp_addrlen);
+            if (udp_fd < 0) {
+                fprintf(stderr, "Continuing without UDP output.\n");
+            }
+        }
+    }
+
+    if (cfg.sse_enabled) {
+        if (cfg.sse_bind[0] == '\0') {
+            fprintf(stderr, "SSE enabled but sse_bind is empty\n");
+            exit_code = 1;
+            goto done;
+        }
+        sse_fd = open_sse_listener(cfg.sse_bind);
+        if (sse_fd < 0) {
+            exit_code = 1;
+            goto done;
+        }
+        fprintf(stderr, "SSE listening on %s%s\n", cfg.sse_bind, cfg.sse_path);
+    }
+
+    if (serial_fd < 0 && udp_fd < 0 && (!cfg.sse_enabled || sse_fd < 0)) {
+        fprintf(stderr, "Warning: no output destinations configured; frames will stay local.\n");
+    }
+
+    if (udp_fd >= 0) {
+        char hostbuf[NI_MAXHOST];
+        char servbuf[NI_MAXSERV];
+        int gi = getnameinfo((struct sockaddr *)&udp_addr, udp_addrlen,
+                             hostbuf, sizeof(hostbuf),
+                             servbuf, sizeof(servbuf),
+                             NI_NUMERICHOST | NI_NUMERICSERV);
+        if (gi == 0) {
+            fprintf(stderr, "UDP target %s resolved to %s:%s\n",
+                    cfg.udp_target, hostbuf, servbuf);
+        } else {
+            fprintf(stderr, "UDP target %s ready (resolution error: %s)\n",
+                    cfg.udp_target, gai_strerror(gi));
+        }
+    }
+
+    try_rt(10);
+
+    struct timespec next_rescan;
+    clock_gettime(CLOCK_MONOTONIC, &next_rescan);
+    struct timespec next_tick = next_rescan;
+    struct timespec next_sse_emit = timespec_add(next_rescan, 0, SSE_INTERVAL_NS);
+
+    uint64_t loops = 0;
+    uint64_t every = LOOP_HZ / (uint64_t)cfg.rate;
+
+    double t_min = 1e9, t_max = 0.0, t_sum = 0.0;
+    uint64_t t_cnt = 0;
+    uint64_t serial_packets = 0;
+    uint64_t udp_packets = 0;
+    uint64_t sse_packets = 0;
+    char rxbuf[256];
+    size_t rxlen = 0;
+
+    uint8_t frame[CRSF_FRAME_LEN + 2];
+    frame[0] = CRSF_DEST;
+    frame[1] = CRSF_FRAME_LEN;
+    frame[2] = CRSF_TYPE_CHANNELS;
+
+    int arm_channel = (cfg.arm_toggle >= 0 && cfg.arm_toggle < 16) ? cfg.arm_toggle : -1;
+    int arm_sticky = 0;
+    int arm_press_active = 0;
+    struct timespec arm_press_start = {0, 0};
 
     while (g_run) {
-        config_t cfg;
-        config_defaults(&cfg);
-        if (config_load(&cfg, conf_path) < 0) {
-            exit_code = 1;
-            break;
-        }
-        if (cfg.rate != 50 && cfg.rate != 125 && cfg.rate != 250) {
-            fprintf(stderr, "Config rate must be 50, 125, or 250\n");
-            exit_code = 1;
-            break;
-        }
+        struct timespec now;
+        clock_gettime(CLOCK_MONOTONIC, &now);
 
-        if (SDL_Init(SDL_INIT_JOYSTICK) < 0) {
-            fprintf(stderr, "SDL: %s\n", SDL_GetError());
-            exit_code = 1;
-            break;
-        }
+        if (g_reload) {
+            g_reload = 0;
 
-        int serial_fd = -1;
-        if (cfg.serial_enabled && !cfg.simulation) {
-            serial_fd = open_serial(cfg.serial_device, cfg.serial_baud);
-            if (serial_fd < 0) {
-                SDL_Quit();
-                exit_code = 1;
-                break;
-            }
-        }
-
-        int udp_fd = -1;
-        struct sockaddr_storage udp_addr;
-        socklen_t udp_addrlen = 0;
-        if (cfg.udp_enabled) {
-            if (cfg.udp_target[0] == '\0') {
-                fprintf(stderr, "UDP enabled but udp_target is empty\n");
-                fprintf(stderr, "Continuing without UDP output.\n");
+            config_t new_cfg;
+            config_defaults(&new_cfg);
+            if (config_load(&new_cfg, conf_path) < 0) {
+                fprintf(stderr, "Reload failed; keeping existing joystick configuration.\n");
+            } else if (new_cfg.rate != 50 && new_cfg.rate != 125 && new_cfg.rate != 250) {
+                fprintf(stderr, "Reload ignored: rate must be 50, 125, or 250\n");
             } else {
-                udp_fd = open_udp_target(cfg.udp_target, &udp_addr, &udp_addrlen);
-                if (udp_fd < 0) {
-                    fprintf(stderr, "Continuing without UDP output.\n");
+                int serial_changed = (new_cfg.serial_enabled != cfg.serial_enabled) ||
+                                     (strcmp(new_cfg.serial_device, cfg.serial_device) != 0) ||
+                                     (new_cfg.serial_baud != cfg.serial_baud);
+                int udp_changed = (new_cfg.udp_enabled != cfg.udp_enabled) ||
+                                  (strcmp(new_cfg.udp_target, cfg.udp_target) != 0);
+                int sse_changed = (new_cfg.sse_enabled != cfg.sse_enabled) ||
+                                  (strcmp(new_cfg.sse_bind, cfg.sse_bind) != 0) ||
+                                  (strcmp(new_cfg.sse_path, cfg.sse_path) != 0);
+
+                if (serial_changed) {
+                    fprintf(stderr, "Reload ignored serial changes; restart required.\n");
                 }
-            }
-        }
-
-        int sse_fd = -1;
-        int sse_client_fd = -1;
-        if (cfg.sse_enabled) {
-            if (cfg.sse_bind[0] == '\0') {
-                fprintf(stderr, "SSE enabled but sse_bind is empty\n");
-                if (serial_fd >= 0) {
-                    close(serial_fd);
+                if (udp_changed) {
+                    fprintf(stderr, "Reload ignored UDP changes; restart required.\n");
                 }
-                if (udp_fd >= 0) {
-                    close(udp_fd);
+                if (sse_changed) {
+                    fprintf(stderr, "Reload ignored SSE changes; restart required.\n");
                 }
-                SDL_Quit();
-                exit_code = 1;
-                break;
-            } else {
-                sse_fd = open_sse_listener(cfg.sse_bind);
-                if (sse_fd < 0) {
-                    if (serial_fd >= 0) {
-                        close(serial_fd);
-                    }
-                    if (udp_fd >= 0) {
-                        close(udp_fd);
-                    }
-                    SDL_Quit();
-                    exit_code = 1;
-                    break;
+
+                int joystick_changed = (new_cfg.joystick_index != cfg.joystick_index);
+
+                cfg.rate = new_cfg.rate;
+                cfg.stats = new_cfg.stats;
+                cfg.simulation = new_cfg.simulation;
+                cfg.channels = new_cfg.channels;
+                cfg.arm_toggle = new_cfg.arm_toggle;
+                cfg.joystick_index = new_cfg.joystick_index;
+                cfg.rescan_interval = new_cfg.rescan_interval;
+                for (int i = 0; i < 16; i++) {
+                    cfg.map[i] = new_cfg.map[i];
+                    cfg.invert[i] = new_cfg.invert[i];
+                    cfg.dead[i] = new_cfg.dead[i];
                 }
-                fprintf(stderr, "SSE listening on %s%s\n", cfg.sse_bind, cfg.sse_path);
-            }
-        }
 
-        if (serial_fd < 0 && udp_fd < 0 && (!cfg.sse_enabled || sse_fd < 0)) {
-            fprintf(stderr, "Warning: no output destinations configured; frames will stay local.\n");
-        }
+                every = LOOP_HZ / (uint64_t)cfg.rate;
+                loops = 0;
 
-        if (udp_fd >= 0) {
-            char hostbuf[NI_MAXHOST];
-            char servbuf[NI_MAXSERV];
-            int gi = getnameinfo((struct sockaddr *)&udp_addr, udp_addrlen,
-                                 hostbuf, sizeof(hostbuf),
-                                 servbuf, sizeof(servbuf),
-                                 NI_NUMERICHOST | NI_NUMERICSERV);
-            if (gi == 0) {
-                fprintf(stderr, "UDP target %s resolved to %s:%s\n",
-                        cfg.udp_target, hostbuf, servbuf);
-            } else {
-                fprintf(stderr, "UDP target %s ready (resolution error: %s)\n",
-                        cfg.udp_target, gai_strerror(gi));
-            }
-        }
+                arm_channel = (cfg.arm_toggle >= 0 && cfg.arm_toggle < 16) ? cfg.arm_toggle : -1;
+                arm_sticky = 0;
+                arm_press_active = 0;
+                arm_press_start.tv_sec = 0;
+                arm_press_start.tv_nsec = 0;
 
-        try_rt(10);
-
-        SDL_Joystick *js = NULL;
-        struct timespec next_rescan;
-        clock_gettime(CLOCK_MONOTONIC, &next_rescan);
-        struct timespec next_tick = next_rescan;
-        struct timespec next_sse_emit = timespec_add(next_rescan, 0, SSE_INTERVAL_NS);
-
-        const uint64_t every = LOOP_HZ / (uint64_t)cfg.rate;
-        uint64_t loops = 0;
-
-        double t_min = 1e9, t_max = 0.0, t_sum = 0.0;
-        uint64_t t_cnt = 0;
-        uint64_t serial_packets = 0;
-        uint64_t udp_packets = 0;
-        uint64_t sse_packets = 0;
-        char rxbuf[256];
-        size_t rxlen = 0;
-
-        uint8_t frame[CRSF_FRAME_LEN + 2];
-        frame[0] = CRSF_DEST;
-        frame[1] = CRSF_FRAME_LEN;
-        frame[2] = CRSF_TYPE_CHANNELS;
-
-        int arm_channel = (cfg.arm_toggle >= 0 && cfg.arm_toggle < 16) ? cfg.arm_toggle : -1;
-        int arm_sticky = 0;
-        int arm_press_active = 0;
-        struct timespec arm_press_start = {0, 0};
-
-        while (g_run && !g_reload) {
-            struct timespec now;
-            clock_gettime(CLOCK_MONOTONIC, &now);
-
-            if (g_reload) {
-                break;
-            }
-
-            if (js && !SDL_JoystickGetAttached(js)) {
-                fprintf(stderr, "Joystick %d detached\n", cfg.joystick_index);
-                SDL_JoystickClose(js);
-                js = NULL;
-                next_rescan = timespec_add(now, cfg.rescan_interval, 0);
-            }
-
-            if (!js && timespec_cmp(&now, &next_rescan) >= 0) {
-                int count = SDL_NumJoysticks();
-                if (cfg.joystick_index < count) {
-                    SDL_Joystick *candidate = SDL_JoystickOpen(cfg.joystick_index);
-                    if (candidate) {
-                        js = candidate;
-                        const char *name = SDL_JoystickName(js);
-                        fprintf(stderr, "Joystick %d connected: %s\n",
-                                cfg.joystick_index, name ? name : "unknown");
-                    } else {
-                        fprintf(stderr, "Failed to open joystick %d: %s\n", cfg.joystick_index, SDL_GetError());
-                        next_rescan = timespec_add(now, cfg.rescan_interval, 0);
-                    }
+                if (joystick_changed && js) {
+                    SDL_JoystickClose(js);
+                    js = NULL;
+                }
+                if (joystick_changed) {
+                    fprintf(stderr, "Joystick index updated to %d; will rescan.\n", cfg.joystick_index);
+                    next_rescan = now;
+                } else if (!js) {
+                    next_rescan = now;
                 } else {
                     next_rescan = timespec_add(now, cfg.rescan_interval, 0);
                 }
+
+                next_tick = timespec_add(now, 0, LOOP_NS);
+                next_sse_emit = timespec_add(now, 0, SSE_INTERVAL_NS);
+                fprintf(stderr, "Reloaded joystick configuration.\n");
             }
-
-            if (js) {
-                SDL_JoystickUpdate();
-            }
-
-            uint16_t ch_source[16];
-            int32_t raw_source[16];
-            if (js) {
-                build_channels(js, cfg.dead, ch_source, raw_source);
-            } else {
-                for (int i = 0; i < 16; i++) {
-                    raw_source[i] = 0;
-                    if (i < 8) {
-                        ch_source[i] = scale_axis(0);
-                    } else {
-                        ch_source[i] = scale_bool(0);
-                    }
-                }
-            }
-
-            uint16_t ch_out[16];
-            int32_t raw_out[16];
-            for (int i = 0; i < 16; i++) {
-                int src = cfg.map[i];
-                if (src < 0 || src >= 16) {
-                    src = i;
-                }
-                uint16_t v = ch_source[src];
-                if (cfg.invert[i]) {
-                    v = (uint16_t)(CRSF_MIN + CRSF_MAX - v);
-                }
-                ch_out[i] = v;
-                raw_out[i] = raw_source[src];
-            }
-
-            if (arm_channel >= 0) {
-                int src = cfg.map[arm_channel];
-                if (src < 0 || src >= 16) {
-                    src = arm_channel;
-                }
-                uint16_t arm_input = ch_source[src];
-                int arm_high = arm_input > 1709;
-                if (arm_high) {
-                    if (!arm_press_active) {
-                        arm_press_start = now;
-                        arm_press_active = 1;
-                    } else if (!arm_sticky) {
-                        int64_t held = timespec_diff_ms(&arm_press_start, &now);
-                        if (held >= 1000) {
-                            arm_sticky = 1;
-                        }
-                    }
-                } else if (arm_press_active) {
-                    int64_t held = timespec_diff_ms(&arm_press_start, &now);
-                    if (arm_sticky && held < 1000) {
-                        arm_sticky = 0;
-                    }
-                    arm_press_active = 0;
-                }
-
-                uint16_t arm_high_value = cfg.invert[arm_channel] ? CRSF_MIN : CRSF_MAX;
-                uint16_t arm_low_value = cfg.invert[arm_channel] ? CRSF_MAX : CRSF_MIN;
-                if (arm_sticky || arm_high) {
-                    ch_out[arm_channel] = arm_high_value;
-                    raw_out[arm_channel] = 1;
-                } else {
-                    ch_out[arm_channel] = arm_low_value;
-                    raw_out[arm_channel] = 0;
-                }
-            }
-
-            if (cfg.sse_enabled && sse_fd >= 0) {
-                int accepted = sse_accept_pending(sse_fd, &sse_client_fd, cfg.sse_path);
-                if (accepted > 0) {
-                    next_sse_emit = now;
-                }
-                if (sse_client_fd >= 0 && timespec_cmp(&now, &next_sse_emit) >= 0) {
-                    if (sse_send_frame(sse_client_fd, ch_out, raw_out) < 0) {
-                        fprintf(stderr, "SSE client disconnected\n");
-                        close(sse_client_fd);
-                        sse_client_fd = -1;
-                    } else {
-                        next_sse_emit = timespec_add(now, 0, SSE_INTERVAL_NS);
-                        sse_packets++;
-                    }
-                }
-            }
-
-            if (loops % every == 0) {
-                pack_channels(ch_out, frame + 3);
-                frame[CRSF_FRAME_LEN + 1] = crc8(frame + 2, CRSF_FRAME_LEN - 1);
-
-                if (cfg.channels) {
-                    printf("CH:");
-                    for (int i = 0; i < 16; i++) {
-                        printf(" %4u", ch_out[i]);
-                    }
-                    printf(" | RAW:");
-                    for (int i = 0; i < 16; i++) {
-                        printf(" %6d", raw_out[i]);
-                    }
-                    putchar('\n');
-                }
-
-                if (serial_fd >= 0) {
-                    if (send_all(serial_fd, frame, CRSF_FRAME_LEN + 2) < 0) {
-                        perror("serial write");
-                        g_run = 0;
-                    } else {
-                        serial_packets++;
-                    }
-                }
-                if (udp_fd >= 0) {
-                    ssize_t sent = sendto(udp_fd, frame, CRSF_FRAME_LEN + 2, 0,
-                                           (struct sockaddr *)&udp_addr, udp_addrlen);
-                    if (sent < 0) {
-                        if (errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK) {
-                            perror("udp send");
-                            g_run = 0;
-                        }
-                    } else {
-                        udp_packets++;
-                    }
-                }
-            }
-            loops++;
-
-            if (cfg.stats) {
-                struct timespec current;
-                clock_gettime(CLOCK_MONOTONIC, &current);
-                double dt = (current.tv_sec - next_tick.tv_sec) + (current.tv_nsec - next_tick.tv_nsec) / 1e9;
-                if (dt > 0.0) {
-                    if (dt < t_min) {
-                        t_min = dt;
-                    }
-                    if (dt > t_max) {
-                        t_max = dt;
-                    }
-                    t_sum += dt;
-                    t_cnt++;
-                    if (t_cnt >= LOOP_HZ) {
-                        printf("loop min %.3f  max %.3f  avg %.3f ms",
-                               t_min * 1e3, t_max * 1e3,
-                               (t_sum / (double)t_cnt) * 1e3);
-                        if (serial_fd >= 0) {
-                            printf("  serial %llu/s",
-                                   (unsigned long long)serial_packets);
-                        }
-                        if (udp_fd >= 0) {
-                            printf("  udp %llu/s",
-                                   (unsigned long long)udp_packets);
-                        }
-                        if (cfg.sse_enabled && sse_fd >= 0) {
-                            printf("  sse %llu/s",
-                                   (unsigned long long)sse_packets);
-                        }
-                        putchar('\n');
-                        t_min = 1e9;
-                        t_max = 0.0;
-                        t_sum = 0.0;
-                        t_cnt = 0;
-                        serial_packets = 0;
-                        udp_packets = 0;
-                        sse_packets = 0;
-                    }
-                }
-            }
-
-            if (cfg.stats && serial_fd >= 0) {
-                char tmp[64];
-                ssize_t n;
-                while ((n = read(serial_fd, tmp, sizeof(tmp))) > 0) {
-                    for (ssize_t i = 0; i < n; i++) {
-                        if (rxlen < sizeof(rxbuf) - 1) {
-                            rxbuf[rxlen++] = tmp[i];
-                        }
-                        if (tmp[i] == '\n') {
-                            rxbuf[rxlen] = '\0';
-                            fputs(rxbuf, stdout);
-                            rxlen = 0;
-                        }
-                    }
-                }
-            }
-
-            next_tick = timespec_add(next_tick, 0, LOOP_NS);
-            if (g_reload || !g_run) {
-                break;
-            }
-            clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next_tick, NULL);
-        }
-
-        if (serial_fd >= 0) {
-            close(serial_fd);
-        }
-        if (udp_fd >= 0) {
-            close(udp_fd);
-        }
-        if (sse_client_fd >= 0) {
-            close(sse_client_fd);
-        }
-        if (sse_fd >= 0) {
-            close(sse_fd);
-        }
-        if (js) {
-            SDL_JoystickClose(js);
-        }
-        SDL_Quit();
-
-        if (g_reload && g_run) {
-            g_reload = 0;
             continue;
         }
-        break;
+
+        if (js && !SDL_JoystickGetAttached(js)) {
+            fprintf(stderr, "Joystick %d detached\n", cfg.joystick_index);
+            SDL_JoystickClose(js);
+            js = NULL;
+            next_rescan = timespec_add(now, cfg.rescan_interval, 0);
+        }
+
+        if (!js && timespec_cmp(&now, &next_rescan) >= 0) {
+            int count = SDL_NumJoysticks();
+            if (cfg.joystick_index < count) {
+                SDL_Joystick *candidate = SDL_JoystickOpen(cfg.joystick_index);
+                if (candidate) {
+                    js = candidate;
+                    const char *name = SDL_JoystickName(js);
+                    fprintf(stderr, "Joystick %d connected: %s\n",
+                            cfg.joystick_index, name ? name : "unknown");
+                } else {
+                    fprintf(stderr, "Failed to open joystick %d: %s\n", cfg.joystick_index, SDL_GetError());
+                    next_rescan = timespec_add(now, cfg.rescan_interval, 0);
+                }
+            } else {
+                next_rescan = timespec_add(now, cfg.rescan_interval, 0);
+            }
+        }
+
+        if (js) {
+            SDL_JoystickUpdate();
+        }
+
+        uint16_t ch_source[16];
+        int32_t raw_source[16];
+        if (js) {
+            build_channels(js, cfg.dead, ch_source, raw_source);
+        } else {
+            for (int i = 0; i < 16; i++) {
+                raw_source[i] = 0;
+                if (i < 8) {
+                    ch_source[i] = scale_axis(0);
+                } else {
+                    ch_source[i] = scale_bool(0);
+                }
+            }
+        }
+
+        uint16_t ch_out[16];
+        int32_t raw_out[16];
+        for (int i = 0; i < 16; i++) {
+            int src = cfg.map[i];
+            if (src < 0 || src >= 16) {
+                src = i;
+            }
+            uint16_t v = ch_source[src];
+            if (cfg.invert[i]) {
+                v = (uint16_t)(CRSF_MIN + CRSF_MAX - v);
+            }
+            ch_out[i] = v;
+            raw_out[i] = raw_source[src];
+        }
+
+        if (arm_channel >= 0) {
+            int src = cfg.map[arm_channel];
+            if (src < 0 || src >= 16) {
+                src = arm_channel;
+            }
+            uint16_t arm_input = ch_source[src];
+            int arm_high = arm_input > 1709;
+            if (arm_high) {
+                if (!arm_press_active) {
+                    arm_press_start = now;
+                    arm_press_active = 1;
+                } else if (!arm_sticky) {
+                    int64_t held = timespec_diff_ms(&arm_press_start, &now);
+                    if (held >= 1000) {
+                        arm_sticky = 1;
+                    }
+                }
+            } else if (arm_press_active) {
+                int64_t held = timespec_diff_ms(&arm_press_start, &now);
+                if (arm_sticky && held < 1000) {
+                    arm_sticky = 0;
+                }
+                arm_press_active = 0;
+            }
+
+            uint16_t arm_high_value = cfg.invert[arm_channel] ? CRSF_MIN : CRSF_MAX;
+            uint16_t arm_low_value = cfg.invert[arm_channel] ? CRSF_MAX : CRSF_MIN;
+            if (arm_sticky || arm_high) {
+                ch_out[arm_channel] = arm_high_value;
+                raw_out[arm_channel] = 1;
+            } else {
+                ch_out[arm_channel] = arm_low_value;
+                raw_out[arm_channel] = 0;
+            }
+        }
+
+        if (cfg.sse_enabled && sse_fd >= 0) {
+            int accepted = sse_accept_pending(sse_fd, &sse_client_fd, cfg.sse_path);
+            if (accepted > 0) {
+                next_sse_emit = now;
+            }
+            if (sse_client_fd >= 0 && timespec_cmp(&now, &next_sse_emit) >= 0) {
+                if (sse_send_frame(sse_client_fd, ch_out, raw_out) < 0) {
+                    fprintf(stderr, "SSE client disconnected\n");
+                    close(sse_client_fd);
+                    sse_client_fd = -1;
+                } else {
+                    next_sse_emit = timespec_add(now, 0, SSE_INTERVAL_NS);
+                    sse_packets++;
+                }
+            }
+        }
+
+        if (loops % every == 0) {
+            pack_channels(ch_out, frame + 3);
+            frame[CRSF_FRAME_LEN + 1] = crc8(frame + 2, CRSF_FRAME_LEN - 1);
+
+            if (cfg.channels) {
+                printf("CH:");
+                for (int i = 0; i < 16; i++) {
+                    printf(" %4u", ch_out[i]);
+                }
+                printf(" | RAW:");
+                for (int i = 0; i < 16; i++) {
+                    printf(" %6d", raw_out[i]);
+                }
+                putchar('\n');
+            }
+
+            if (serial_fd >= 0) {
+                if (send_all(serial_fd, frame, CRSF_FRAME_LEN + 2) < 0) {
+                    perror("serial write");
+                    g_run = 0;
+                } else {
+                    serial_packets++;
+                }
+            }
+            if (udp_fd >= 0) {
+                ssize_t sent = sendto(udp_fd, frame, CRSF_FRAME_LEN + 2, 0,
+                                       (struct sockaddr *)&udp_addr, udp_addrlen);
+                if (sent < 0) {
+                    if (errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK) {
+                        perror("udp send");
+                        g_run = 0;
+                    }
+                } else {
+                    udp_packets++;
+                }
+            }
+        }
+        loops++;
+
+        if (cfg.stats) {
+            struct timespec current;
+            clock_gettime(CLOCK_MONOTONIC, &current);
+            double dt = (current.tv_sec - next_tick.tv_sec) + (current.tv_nsec - next_tick.tv_nsec) / 1e9;
+            if (dt > 0.0) {
+                if (dt < t_min) {
+                    t_min = dt;
+                }
+                if (dt > t_max) {
+                    t_max = dt;
+                }
+                t_sum += dt;
+                t_cnt++;
+                if (t_cnt >= LOOP_HZ) {
+                    printf("loop min %.3f  max %.3f  avg %.3f ms",
+                           t_min * 1e3, t_max * 1e3,
+                           (t_sum / (double)t_cnt) * 1e3);
+                    if (serial_fd >= 0) {
+                        printf("  serial %llu/s",
+                               (unsigned long long)serial_packets);
+                    }
+                    if (udp_fd >= 0) {
+                        printf("  udp %llu/s",
+                               (unsigned long long)udp_packets);
+                    }
+                    if (cfg.sse_enabled && sse_fd >= 0) {
+                        printf("  sse %llu/s",
+                               (unsigned long long)sse_packets);
+                    }
+                    putchar('\n');
+                    t_min = 1e9;
+                    t_max = 0.0;
+                    t_sum = 0.0;
+                    t_cnt = 0;
+                    serial_packets = 0;
+                    udp_packets = 0;
+                    sse_packets = 0;
+                }
+            }
+        }
+
+        if (cfg.stats && serial_fd >= 0) {
+            char tmp[64];
+            ssize_t n;
+            while ((n = read(serial_fd, tmp, sizeof(tmp))) > 0) {
+                for (ssize_t i = 0; i < n; i++) {
+                    if (rxlen < sizeof(rxbuf) - 1) {
+                        rxbuf[rxlen++] = tmp[i];
+                    }
+                    if (tmp[i] == '\n') {
+                        rxbuf[rxlen] = '\0';
+                        fputs(rxbuf, stdout);
+                        rxlen = 0;
+                    }
+                }
+            }
+        }
+
+        next_tick = timespec_add(next_tick, 0, LOOP_NS);
+        if (!g_run) {
+            break;
+        }
+        clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next_tick, NULL);
     }
 
+done:
+    if (js) {
+        SDL_JoystickClose(js);
+    }
+    if (serial_fd >= 0) {
+        close(serial_fd);
+    }
+    if (udp_fd >= 0) {
+        close(udp_fd);
+    }
+    if (sse_client_fd >= 0) {
+        close(sse_client_fd);
+    }
+    if (sse_fd >= 0) {
+        close(sse_fd);
+    }
+    SDL_Quit();
     return exit_code;
 }
