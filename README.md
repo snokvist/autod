@@ -152,7 +152,7 @@ Static files under `html/` can be served by the daemon (when `serve_ui=1`) or by
 
 ### Helper Tools
 
-- `antenna_osd`: build with `make antenna_osd` (or the `musl`/`gnu` variants) to render an MSP/Canvas OSD overlay. It reads `/etc/antenna_osd.conf` by default and accepts an alternate path as its sole positional argument, with a sample config in [`configs/antenna_osd.conf`](configs/antenna_osd.conf).
+- `antenna_osd`: build with `make antenna_osd` (or the `musl`/`gnu` variants) to render an MSP/Canvas OSD overlay. It reads `/etc/antenna_osd.conf` by default and accepts an alternate path as its sole positional argument, with a sample config in [`configs/antenna_osd.conf`](configs/antenna_osd.conf). When both `info_file` and `info_file2` are provided, prefix telemetry keys with `file1:` or `file2:` to choose which source supplies each value.
 - `sse_tail`: build with `make tools` and run `./sse_tail http://host:port/path` to observe SSE streams announced in the config.
 - `udp_relay`: controlled through its own config file [`configs/udp_relay.conf`](configs/udp_relay.conf). When installed system-wide the default path is `/etc/udp_relay/udp_relay.conf`; you can run it directly or via UI bindings.
 - `ip2uart`: run `make ip2uart` (or any of the cross variants) to build a bidirectional bridge between a UART and a TCP or UDP peer. It uses `/etc/ip2uart.conf` by default; a sample lives in [`configs/ip2uart.conf`](configs/ip2uart.conf). Pass `-c /path/to/conf` to point at a different configuration, `-v`/`-vv`/`-vvv` for progressively verbose logging, and send `SIGHUP` to reload the config without dropping the process.
