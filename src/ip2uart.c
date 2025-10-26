@@ -192,6 +192,8 @@ typedef struct {
     size_t intervals_net_to_uart_count;
     size_t intervals_uart_to_net_pos;
     size_t intervals_net_to_uart_pos;
+    uint64_t last_log_pkts_uart_to_net;
+    uint64_t last_log_pkts_net_to_uart;
 } state_t;
 
 /* ------------------------------- Signals ------------------------------------ */
@@ -651,7 +653,7 @@ static void disconnect_tcp(state_t *st){
 }
 
 /* ------------------------------- Stats dump --------------------------------- */
-static void dump_ini(const config_t *cfg, const state_t *st){
+static void dump_ini(const config_t *cfg, state_t *st){
     FILE *f=fopen(cfg->log_file,"w"); if(!f) return;
     struct timespec rt; clock_gettime(CLOCK_REALTIME,&rt);
     long long ts_ms=(long long)rt.tv_sec*1000LL + rt.tv_nsec/1000000LL;
@@ -680,6 +682,24 @@ static void dump_ini(const config_t *cfg, const state_t *st){
 
     cadence_stats_t stats_utn; cadence_collect_stats(st, true, &stats_utn);
     cadence_stats_t stats_ntu; cadence_collect_stats(st, false, &stats_ntu);
+
+    bool stale_utn = (st->pkts_uart_to_net == st->last_log_pkts_uart_to_net);
+    bool stale_ntu = (st->pkts_net_to_uart == st->last_log_pkts_net_to_uart);
+
+    if(stale_utn){
+        stats_utn.samples = 0;
+        stats_utn.min_us = 0;
+        stats_utn.max_us = 0;
+        stats_utn.p95_us = 0;
+        stats_utn.avg_interval_us = 0.0;
+    }
+    if(stale_ntu){
+        stats_ntu.samples = 0;
+        stats_ntu.min_us = 0;
+        stats_ntu.max_us = 0;
+        stats_ntu.p95_us = 0;
+        stats_ntu.avg_interval_us = 0.0;
+    }
 
     fprintf(f,"interval_uart_to_net_samples=%zu\n", stats_utn.samples);
     fprintf(f,"interval_us_uart_to_net_min=%llu\n", (unsigned long long)stats_utn.min_us);
@@ -725,6 +745,8 @@ static void dump_ini(const config_t *cfg, const state_t *st){
         fprintf(f,"cadence_score_net_to_uart=%d\n", score_ntu);
     }
     fclose(f);
+    st->last_log_pkts_uart_to_net = st->pkts_uart_to_net;
+    st->last_log_pkts_net_to_uart = st->pkts_net_to_uart;
     vlog(3, "stats: wrote %s", cfg->log_file);
 }
 
