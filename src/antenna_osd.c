@@ -534,9 +534,9 @@ int main(int argc, char **argv){
 
         if(!any_info){
             strcpy(last_mcs,"NA"); strcpy(last_bw,"NA"); strcpy(last_tx,"NA");
-            int disp_rssi = smooth_rssi_sample(rssi_hist, get_display_rssi(-1));
-            int disp_udp  = cfg.rssi_udp_enable ? smooth_rssi_sample(udp_hist, get_display_udp(-1)) : -1;
-            write_osd(disp_rssi, disp_udp, last_mcs, last_bw, last_tx);
+            smooth_rssi_sample(rssi_hist, get_display_rssi(-1));
+            if (cfg.rssi_udp_enable) smooth_rssi_sample(udp_hist, get_display_udp(-1));
+            continue;
         } else {
             int raw_rssi = parse_int_from_spec(cfg.rssi_key,have_info);
             int raw_udp  = cfg.rssi_udp_enable ? parse_int_from_spec(cfg.rssi_udp_key,have_info) : -1;
