@@ -11,11 +11,16 @@ This document walks you through building the software, configuring it, and under
 ```
 Makefile             # Build entry points for native & cross targets
 AGENTS.md            # Contribution guidance for this repository
+LICENSE.md           # Personal-use license terms (see Licensing)
+README.md            # This guide
 configs/             # Example configuration files for the daemon and tools
+fonts/               # Sample fonts and placeholders used by the GUI/OSD helpers
 handler_contract.txt # Execution plane API contract between daemon and handler script
 html/                # Static assets for the optional web UI (dashboards, forms, embedded consoles)
+remote.md            # End-to-end joystick / CRSF deployment guide
 scripts/             # Helper scripts (HTML minifier, exec handlers, VRX/VTX wrappers backing the UI)
 src/                 # C sources for the daemon, GUI, scanner, and utilities
+tests/               # Smoke and regression tests for selected subsystems
 ```
 
 Key executables built from `src/`:
@@ -25,6 +30,8 @@ Key executables built from `src/`:
 - **`sse_tail`** – Convenience tool that follows Server-Sent Events endpoints.
 - **`udp_relay`** – UDP fan-out utility controlled through the daemon/UI.
 - **`ip2uart`** – Bidirectional bridge between a UART (real TTY or stdio) and TCP/UDP sockets.
+- **`antenna_osd`** – MSP/Canvas OSD renderer with configurable telemetry overlays.
+- **`joystick2crfs`** – SDL2 joystick bridge that emits CRSF frames and optional SSE telemetry.
 
 ---
 
@@ -32,13 +39,13 @@ Key executables built from `src/`:
 
 ### Native Linux Build
 
-Install a compiler toolchain plus optional SDL2 dependencies if you want the GUI binary:
+Install a compiler toolchain plus SDL2 headers (required for `joystick2crfs` and therefore the aggregated `make tools` target). Add SDL_ttf if you plan to build the GUI daemon:
 
 ```bash
 sudo apt-get update
-sudo apt-get install build-essential pkg-config
+sudo apt-get install build-essential pkg-config libsdl2-dev
 # GUI build only
-sudo apt-get install libsdl2-dev libsdl2-ttf-dev
+sudo apt-get install libsdl2-ttf-dev
 ```
 
 ### Cross Compilation
@@ -60,13 +67,15 @@ All commands are run from the repository root.
 | ---- | ------- | ------ |
 | Native headless daemon | `make` | `./autod` |
 | Native daemon with GUI | `make gui` | `./autod-gui` (requires SDL2/SDL_ttf) |
-| Helper tools (native)  | `make tools` | `./sse_tail`, `./udp_relay`, `./ip2uart` |
+| Helper tools (native)  | `make tools` | `./sse_tail`, `./udp_relay`, `./antenna_osd`, `./ip2uart`, `./joystick2crfs`* |
 | `joystick2crfs` utility | `make joystick2crfs` | `./joystick2crfs` (requires SDL2; config at `/etc/joystick2crfs.conf`) |
 | Musl cross build       | `make musl` | `./autod-musl` (and friends) |
 | GNU cross build        | `make gnu`  | `./autod-gnu` (and friends) |
 | Clean intermediates    | `make clean` | removes `build/` and produced binaries |
 
 Each flavour drops intermediates under `build/<flavour>/` and strips binaries automatically when the matching `strip` tool is found.
+
+\* `joystick2crfs` depends on SDL2. The `tools` target builds it alongside the other helpers; use the stand-alone `make joystick2crfs` target if you only want to compile the joystick bridge once the SDL2 development headers are present. Cross-toolchain aggregates (`make tools-musl`, `make tools-gnu`) omit the joystick helper because the build requires native SDL2 support.
 
 ### Installing on Debian/`systemd`
 
@@ -152,11 +161,13 @@ Static files under `html/` can be served by the daemon (when `serve_ui=1`) or by
 
 ### Helper Tools
 
-- `antenna_osd`: build with `make antenna_osd` (or the `musl`/`gnu` variants) to render an MSP/Canvas OSD overlay. It reads `/etc/antenna_osd.conf` by default and accepts an alternate path as its sole positional argument, with a sample config in [`configs/antenna_osd.conf`](configs/antenna_osd.conf). When both `info_file` and `info_file2` are provided, prefix telemetry keys with `file1:` or `file2:` to choose which source supplies each value.
+- `antenna_osd`: build with `make antenna_osd` (or the `musl`/`gnu` variants) to render an MSP/Canvas OSD overlay. It reads `/etc/antenna_osd.conf` by default and accepts an alternate path as its sole positional argument, with a sample config in [`configs/antenna_osd.conf`](configs/antenna_osd.conf). The helper can poll up to two telemetry files, smooth RSSI values across samples, and exposes configurable bar glyphs, headers, and system-message overlays. When both `info_file` and `info_file2` are provided, prefix telemetry keys with `file1:` or `file2:` to choose which source supplies each value.
 - `sse_tail`: build with `make tools` and run `./sse_tail http://host:port/path` to observe SSE streams announced in the config.
 - `udp_relay`: controlled through its own config file [`configs/udp_relay.conf`](configs/udp_relay.conf). When installed system-wide the default path is `/etc/udp_relay/udp_relay.conf`; you can run it directly or via UI bindings.
 - `ip2uart`: run `make ip2uart` (or any of the cross variants) to build a bidirectional bridge between a UART and a TCP or UDP peer. It uses `/etc/ip2uart.conf` by default; a sample lives in [`configs/ip2uart.conf`](configs/ip2uart.conf). Pass `-c /path/to/conf` to point at a different configuration, `-v`/`-vv`/`-vvv` for progressively verbose logging, and send `SIGHUP` to reload the config without dropping the process.
 - `joystick2crfs`: build with `make joystick2crfs` to translate an SDL2 joystick into CRSF frames. The utility requires SDL2 development headers (`libsdl2-dev` on Debian-based systems) and reads `/etc/joystick2crfs.conf` by default. A documented sample lives in [`configs/joystick2crfs.conf`](configs/joystick2crfs.conf); adjust the transport, SSE streaming options, and channel mapping there. The `arm_toggle` key (default `5`) designates the momentary control that latches channel 5 high after a 1 s hold and releases on a short tap. Send `SIGHUP` to reload the config without restarting; when `sse_enabled=true` the binary hosts a single-client SSE feed at `sse_bind` + `sse_path`, publishing the latest channel values at 10 Hz.
+
+For a complete walk-through that ties `autod`, `joystick2crfs`, and `ip2uart` together across a ground/vehicle link, read [`remote.md`](remote.md).
 
 #### `ip2uart` configuration keys
 
@@ -190,5 +201,57 @@ The daemon keeps ring buffers for both directions so short writes (for example w
 - The codebase is warning-clean with `-Wall -Wextra`; please maintain that standard.
 - For GUI work, remember to export `AUTOD_GUI_FONT=/path/to/font.ttf` before launching `./autod-gui --gui` so SDL_ttf can locate a font (the daemon prints a hint on startup).
 - If you change the HTTP surface area or scanner behavior, update the sample configs and README accordingly.
+
+---
+
+## 6. Licensing and Notice Placement
+
+The repository ships with an **Autod Personal Use License** (`LICENSE.md`) that grants individuals the right to download, run, and modify the software for their own non-commercial projects while forbidding redistribution (source, binaries, configuration bundles, or online configurators) and any commercial exploitation without the owner’s prior written approval. The license also clarifies that derivative works must remain private unless explicit permission is granted. Joakim Snökvist (joakim.snokvist@gmail.com) is the rights holder who can authorize broader usage.
+
+### Repository-level integration
+
+1. Keep the authoritative text in `LICENSE.md`. Confirm the copyright line (`2025 Joakim Snökvist`) and contact address (`joakim.snokvist@gmail.com`) remain accurate; coordinate with the owner before editing.
+2. Reference the license in this README (as done here) so new contributors understand the usage model before cloning or distributing copies.
+3. When you publish release archives or container images, include `LICENSE.md` alongside the binaries and configuration templates.
+
+All contributors, including the original author, operate under Joakim Snökvist’s ownership of the project; no additional redistribution or commercial rights exist beyond those explicitly granted in the personal-use license.
+
+#### Why not adopt MIT/Apache or another stock license?
+
+- **No OSI-approved license fits.** Popular permissive licenses such as MIT, BSD, or Apache explicitly allow redistribution and commercial reuse, so they cannot express the personal-use-only requirement.
+- **Noncommercial templates still diverge.** Licenses like the PolyForm Noncommercial family are closer in spirit, but they typically allow wider noncommercial redistribution and collaboration than this project permits. Because the Autod license also forbids sharing binaries, source, and configurators without written approval, retaining the bespoke text keeps the restrictions unambiguous.
+- **Custom terms match the owner’s intent.** The current license already aligns with Joakim Snökvist’s directive (personal experimentation only unless approval is granted). Keeping the tailored language avoids accidentally granting rights the owner does not wish to confer.
+
+### File-level headers
+
+Each source, script, and HTML asset should begin with a short notice that points back to the personal-use license. Examples:
+
+```c
+/*
+ * autod – Autod Personal Use License
+ * Copyright (c) 2025 Joakim Snökvist
+ * Licensed for personal, non-commercial use only.
+ * Redistribution or commercial use requires prior written approval from Joakim Snökvist.
+ * See LICENSE.md for full terms.
+ */
+```
+
+```sh
+# autod – Autod Personal Use License
+# Copyright (c) 2025 Joakim Snökvist
+# Personal, non-commercial use only. Redistribution or commercial use requires
+# prior written approval from Joakim Snökvist. See LICENSE.md for full terms.
+```
+
+```html
+<!--
+  autod – Autod Personal Use License
+  Copyright (c) 2025 Joakim Snökvist
+  Personal, non-commercial use only. Redistribution or commercial use requires
+  prior written approval from Joakim Snökvist. See LICENSE.md for full terms.
+-->
+```
+
+Scripts that generate other files (for example HTML minifiers) should also ensure the notice propagates into the output where practical.
 
 Happy hacking!
