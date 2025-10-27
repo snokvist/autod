@@ -12,7 +12,7 @@ Together they keep CRSF as the control language while IP networking provides tra
 ## Technology Choices and Trade-offs
 | Component | Key Technologies | Advantages | Considerations |
 |-----------|------------------|------------|----------------|
-| autod backend | C daemon embedding CivetWeb; optional SDL2 GUI overlay; INI configs under `configs/` | Minimal dependencies, suitable for SBCs, ships with HTML UI assets | Lacks built-in authentication; deployments should place it behind a trusted network |
+| autod backend | C daemon embedding CivetWeb; INI configs under `configs/` | Minimal dependencies, suitable for SBCs, ships with HTML UI assets | Lacks built-in authentication; deployments should place it behind a trusted network |
 | joystick2crfs | C + SDL2 joystick stack; configurable CRSF packer | Precise timing (250 Hz loop), flexible mapping/inversion, UDP streaming and SSE telemetry | Requires SDL2 runtime and accurate controller database; needs calibration for each device |
 | ip2uart | C bridge with epoll loop, TCP/UDP/stdio back-ends | Handles blocking UARTs via ring buffers, supports cadence health stats, reloadable config | Only one TCP client at a time in server mode; UART performance depends on adapter quality |
 | Controllers (e.g., Xbox Series pads) | USB HID over Linux input stack | Affordable, widely available, good ergonomics | Device-specific quirks demand per-axis tuning; drift necessitates deadbands |

@@ -1,6 +1,6 @@
 # autod
 
-`autod` is a lightweight HTTP control plane intended for embedded or fielded systems. It embeds the [CivetWeb](https://github.com/civetweb/civetweb) web server, exposes execution and discovery endpoints, optionally performs LAN scans to find peer nodes, and can ship with a minimal SDL2-based GUI. The project also includes small helper tools (`sse_tail`, `udp_relay`, and `ip2uart`) and a browser UI that can be served directly from the daemon.
+`autod` is a lightweight HTTP control plane intended for embedded or fielded systems. It embeds the [CivetWeb](https://github.com/civetweb/civetweb) web server, exposes execution and discovery endpoints, optionally performs LAN scans to find peer nodes, and ships with small helper tools (`sse_tail`, `udp_relay`, and `ip2uart`) plus a browser UI that can be served directly from the daemon.
 
 This document walks you through building the software, configuring it, and understanding the repository layout so that new users and developers can get started quickly.
 
@@ -14,19 +14,18 @@ AGENTS.md            # Contribution guidance for this repository
 LICENSE.md           # Personal-use license terms (see Licensing)
 README.md            # This guide
 configs/             # Example configuration files for the daemon and tools
-fonts/               # Sample fonts and placeholders used by the GUI/OSD helpers
+fonts/               # Sample fonts and placeholders used by the OSD helpers
 handler_contract.txt # Execution plane API contract between daemon and handler script
 html/                # Static assets for the optional web UI (dashboards, forms, embedded consoles)
 remote.md            # End-to-end joystick / CRSF deployment guide
 scripts/             # Helper scripts (HTML minifier, exec handlers, VRX/VTX wrappers backing the UI)
-src/                 # C sources for the daemon, GUI, scanner, and utilities
+src/                 # C sources for the daemon, scanner, and utilities
 tests/               # Smoke and regression tests for selected subsystems
 ```
 
 Key executables built from `src/`:
 
-- **`autod`** – HTTP control daemon without GUI.
-- **`autod-gui`** – Same daemon but with an SDL2 overlay displaying scan status (requires SDL2).
+- **`autod`** – HTTP control daemon.
 - **`sse_tail`** – Convenience tool that follows Server-Sent Events endpoints.
 - **`udp_relay`** – UDP fan-out utility controlled through the daemon/UI.
 - **`ip2uart`** – Bidirectional bridge between a UART (real TTY or stdio) and TCP/UDP sockets.
@@ -39,13 +38,11 @@ Key executables built from `src/`:
 
 ### Native Linux Build
 
-Install a compiler toolchain plus SDL2 headers (required for `joystick2crfs` and therefore the aggregated `make tools` target). Add SDL_ttf if you plan to build the GUI daemon:
+Install a compiler toolchain plus SDL2 headers (required for `joystick2crfs` and therefore the aggregated `make tools` target):
 
 ```bash
 sudo apt-get update
 sudo apt-get install build-essential pkg-config libsdl2-dev
-# GUI build only
-sudo apt-get install libsdl2-ttf-dev
 ```
 
 ### Cross Compilation
@@ -65,8 +62,7 @@ All commands are run from the repository root.
 
 | Goal | Command | Output |
 | ---- | ------- | ------ |
-| Native headless daemon | `make` | `./autod` |
-| Native daemon with GUI | `make gui` | `./autod-gui` (requires SDL2/SDL_ttf) |
+| Native daemon | `make` | `./autod` |
 | Helper tools (native)  | `make tools` | `./sse_tail`, `./udp_relay`, `./antenna_osd`, `./ip2uart`, `./joystick2crfs`* |
 | `joystick2crfs` utility | `make joystick2crfs` | `./joystick2crfs` (requires SDL2; config at `/etc/joystick2crfs.conf`) |
 | Musl cross build       | `make musl` | `./autod-musl` (and friends) |
@@ -120,8 +116,6 @@ The daemon looks for `./autod.conf` by default. You can provide an alternate pat
 
 ```bash
 ./autod configs/autod.conf
-# or, when SDL2 support was enabled during compilation
-./autod-gui --gui configs/autod.conf
 ```
 
 Important sections inside [`configs/autod.conf`](configs/autod.conf):
@@ -199,7 +193,6 @@ The daemon keeps ring buffers for both directions so short writes (for example w
 
 - Keep documentation in sync with any new configuration keys or API endpoints, especially [`handler_contract.txt`](handler_contract.txt).
 - The codebase is warning-clean with `-Wall -Wextra`; please maintain that standard.
-- For GUI work, remember to export `AUTOD_GUI_FONT=/path/to/font.ttf` before launching `./autod-gui --gui` so SDL_ttf can locate a font (the daemon prints a hint on startup).
 - If you change the HTTP surface area or scanner behavior, update the sample configs and README accordingly.
 
 ---

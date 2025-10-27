@@ -1,14 +1,6 @@
 /*
 autod.c — lightweight HTTP control plane (CivetWeb, NO AUTH), with optional LAN scanner
 
-With GUI
-gcc -Os -std=c11 -Wall -Wextra -DNO_SSL -DNO_CGI -DNO_FILES -DUSE_SDL2_GUI -DUSE_SDL2_TTF \
-    autod.c scan.c parson.c civetweb.c \
-    -o autod -pthread \
-    `pkg-config --libs --cflags sdl2` `pkg-config --libs --cflags SDL2_ttf`
-strip autod
-
-No GUI compile
 gcc -Os -std=c11 -Wall -Wextra -DNO_SSL -DNO_CGI -DNO_FILES \
     autod.c scan.c parson.c civetweb.c -o autod -pthread
 strip autod
@@ -48,10 +40,6 @@ strip autod
 
 #if !defined(_WIN32)
 extern char *realpath(const char *path, char *resolved_path);
-#endif
-
-#ifdef USE_SDL2_GUI
-#include "autod_gui.h"
 #endif
 
 static volatile sig_atomic_t g_stop=0;
@@ -1328,38 +1316,11 @@ static int h_nodes(struct mg_connection *c, void *ud){
     return 1;
 }
 
-#ifdef USE_SDL2_GUI
-static void gui_fill_snapshot(autod_gui_snapshot_t *s, void *user) {
-    (void)user;
-    scan_node_t nodes[SCAN_MAX_NODES];
-    int n = scan_get_nodes(nodes, SCAN_MAX_NODES);
-    s->count = (n < 64) ? n : 64;
-    for (int i=0; i<s->count; i++) {
-        strncpy(s->nodes[i].ip,      nodes[i].ip,      sizeof(s->nodes[i].ip)-1);
-        strncpy(s->nodes[i].role,    nodes[i].role,    sizeof(s->nodes[i].role)-1);
-        strncpy(s->nodes[i].device,  nodes[i].device,  sizeof(s->nodes[i].device)-1);
-        strncpy(s->nodes[i].version, nodes[i].version, sizeof(s->nodes[i].version)-1);
-    }
-    scan_status_t st; scan_get_status(&st);
-    s->scanning     = st.scanning;
-    s->targets      = st.targets;
-    s->done         = st.done;
-    s->progress_pct = st.progress_pct;
-}
-#endif /* USE_SDL2_GUI */
-
 /* ----------------------- main ----------------------- */
 
 int main(int argc, char **argv){
- #ifdef USE_SDL2_GUI
-    int want_gui = 0;
- #endif
-
     const char *cfgpath = "./autod.conf";
     for (int i=1; i<argc; i++) {
-    #ifdef USE_SDL2_GUI
-        if (!strcmp(argv[i], "--gui")) { want_gui = 1; continue; }
-    #endif
         if (argv[i][0] != '-') { cfgpath = argv[i]; }
     }
 
@@ -1430,16 +1391,6 @@ int main(int argc, char **argv){
     scan_config_t scfg; fill_scan_config(&app.cfg, &scfg);
     scan_seed_self_nodes(&scfg);
     if (app.cfg.enable_scan) (void)scan_start_async(&scfg);
-
-#ifdef USE_SDL2_GUI
-    if (want_gui) {
-        autod_gui_config_t gcfg = {0};
-        gcfg.port = app.cfg.port;
-        if (app.cfg.role[0])   strncpy(gcfg.role,   app.cfg.role,   sizeof(gcfg.role)-1);
-        if (app.cfg.device[0]) strncpy(gcfg.device, app.cfg.device, sizeof(gcfg.device)-1);
-        (void)autod_gui_start(&gcfg, gui_fill_snapshot, NULL);
-    }
-#endif
 
     while(!g_stop) sleep(1);
     mg_stop(app.ctx);
