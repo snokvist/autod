@@ -46,6 +46,19 @@
 #define CRSF_RANGE         (CRSF_MAX - CRSF_MIN)
 #define CRSF_MID           ((CRSF_MIN + CRSF_MAX + 1) / 2)
 
+#define MAVLINK_STX                     0xFE
+#define MAVLINK_MSG_RC_OVERRIDE         70
+#define MAVLINK_PAYLOAD_LEN             18
+#define MAVLINK_FRAME_LEN               (6 + MAVLINK_PAYLOAD_LEN + 2)
+#define MAVLINK_RC_CRC_EXTRA            124
+#define MAVLINK_MIN_US                  1000
+#define MAVLINK_MAX_US                  2000
+#define MAVLINK_RANGE_US                (MAVLINK_MAX_US - MAVLINK_MIN_US)
+#define FRAME_BUFFER_MAX                ((CRSF_FRAME_LEN + 2) > MAVLINK_FRAME_LEN ? (CRSF_FRAME_LEN + 2) : MAVLINK_FRAME_LEN)
+
+#define PROTOCOL_CRSF       0
+#define PROTOCOL_MAVLINK    1
+
 #define DEFAULT_CONF       "/etc/joystick2crfs.conf"
 #define MAX_LINE_LEN       512
 
@@ -55,6 +68,7 @@ typedef struct {
     int stats;                  /* print timing stats */
     int simulation;             /* skip serial output */
     int channels;               /* print channels */
+    int protocol;               /* PROTOCOL_* selector */
     int serial_enabled;
     char serial_device[128];
     int serial_baud;
@@ -63,6 +77,10 @@ typedef struct {
     int sse_enabled;
     char sse_bind[256];
     char sse_path[64];
+    int mavlink_sysid;
+    int mavlink_compid;
+    int mavlink_target_sysid;
+    int mavlink_target_compid;
     int map[16];
     int invert[16];
     int dead[16];
@@ -94,6 +112,47 @@ static uint8_t crc8(const uint8_t *d, size_t n)
     return c;
 }
 
+static uint16_t crc_x25_byte(uint16_t crc, uint8_t byte)
+{
+    crc ^= byte;
+    for (int i = 0; i < 8; i++) {
+        if (crc & 1U) {
+            crc = (uint16_t)((crc >> 1) ^ 0x8408U);
+        } else {
+            crc >>= 1;
+        }
+    }
+    return crc;
+}
+
+static uint16_t crc_x25(const uint8_t *d, size_t n)
+{
+    uint16_t crc = 0xFFFFU;
+    while (n--) {
+        crc = crc_x25_byte(crc, *d++);
+    }
+    return crc;
+}
+
+static uint16_t crsf_to_mavlink(uint16_t v)
+{
+    if (v <= CRSF_MIN) {
+        return MAVLINK_MIN_US;
+    }
+    if (v >= CRSF_MAX) {
+        return MAVLINK_MAX_US;
+    }
+    int32_t scaled = (int32_t)(v - CRSF_MIN) * MAVLINK_RANGE_US;
+    scaled = (scaled + (CRSF_RANGE / 2)) / CRSF_RANGE;
+    int32_t out = MAVLINK_MIN_US + scaled;
+    if (out < MAVLINK_MIN_US) {
+        out = MAVLINK_MIN_US;
+    } else if (out > MAVLINK_MAX_US) {
+        out = MAVLINK_MAX_US;
+    }
+    return (uint16_t)out;
+}
+
 static void pack_channels(const uint16_t ch[16], uint8_t out[CRSF_PAYLOAD_LEN])
 {
     memset(out, 0, CRSF_PAYLOAD_LEN);
@@ -112,6 +171,38 @@ static void pack_channels(const uint16_t ch[16], uint8_t out[CRSF_PAYLOAD_LEN])
         }
         bit += 11U;
     }
+}
+
+static size_t pack_mavlink_rc_override(const config_t *cfg, const uint16_t ch[16], uint8_t *seq, uint8_t out[MAVLINK_FRAME_LEN])
+{
+    uint8_t packet_seq = *seq;
+    *seq = (uint8_t)(packet_seq + 1U);
+
+    out[0] = MAVLINK_STX;
+    out[1] = MAVLINK_PAYLOAD_LEN;
+    out[2] = packet_seq;
+    out[3] = (uint8_t)cfg->mavlink_sysid;
+    out[4] = (uint8_t)cfg->mavlink_compid;
+    out[5] = MAVLINK_MSG_RC_OVERRIDE;
+
+    size_t off = 6;
+    out[off++] = (uint8_t)cfg->mavlink_target_sysid;
+    out[off++] = (uint8_t)cfg->mavlink_target_compid;
+
+    for (int i = 0; i < 8; i++) {
+        uint16_t mv = crsf_to_mavlink(ch[i]);
+        out[off++] = (uint8_t)(mv & 0xFFU);
+        out[off++] = (uint8_t)(mv >> 8); /* little endian */
+    }
+
+    uint16_t crc = crc_x25(out + 6, MAVLINK_PAYLOAD_LEN);
+    crc = crc_x25_byte(crc, MAVLINK_MSG_RC_OVERRIDE);
+    crc = crc_x25_byte(crc, MAVLINK_RC_CRC_EXTRA);
+
+    out[off++] = (uint8_t)(crc & 0xFFU);
+    out[off++] = (uint8_t)(crc >> 8);
+
+    return off;
 }
 
 static speed_t baud_const(int baud)
@@ -724,6 +815,7 @@ static void config_defaults(config_t *cfg)
     cfg->stats = 0;
     cfg->simulation = 0;
     cfg->channels = 0;
+    cfg->protocol = PROTOCOL_CRSF;
     cfg->serial_enabled = 0;
     snprintf(cfg->serial_device, sizeof(cfg->serial_device), "%s", "/dev/ttyUSB0");
     cfg->serial_baud = 115200;
@@ -732,6 +824,10 @@ static void config_defaults(config_t *cfg)
     cfg->sse_enabled = 0;
     snprintf(cfg->sse_bind, sizeof(cfg->sse_bind), "%s", "127.0.0.1:8070");
     snprintf(cfg->sse_path, sizeof(cfg->sse_path), "%s", "/sse");
+    cfg->mavlink_sysid = 255;
+    cfg->mavlink_compid = 190;
+    cfg->mavlink_target_sysid = 1;
+    cfg->mavlink_target_compid = 1;
     cfg->arm_toggle = 4;
     cfg->joystick_index = 0;
     cfg->rescan_interval = 5;
@@ -790,6 +886,14 @@ static int config_load(config_t *cfg, const char *path)
             if (parse_bool_value(val, &b) == 0) {
                 cfg->channels = b;
             }
+        } else if (!strcasecmp(key, "protocol")) {
+            if (!strcasecmp(val, "crsf")) {
+                cfg->protocol = PROTOCOL_CRSF;
+            } else if (!strcasecmp(val, "mavlink")) {
+                cfg->protocol = PROTOCOL_MAVLINK;
+            } else {
+                fprintf(stderr, "%s:%d: protocol must be 'crsf' or 'mavlink'\n", path, lineno);
+            }
         } else if (!strcasecmp(key, "serial_enabled")) {
             int b;
             if (parse_bool_value(val, &b) == 0) {
@@ -824,6 +928,14 @@ static int config_load(config_t *cfg, const char *path)
             } else {
                 fprintf(stderr, "%s:%d: arm_toggle must be 1-16 (or 0 to disable)\n", path, lineno);
             }
+        } else if (!strcasecmp(key, "mavlink_sysid")) {
+            cfg->mavlink_sysid = atoi(val);
+        } else if (!strcasecmp(key, "mavlink_compid")) {
+            cfg->mavlink_compid = atoi(val);
+        } else if (!strcasecmp(key, "mavlink_target_sysid")) {
+            cfg->mavlink_target_sysid = atoi(val);
+        } else if (!strcasecmp(key, "mavlink_target_compid")) {
+            cfg->mavlink_target_compid = atoi(val);
         } else if (!strcasecmp(key, "map")) {
             parse_map_list(val, cfg->map);
         } else if (!strcasecmp(key, "invert")) {
@@ -845,6 +957,43 @@ static int config_load(config_t *cfg, const char *path)
     }
     if (cfg->joystick_index < 0) {
         cfg->joystick_index = 0;
+    }
+    if (cfg->protocol != PROTOCOL_CRSF && cfg->protocol != PROTOCOL_MAVLINK) {
+        fprintf(stderr, "%s: unknown protocol, defaulting to CRSF\n", path);
+        cfg->protocol = PROTOCOL_CRSF;
+    }
+
+    if (cfg->mavlink_sysid < 0 || cfg->mavlink_sysid > 255) {
+        fprintf(stderr, "%s: mavlink_sysid must be 0-255; clamping\n", path);
+        if (cfg->mavlink_sysid < 0) {
+            cfg->mavlink_sysid = 0;
+        } else {
+            cfg->mavlink_sysid = 255;
+        }
+    }
+    if (cfg->mavlink_compid < 0 || cfg->mavlink_compid > 255) {
+        fprintf(stderr, "%s: mavlink_compid must be 0-255; clamping\n", path);
+        if (cfg->mavlink_compid < 0) {
+            cfg->mavlink_compid = 0;
+        } else {
+            cfg->mavlink_compid = 255;
+        }
+    }
+    if (cfg->mavlink_target_sysid < 0 || cfg->mavlink_target_sysid > 255) {
+        fprintf(stderr, "%s: mavlink_target_sysid must be 0-255; clamping\n", path);
+        if (cfg->mavlink_target_sysid < 0) {
+            cfg->mavlink_target_sysid = 0;
+        } else {
+            cfg->mavlink_target_sysid = 255;
+        }
+    }
+    if (cfg->mavlink_target_compid < 0 || cfg->mavlink_target_compid > 255) {
+        fprintf(stderr, "%s: mavlink_target_compid must be 0-255; clamping\n", path);
+        if (cfg->mavlink_target_compid < 0) {
+            cfg->mavlink_target_compid = 0;
+        } else {
+            cfg->mavlink_target_compid = 255;
+        }
     }
     return 0;
 }
@@ -1037,10 +1186,15 @@ int main(int argc, char **argv)
         char rxbuf[256];
         size_t rxlen = 0;
 
-        uint8_t frame[CRSF_FRAME_LEN + 2];
-        frame[0] = CRSF_DEST;
-        frame[1] = CRSF_FRAME_LEN;
-        frame[2] = CRSF_TYPE_CHANNELS;
+        uint8_t frame[FRAME_BUFFER_MAX];
+        size_t frame_len = 0;
+        uint8_t mavlink_seq = 0;
+
+        if (cfg.protocol == PROTOCOL_CRSF) {
+            frame[0] = CRSF_DEST;
+            frame[1] = CRSF_FRAME_LEN;
+            frame[2] = CRSF_TYPE_CHANNELS;
+        }
 
         int arm_channel = (cfg.arm_toggle >= 0 && cfg.arm_toggle < 16) ? cfg.arm_toggle : -1;
         int arm_sticky = 0;
@@ -1175,8 +1329,13 @@ int main(int argc, char **argv)
             }
 
             if (loops % every == 0) {
-                pack_channels(ch_out, frame + 3);
-                frame[CRSF_FRAME_LEN + 1] = crc8(frame + 2, CRSF_FRAME_LEN - 1);
+                if (cfg.protocol == PROTOCOL_CRSF) {
+                    pack_channels(ch_out, frame + 3);
+                    frame[CRSF_FRAME_LEN + 1] = crc8(frame + 2, CRSF_FRAME_LEN - 1);
+                    frame_len = CRSF_FRAME_LEN + 2;
+                } else {
+                    frame_len = pack_mavlink_rc_override(&cfg, ch_out, &mavlink_seq, frame);
+                }
 
                 if (cfg.channels) {
                     printf("CH:");
@@ -1190,16 +1349,16 @@ int main(int argc, char **argv)
                     putchar('\n');
                 }
 
-                if (serial_fd >= 0) {
-                    if (send_all(serial_fd, frame, CRSF_FRAME_LEN + 2) < 0) {
+                if (frame_len > 0 && serial_fd >= 0) {
+                    if (send_all(serial_fd, frame, frame_len) < 0) {
                         perror("serial write");
                         g_run = 0;
                     } else {
                         serial_packets++;
                     }
                 }
-                if (udp_fd >= 0) {
-                    ssize_t sent = sendto(udp_fd, frame, CRSF_FRAME_LEN + 2, 0,
+                if (frame_len > 0 && udp_fd >= 0) {
+                    ssize_t sent = sendto(udp_fd, frame, frame_len, 0,
                                            (struct sockaddr *)&udp_addr, udp_addrlen);
                     if (sent < 0) {
                         if (errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK) {
