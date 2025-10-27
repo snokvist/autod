@@ -2,7 +2,7 @@
 
 Run `tests/protocol_selftest.py` to print reference CRSF and MAVLink frames built
 from a deterministic channel set. The script mirrors the helper algorithms used
-by `joystick2crfs` (CRSF packing, CRSF→µs scaling, and MAVLink X25 checksums)
+by `joystick2crfs` (CRSF packing, CRSF→µs scaling, and MAVLink v2 X25 checksums)
 and emits both hex dumps:
 
 ```bash
@@ -25,7 +25,7 @@ python3 tests/protocol_selftest.py
    stack.
 2. Use `tcpdump` or `socat - UDP-RECV:<port>,fork` to capture the UDP stream, or
    connect the UART to a logic analyser.
-3. Confirm that each datagram begins with `FE 12` (MAVLink v1 header) and that
+3. Confirm that each datagram begins with `FD 12 00 00` (MAVLink v2 header with zero flags) and that
    the payload matches the `MAVLink RC_CHANNELS_OVERRIDE` frame dump printed by
    the script. The first eight channels should scale to the 1000–2000 µs range.
 

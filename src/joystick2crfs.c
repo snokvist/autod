@@ -46,10 +46,11 @@
 #define CRSF_RANGE         (CRSF_MAX - CRSF_MIN)
 #define CRSF_MID           ((CRSF_MIN + CRSF_MAX + 1) / 2)
 
-#define MAVLINK_STX                     0xFE
+#define MAVLINK_STX                     0xFD
 #define MAVLINK_MSG_RC_OVERRIDE         70
 #define MAVLINK_PAYLOAD_LEN             18
-#define MAVLINK_FRAME_LEN               (6 + MAVLINK_PAYLOAD_LEN + 2)
+#define MAVLINK_HDR_LEN                 10
+#define MAVLINK_FRAME_LEN               (MAVLINK_HDR_LEN + MAVLINK_PAYLOAD_LEN + 2)
 #define MAVLINK_RC_CRC_EXTRA            124
 #define MAVLINK_MIN_US                  1000
 #define MAVLINK_MAX_US                  2000
@@ -180,12 +181,16 @@ static size_t pack_mavlink_rc_override(const config_t *cfg, const uint16_t ch[16
 
     out[0] = MAVLINK_STX;
     out[1] = MAVLINK_PAYLOAD_LEN;
-    out[2] = packet_seq;
-    out[3] = (uint8_t)cfg->mavlink_sysid;
-    out[4] = (uint8_t)cfg->mavlink_compid;
-    out[5] = MAVLINK_MSG_RC_OVERRIDE;
+    out[2] = 0U; /* incompat flags */
+    out[3] = 0U; /* compat flags */
+    out[4] = packet_seq;
+    out[5] = (uint8_t)cfg->mavlink_sysid;
+    out[6] = (uint8_t)cfg->mavlink_compid;
+    out[7] = (uint8_t)(MAVLINK_MSG_RC_OVERRIDE & 0xFFU);
+    out[8] = (uint8_t)((MAVLINK_MSG_RC_OVERRIDE >> 8) & 0xFFU);
+    out[9] = (uint8_t)((MAVLINK_MSG_RC_OVERRIDE >> 16) & 0xFFU);
 
-    size_t off = 6;
+    size_t off = MAVLINK_HDR_LEN;
     out[off++] = (uint8_t)cfg->mavlink_target_sysid;
     out[off++] = (uint8_t)cfg->mavlink_target_compid;
 
@@ -195,8 +200,10 @@ static size_t pack_mavlink_rc_override(const config_t *cfg, const uint16_t ch[16
         out[off++] = (uint8_t)(mv >> 8); /* little endian */
     }
 
-    uint16_t crc = crc_x25(out + 6, MAVLINK_PAYLOAD_LEN);
-    crc = crc_x25_byte(crc, MAVLINK_MSG_RC_OVERRIDE);
+    uint16_t crc = crc_x25(out + MAVLINK_HDR_LEN, MAVLINK_PAYLOAD_LEN);
+    crc = crc_x25_byte(crc, (uint8_t)(MAVLINK_MSG_RC_OVERRIDE & 0xFFU));
+    crc = crc_x25_byte(crc, (uint8_t)((MAVLINK_MSG_RC_OVERRIDE >> 8) & 0xFFU));
+    crc = crc_x25_byte(crc, (uint8_t)((MAVLINK_MSG_RC_OVERRIDE >> 16) & 0xFFU));
     crc = crc_x25_byte(crc, MAVLINK_RC_CRC_EXTRA);
 
     out[off++] = (uint8_t)(crc & 0xFFU);

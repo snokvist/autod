@@ -7,13 +7,15 @@ CRSF_MIN = 172
 CRSF_MAX = 1811
 CRSF_RANGE = CRSF_MAX - CRSF_MIN
 
-MAVLINK_STX = 0xFE
+MAVLINK_STX = 0xFD
 MAVLINK_MSG_RC_OVERRIDE = 70
 MAVLINK_PAYLOAD_LEN = 18
 MAVLINK_RC_CRC_EXTRA = 124
 MAVLINK_MIN_US = 1000
 MAVLINK_MAX_US = 2000
 MAVLINK_RANGE_US = MAVLINK_MAX_US - MAVLINK_MIN_US
+MAVLINK_HDR_LEN = 10
+MAVLINK_FRAME_LEN = MAVLINK_HDR_LEN + MAVLINK_PAYLOAD_LEN + 2
 
 
 def crc8(data: bytes) -> int:
@@ -75,29 +77,39 @@ def crsf_to_mavlink(value: int) -> int:
 
 
 def pack_mavlink(channels, seq=0, sysid=255, compid=190, target_sysid=1, target_compid=1):
-    frame = bytearray(26)
+    frame = bytearray(MAVLINK_FRAME_LEN)
     frame[0] = MAVLINK_STX
     frame[1] = MAVLINK_PAYLOAD_LEN
-    frame[2] = seq & 0xFF
-    frame[3] = sysid & 0xFF
-    frame[4] = compid & 0xFF
-    frame[5] = MAVLINK_MSG_RC_OVERRIDE
-    frame[6] = target_sysid & 0xFF
-    frame[7] = target_compid & 0xFF
+    frame[2] = 0  # incompat flags
+    frame[3] = 0  # compat flags
+    frame[4] = seq & 0xFF
+    frame[5] = sysid & 0xFF
+    frame[6] = compid & 0xFF
+    frame[7] = MAVLINK_MSG_RC_OVERRIDE & 0xFF
+    frame[8] = (MAVLINK_MSG_RC_OVERRIDE >> 8) & 0xFF
+    frame[9] = (MAVLINK_MSG_RC_OVERRIDE >> 16) & 0xFF
 
-    offset = 8
+    offset = MAVLINK_HDR_LEN
+    frame[offset] = target_sysid & 0xFF
+    frame[offset + 1] = target_compid & 0xFF
+    offset += 2
+
     for value in channels[:8]:
         mv = crsf_to_mavlink(value)
         frame[offset] = mv & 0xFF
         frame[offset + 1] = (mv >> 8) & 0xFF
         offset += 2
 
-    crc_payload = bytes(frame[6:6 + MAVLINK_PAYLOAD_LEN])
+    crc_payload = bytes(frame[MAVLINK_HDR_LEN:MAVLINK_HDR_LEN + MAVLINK_PAYLOAD_LEN])
     crc = crc_x25(crc_payload)
-    crc = crc_x25(bytes([MAVLINK_MSG_RC_OVERRIDE]), crc)
+    crc = crc_x25(bytes([
+        MAVLINK_MSG_RC_OVERRIDE & 0xFF,
+        (MAVLINK_MSG_RC_OVERRIDE >> 8) & 0xFF,
+        (MAVLINK_MSG_RC_OVERRIDE >> 16) & 0xFF,
+    ]), crc)
     crc = crc_x25(bytes([MAVLINK_RC_CRC_EXTRA]), crc)
-    frame[24] = crc & 0xFF
-    frame[25] = (crc >> 8) & 0xFF
+    frame[offset] = crc & 0xFF
+    frame[offset + 1] = (crc >> 8) & 0xFF
     return bytes(frame)
 
 
