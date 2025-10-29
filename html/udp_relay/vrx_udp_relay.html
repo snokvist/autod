@@ -71,8 +71,10 @@
     display:flex;align-items:center;justify-content:center;color:var(--mut);font-size:12px
   }
   .drop.drag-over{outline:3px solid rgba(255,255,255,.18)}
+  .drop.disabled{opacity:.4;pointer-events:none}
   .bindlist{display:flex;flex-wrap:wrap;gap:8px}
   .bindpill{background:rgba(0,0,0,.18);border:1px solid rgba(255,255,255,.18);padding:6px 10px;border-radius:999px;display:flex;align-items:center;gap:8px}
+  .bindpill.readonly{cursor:default}
   .bindpill .rm{border:none;background:transparent;color:#ffd0d0;font-weight:700;cursor:pointer;padding:0 6px;border-radius:6px}
   .bindpill .rm:hover{background:#2a0f0f}
 
@@ -117,7 +119,7 @@
   <section class="card">
     <h2>Targets (Destinations & Groups)</h2>
     <div class="body">
-      <div class="mut">Drop a bind on a card. Green = 1→1 (exclusive), Blue = many→1 (append), Yellow = 1→many (group replace).</div>
+      <div class="mut">Drop a bind on a card. Green = 1→1 (exclusive), Blue = many→1 (append), Yellow = 1→many (group replace). Use <span class="mono">uart</span>, <span class="mono">uart1</span>, … to target the serial bridges.</div>
       <div id="gridG" class="grid" style="margin-top:6px"></div>
       <div id="gridB" class="grid"></div>
       <div id="gridY" class="grid"></div>
@@ -145,6 +147,24 @@
   const $$ = s => Array.from(document.querySelectorAll(s));
   const sleep = ms => new Promise(r => setTimeout(r, ms));
 
+  const MAX_UARTS = 4;
+  const isUartToken = (s)=> /^uart\d*$/i.test(String(s||''));
+  const canonicalUartToken = (s)=>{
+    if (!isUartToken(s)) return null;
+    const raw = String(s||'').trim().toLowerCase();
+    const suffix = raw.slice(4);
+    if (!suffix || suffix === '0') return 'uart';
+    const idx = parseInt(suffix, 10);
+    if (!Number.isFinite(idx) || idx < 0 || idx >= MAX_UARTS) return null;
+    return `uart${idx}`;
+  };
+  const friendlyUartLabel = (token)=>{
+    const canon = canonicalUartToken(token);
+    if (!canon) return token;
+    const idx = canon === 'uart' ? 0 : parseInt(canon.slice(4), 10) || 0;
+    return idx === 0 ? 'UART sink #1' : `UART sink #${idx+1}`;
+  };
+
   const log = (m,c='')=>{
     const el = $('#log');
     const d = document.createElement('div');
@@ -162,17 +182,21 @@
 
   /* ---------------- State ---------------- */
   const state = {
-    status:null,    // { relays: [...] }
+    status:null,    // { relays: [...], uarts:[...] }
     cfgText:'',
     greens:[],      // ["ip:port", ...]
     blues:[],       // ["ip:port", ...]
     groups:[],      // [{name, members:[...]}]
+    uarts:[],
     selected:null   // selected bind port (number)
   };
 
   /* ---------------- Helpers ---------------- */
   const normDest = (s)=>{
     s = String(s||'').trim();
+    if (!s) return null;
+    const uartTok = canonicalUartToken(s);
+    if (uartTok) return uartTok;
     const m = s.match(/^([^:\s]+):(\d{1,5})$/);
     return m ? `${m[1]}:${m[2]}` : null;
   };
@@ -199,13 +223,27 @@
   }
 
   const relays = ()=> (state.status && Array.isArray(state.status.relays)) ? state.status.relays : [];
-  const listTokens = r => (r.dests||[]).map(d=>`${d.ip}:${d.port}`);
+  const destToken = d => {
+    if(!d) return null;
+    if(d.type === 'uart'){
+      const tok = canonicalUartToken(d.token || 'uart');
+      return tok || 'uart';
+    }
+    if(typeof d.ip === 'string' && typeof d.port !== 'undefined') return `${d.ip}:${d.port}`;
+    return null;
+  };
+  const listTokens = r => (r.dests||[]).map(destToken).filter(Boolean);
+  const labelDest = token => {
+    const canon = canonicalUartToken(token);
+    return canon ? friendlyUartLabel(canon) : token;
+  };
 
   function buildDestIndex(){
     const idx = new Map();
     for(const r of relays()){
       for(const d of (r.dests||[])){
-        const token = `${d.ip}:${d.port}`;
+        const token = destToken(d);
+        if(!token) continue;
         if(!idx.has(token)) idx.set(token, []);
         idx.get(token).push({port:r.port, pkts:d.pkts||0, in:r.pkts_in||0});
       }
@@ -221,7 +259,10 @@
         const gm = [...g.members].sort();
         if(tokens.length === gm.length && tokens.every((t,i)=>t===gm[i])){
           let outSum = 0;
-          for(const d of (r.dests||[])){ if(g.members.includes(`${d.ip}:${d.port}`)) outSum += (d.pkts||0); }
+          for(const d of (r.dests||[])){
+            const tok = destToken(d);
+            if(tok && g.members.includes(tok)) outSum += (d.pkts||0);
+          }
           gidx.get(g.name).push({port:r.port, in:r.pkts_in||0, out:outSum});
           break;
         }
@@ -258,24 +299,26 @@
 
   async function dropGreen(srcPort, dest, cardEl){
     try{
+      const label = labelDest(dest);
       await clearDestinationEverywhere(dest);
       await action('set', {port:srcPort, dests:[dest]});
-      log(`bind ${srcPort} → ${dest} (exclusive)`,'ok');
+      log(`bind ${srcPort} → ${label} (exclusive)`,'ok');
       flash(cardEl, true);
       await refresh();
     }catch(e){ flash(cardEl,false); log(e,'err'); }
   }
   async function dropBlue(srcPort, dest, cardEl){
     try{
+      const label = labelDest(dest);
       const r = relays().find(x=>x.port===srcPort);
       if(!r) return;
       if(!listTokens(r).includes(dest)){
         await action('append',{port:srcPort, dests:[dest]});
-        log(`bind ${srcPort} +→ ${dest}`,'ok');
+        log(`bind ${srcPort} +→ ${label}`,'ok');
         flash(cardEl, true);
         await refresh();
       } else {
-        log(`bind ${srcPort} already has ${dest}`,'warn');
+        log(`bind ${srcPort} already has ${label}`,'warn');
         flash(cardEl, true);
       }
     }catch(e){ flash(cardEl,false); log(e,'err'); }
@@ -283,7 +326,8 @@
   async function dropYellow(srcPort, groupMembers, cardEl){
     try{
       await action('set', {port:srcPort, dests:[...groupMembers]});
-      log(`bind ${srcPort} → [${groupMembers.join(', ')}] (group)`, 'ok');
+      const labelMembers = groupMembers.map(labelDest).join(', ');
+      log(`bind ${srcPort} → [${labelMembers}] (group)`, 'ok');
       flash(cardEl, true);
       await refresh();
     }catch(e){ flash(cardEl,false); log(e,'err'); }
@@ -374,30 +418,127 @@
     const dIdx = buildDestIndex();
     const gIdx = buildGroupIndex(state.groups);
 
+    const uartMap = new Map();
+    for (const raw of Array.isArray(state.uarts) ? state.uarts : []){
+      if (!raw || typeof raw !== 'object') continue;
+      const canon = canonicalUartToken(raw.token || '');
+      if (!canon) continue;
+      const entry = {...raw, token: canon};
+      if (!Array.isArray(entry.dests)) entry.dests = [];
+      uartMap.set(canon, entry);
+    }
+    const getUart = token => uartMap.get(token) || {enabled:false,dests:[],device:'',baud:null,pkts_in:0,pkts_out:0,bytes_in:0,bytes_out:0,drops:0,send_errs:0};
+
+    const decorateUartCard = (card, dropEl, bindList, arr, token)=>{
+      const uart = getUart(token);
+      const label = friendlyUartLabel(token);
+      card.classList.add('uart-card');
+      const headMono = card.querySelector('.head .mono');
+      if (headMono) headMono.textContent = label;
+      const badge = card.querySelector('.badge');
+      if (badge && !badge.textContent.includes('UART')) badge.textContent = `${badge.textContent} · UART`;
+
+      const status = document.createElement('div');
+      status.className = 'mut';
+      if (uart.enabled){
+        const parts = [];
+        if (uart.device) parts.push(uart.device);
+        if (uart.baud) parts.push(`@${uart.baud}`);
+        parts.push(`pkts in:${uart.pkts_in||0}`);
+        parts.push(`out:${uart.pkts_out||0}`);
+        parts.push(`drops:${uart.drops||0}`);
+        if (typeof uart.send_errs !== 'undefined') parts.push(`errs:${uart.send_errs}`);
+        status.textContent = parts.join(' • ');
+      } else {
+        status.textContent = `${label} disabled (set uart_device in config)`;
+      }
+      const mappedLabel = card.querySelector('.mut');
+      if (mappedLabel) card.insertBefore(status, mappedLabel);
+      else card.appendChild(status);
+
+      const clearBtn = card.querySelector('[data-clear]');
+      if (clearBtn){
+        clearBtn.textContent = `Clear ${label}`;
+        clearBtn.title = `Remove all binds mapped to ${label}`;
+        clearBtn.disabled = (arr.length === 0);
+      }
+
+      const fanLabel = document.createElement('div');
+      fanLabel.className = 'mut';
+      fanLabel.textContent = `${label} → UDP fan-out:`;
+      const destWrap = document.createElement('div');
+      destWrap.className = 'bindlist';
+      const dests = Array.isArray(uart.dests) ? uart.dests : [];
+      if (dests.length === 0){
+        const m = document.createElement('div'); m.className='empty'; m.textContent='(none)'; destWrap.appendChild(m);
+      } else {
+        for (const dest of dests){
+          const pill = document.createElement('span');
+          pill.className = 'bindpill small mono readonly';
+          const pk = (typeof dest.pkts !== 'undefined') ? ` · pkts:${dest.pkts}` : '';
+          const ip = (typeof dest.ip === 'string' && dest.ip.length) ? dest.ip : '?';
+          const port = (typeof dest.port === 'number') ? dest.port : (dest.port ?? '?');
+          pill.textContent = `${ip}:${port}${pk}`;
+          destWrap.appendChild(pill);
+        }
+      }
+      if (bindList){
+        bindList.insertAdjacentElement('afterend', fanLabel);
+        fanLabel.insertAdjacentElement('afterend', destWrap);
+      } else {
+        card.appendChild(fanLabel);
+        card.appendChild(destWrap);
+      }
+
+      if (dropEl && !uart.enabled){
+        dropEl.textContent = `${label} unavailable`;
+        dropEl.classList.add('disabled');
+        dropEl.setAttribute('aria-disabled','true');
+        dropEl.setAttribute('tabindex','-1');
+      }
+    };
+
     // Greens (exclusive)
     for(const d of state.greens){
+      const canon = canonicalUartToken(d);
+      const isUart = !!canon;
+      const useToken = canon || d;
+      const displayLabel = labelDest(d);
+      const dropMsg = isUart ? `Drop a bind here (exclusive → ${displayLabel})` : 'Drop a bind here (exclusive 1→1)';
       const card = document.createElement('div');
       card.className = 'tcard g';
       card.innerHTML = `
         <div class="head">
-          <div class="row"><span class="badge">GREEN</span><span class="mono">${d}</span></div>
+          <div class="row"><span class="badge">GREEN</span><span class="mono">${displayLabel}</span></div>
           <div class="row"><button class="small" data-clear>Clear this dest</button></div>
         </div>
-        <div class="drop" aria-label="Drop bind here">Drop a bind here (exclusive 1→1)</div>
+        <div class="drop" aria-label="Drop bind here">${dropMsg}</div>
         <div class="mut">Mapped binds:</div>
         <div class="bindlist"></div>
       `;
       const drop = card.querySelector('.drop');
-      wireDropZone(drop, (src)=>dropGreen(src, d, card));
+      if (isUart){
+        const info = getUart(useToken);
+        if (info.enabled){
+          wireDropZone(drop, (src)=>dropGreen(src, useToken, card));
+        } else {
+          drop.textContent = `${displayLabel} unavailable`;
+          drop.classList.add('disabled');
+          drop.setAttribute('aria-disabled','true');
+          drop.setAttribute('tabindex','-1');
+        }
+      } else {
+        wireDropZone(drop, (src)=>dropGreen(src, d, card));
+      }
 
       const list = card.querySelector('.bindlist');
-      const arr = dIdx.get(d)||[];
+      const arr = dIdx.get(useToken) || dIdx.get(d) || [];
       if(arr.length===0){
         const m = document.createElement('div'); m.className='empty'; m.textContent='(none)'; list.appendChild(m);
       }else{
         for(const it of arr){
           const pill = mkBindPill(it.port, {pkts:it.pkts, in:it.in}, async ()=>{
-            try{ await removeDestFromPort(it.port, d); log(`Removed bind ${it.port} → ${d}`,'ok'); await refresh(); }
+            try{ await removeDestFromPort(it.port, useToken); log(`Removed bind ${it.port} → ${displayLabel}`,'ok'); await refresh(); }
             catch(e){ log(e,'err'); }
           });
           list.appendChild(pill);
@@ -405,37 +546,55 @@
       }
 
       card.querySelector('[data-clear]')?.addEventListener('click', async ()=>{
-        try{ await clearDestinationEverywhere(d); log(`Cleared all binds from ${d}`,'ok'); await refresh(); }
+        try{ await clearDestinationEverywhere(useToken); log(`Cleared all binds from ${displayLabel}`,'ok'); await refresh(); }
         catch(e){ log(e,'err'); }
       });
 
+      if (isUart) decorateUartCard(card, drop, list, arr, useToken);
       gridG.appendChild(card);
     }
 
     // Blues (many→1)
     for(const d of state.blues){
+      const canon = canonicalUartToken(d);
+      const isUart = !!canon;
+      const useToken = canon || d;
+      const displayLabel = labelDest(d);
+      const dropMsg = isUart ? `Drop a bind here (append to ${displayLabel})` : 'Drop a bind here (append many→1)';
       const card = document.createElement('div');
       card.className = 'tcard b';
       card.innerHTML = `
         <div class="head">
-          <div class="row"><span class="badge">BLUE</span><span class="mono">${d}</span></div>
+          <div class="row"><span class="badge">BLUE</span><span class="mono">${displayLabel}</span></div>
           <div class="row"><button class="small" data-clear>Clear this dest</button></div>
         </div>
-        <div class="drop" aria-label="Drop bind here">Drop a bind here (append many→1)</div>
+        <div class="drop" aria-label="Drop bind here">${dropMsg}</div>
         <div class="mut">Mapped binds:</div>
         <div class="bindlist"></div>
       `;
       const drop = card.querySelector('.drop');
-      wireDropZone(drop, (src)=>dropBlue(src, d, card));
+      if (isUart){
+        const info = getUart(useToken);
+        if (info.enabled){
+          wireDropZone(drop, (src)=>dropBlue(src, useToken, card));
+        } else {
+          drop.textContent = `${displayLabel} unavailable`;
+          drop.classList.add('disabled');
+          drop.setAttribute('aria-disabled','true');
+          drop.setAttribute('tabindex','-1');
+        }
+      } else {
+        wireDropZone(drop, (src)=>dropBlue(src, d, card));
+      }
 
       const list = card.querySelector('.bindlist');
-      const arr = dIdx.get(d)||[];
+      const arr = dIdx.get(useToken) || dIdx.get(d) || [];
       if(arr.length===0){
         const m = document.createElement('div'); m.className='empty'; m.textContent='(none)'; list.appendChild(m);
       }else{
         for(const it of arr){
           const pill = mkBindPill(it.port, {pkts:it.pkts, in:it.in}, async ()=>{
-            try{ await removeDestFromPort(it.port, d); log(`Removed bind ${it.port} → ${d}`,'ok'); await refresh(); }
+            try{ await removeDestFromPort(it.port, useToken); log(`Removed bind ${it.port} → ${displayLabel}`,'ok'); await refresh(); }
             catch(e){ log(e,'err'); }
           });
           list.appendChild(pill);
@@ -443,10 +602,11 @@
       }
 
       card.querySelector('[data-clear]')?.addEventListener('click', async ()=>{
-        try{ await clearDestinationEverywhere(d); log(`Cleared all binds from ${d}`,'ok'); await refresh(); }
+        try{ await clearDestinationEverywhere(useToken); log(`Cleared all binds from ${displayLabel}`,'ok'); await refresh(); }
         catch(e){ log(e,'err'); }
       });
 
+      if (isUart) decorateUartCard(card, drop, list, arr, useToken);
       gridB.appendChild(card);
     }
 
@@ -454,7 +614,7 @@
     for(const g of state.groups){
       const card = document.createElement('div');
       card.className = 'tcard y';
-      const members = g.members.join(', ');
+      const members = g.members.map(labelDest).join(', ');
       card.innerHTML = `
         <div class="head">
           <div class="row"><span class="badge">YELLOW</span><span class="mono">${g.name}</span></div>
@@ -490,7 +650,6 @@
       gridY.appendChild(card);
     }
   }
-
   function renderUnmapped(){
     const box = $('#unmapped');
     box.innerHTML = '';
@@ -521,7 +680,22 @@
     const {greens,blues,groups} = parseConfig(t);
     state.greens = greens; state.blues = blues; state.groups = groups;
   }
-  async function loadStatus(){ state.status = await GET('/api/v1/status'); }
+  async function loadStatus(){
+    const data = await GET('/api/v1/status');
+    state.status = data;
+    const defaults = Array.from({length:MAX_UARTS}, (_,i)=>({token: i===0 ? 'uart' : `uart${i}`, enabled:false, dests:[]}));
+    const seen = new Map(defaults.map(u=>[u.token, {...u}]));
+    const arr = Array.isArray(data?.uarts) ? data.uarts : [];
+    for (const raw of arr){
+      if (!raw || typeof raw !== 'object') continue;
+      const canon = canonicalUartToken(raw.token || '');
+      if (!canon) continue;
+      const entry = {...raw, token: canon};
+      if (!Array.isArray(entry.dests)) entry.dests = [];
+      seen.set(canon, entry);
+    }
+    state.uarts = Array.from(seen.values());
+  }
 
   async function refresh(){
     const sel = state.selected; // keep selection

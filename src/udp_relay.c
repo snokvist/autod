@@ -59,17 +59,27 @@
 #include <string.h>
 #include <strings.h>   /* for strcasecmp/strcasestr */
 #include <sys/epoll.h>
+#include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <termios.h>
 #include <time.h>
 #include <unistd.h>
+
+#if defined(__linux__)
+#include <asm/ioctls.h>
+#define termios asm_termios
+#include <asm/termbits.h>
+#undef termios
+#endif
 
 /* ------------------- tunables & constants ------------------- */
 
 #define MAX_RELAYS      64
 #define MAX_DESTS       128
 #define MAX_BINDS       64
+#define MAX_UARTS       4
 #define MAX_LINE        1024
 #define MAX_EVENTS      128
 #define MAX_HTTP_CONN   64
@@ -77,6 +87,9 @@
 #define STATUS_CAP      8192
 #define CFG_PATH        "/etc/udp_relay/udp_relay.conf"
 #define CFG_TMP_PATH    "/etc/udp_relay/udp_relay.conf.tmp"
+
+#define UART_TX_BUF_DEFAULT 4096
+#define UART_RX_BUF_DEFAULT 4096
 
 /* Counter roll-over thresholds: when any hits these, all are halved */
 #define PKTS_ROLLOVER_LIMIT  ((uint64_t)1000000000ULL)  /* 1e9 pkts */
@@ -112,10 +125,149 @@ static inline int set_nonblock(int fd){
     return fcntl(fd, F_SETFL, fl | O_NONBLOCK);
 }
 
+static void uart_token_format(int idx, char *out, size_t len){
+    if (!out || len == 0) return;
+    if (idx <= 0){
+        snprintf(out, len, "uart");
+    } else {
+        snprintf(out, len, "uart%d", idx);
+    }
+}
+
+static int uart_token_parse(const char *token){
+    if (!token) return -1;
+    if (strncasecmp(token, "uart", 4) != 0) return -1;
+    const char *p = token + 4;
+    if (*p == '\0') return 0;
+    if (!isdigit((unsigned char)*p)) return -1;
+    char *end=NULL;
+    long idx = strtol(p, &end, 10);
+    if (end == p || *end != '\0') return -1;
+    if (idx < 0 || idx >= MAX_UARTS) return -1;
+    if (idx == 0) return 0;
+    return (int)idx;
+}
+
+/* ------------------- small ring buffer ---------------------- */
+
+typedef struct {
+    uint8_t *buf;
+    size_t   cap;
+    size_t   head;
+    size_t   tail;
+    size_t   len;
+} ringbuf_t;
+
+static int ring_init(ringbuf_t *r, size_t cap){
+    r->buf = NULL;
+    r->cap = r->head = r->tail = r->len = 0;
+    if (!cap) return 0;
+    r->buf = (uint8_t*)malloc(cap);
+    if (!r->buf){ errno = ENOMEM; return -1; }
+    r->cap = cap;
+    return 0;
+}
+
+static void ring_free(ringbuf_t *r){
+    free(r->buf);
+    r->buf = NULL;
+    r->cap = r->head = r->tail = r->len = 0;
+}
+
+static size_t ring_space(const ringbuf_t *r){
+    if (r->cap < r->len) return 0;
+    return r->cap - r->len;
+}
+
+static size_t ring_write(ringbuf_t *r, const uint8_t *src, size_t n){
+    if (!r->cap || !n) return 0;
+    size_t w = n;
+    if (w > ring_space(r)) w = ring_space(r);
+    size_t first = w > (r->cap - r->head) ? (r->cap - r->head) : w;
+    if (first) memcpy(r->buf + r->head, src, first);
+    size_t second = w - first;
+    if (second) memcpy(r->buf, src + first, second);
+    r->head = (r->head + w) % r->cap;
+    r->len += w;
+    return w;
+}
+
+static size_t ring_peek(const ringbuf_t *r, const uint8_t **p1, size_t *l1,
+                        const uint8_t **p2, size_t *l2){
+    if (!r->len){
+        if (p1) *p1 = NULL;
+        if (l1) *l1 = 0;
+        if (p2) *p2 = NULL;
+        if (l2) *l2 = 0;
+        return 0;
+    }
+    size_t first = r->len > (r->cap - r->tail) ? (r->cap - r->tail) : r->len;
+    if (p1) *p1 = r->buf + r->tail;
+    if (l1) *l1 = first;
+    if (p2) *p2 = NULL;
+    if (l2) *l2 = 0;
+    if (r->len > first){
+        if (p2) *p2 = r->buf;
+        if (l2) *l2 = r->len - first;
+    }
+    return r->len;
+}
+
+static void ring_consume(ringbuf_t *r, size_t n){
+    if (n > r->len) n = r->len;
+    r->tail = (r->tail + n) % r->cap;
+    r->len -= n;
+}
+
+/* ------------------- UART helpers --------------------------- */
+
+static speed_t baud_to_speed(int baud){
+    switch (baud){
+        case 9600: return B9600;
+        case 19200: return B19200;
+        case 38400: return B38400;
+        case 57600: return B57600;
+        case 115200: return B115200;
+#ifdef B230400
+        case 230400: return B230400;
+#endif
+#ifdef B460800
+        case 460800: return B460800;
+#endif
+#ifdef B921600
+        case 921600: return B921600;
+#endif
+        default: return 0;
+    }
+}
+
+static int set_custom_baud(int fd, int baud){
+#if defined(__linux__) && defined(TCGETS2) && defined(TCSETS2)
+    struct termios2 tio2;
+    if (ioctl(fd, TCGETS2, &tio2) < 0) return -1;
+    tio2.c_cflag &= ~CBAUD;
+    tio2.c_cflag |= BOTHER;
+    tio2.c_ispeed = baud;
+    tio2.c_ospeed = baud;
+    return ioctl(fd, TCSETS2, &tio2);
+#else
+    (void)fd; (void)baud;
+    errno = EINVAL;
+    return -1;
+#endif
+}
+
 /* ------------------- config model --------------------------- */
 
+enum dest_type {
+    DEST_UDP = 0,
+    DEST_UART = 1,
+};
+
 struct dest {
+    int type;
     struct sockaddr_in addr;
+    int uart_idx;
     uint64_t pkts_out;
 };
 
@@ -129,6 +281,18 @@ struct relay {
     uint64_t trunc_drops; /* datagrams > bufsz (MSG_TRUNC) — dropped instead of forwarded */
 };
 
+struct uart_cfg {
+    char device[128];
+    int  baud;
+    int  databits;
+    char parity[8];
+    int  stopbits;
+    char flow[16];
+    int  tx_buf;
+    int  rx_buf;
+    char to[MAX_LINE];
+};
+
 struct config {
     char http_bind[64];  /* default 127.0.0.1 */
     int  control_port;   /* default 9000 */
@@ -138,11 +302,46 @@ struct config {
     int  tos;            /* 0 = skip */
     int  bind_count;
     char bind_lines[MAX_BINDS][MAX_LINE];
+    struct uart_cfg uart[MAX_UARTS];
 };
 
 static struct config G;                    /* current config */
 static struct relay REL[MAX_RELAYS];       /* active relays */
 static int REL_N = 0;
+
+struct uart_runtime {
+    int enabled;
+    int index;
+    char token[16];
+    int fd;          /* UART file descriptor */
+    int udp_fd;      /* UDP socket for UART->UDP forwarding */
+    ringbuf_t out;   /* pending bytes to write to UART */
+    uint8_t *rx_buf; /* buffer for UART reads */
+    size_t   rx_buf_cap;
+    struct dest dests[MAX_DESTS];
+    int dest_cnt;
+    struct uart_cfg cfg;
+    uint64_t pkts_in;    /* UART -> UDP */
+    uint64_t bytes_in;
+    uint64_t pkts_out;   /* UDP -> UART */
+    uint64_t bytes_out;
+    uint64_t send_errs;
+    uint64_t drops;
+    uint64_t last_rx_ns;
+};
+
+static struct uart_runtime UARTS[MAX_UARTS];
+
+static void uart_runtime_init_all(void){
+    for (int i=0;i<MAX_UARTS;i++){
+        struct uart_runtime *u = &UARTS[i];
+        memset(u, 0, sizeof(*u));
+        u->fd = -1;
+        u->udp_fd = -1;
+        u->index = i;
+        uart_token_format(i, u->token, sizeof(u->token));
+    }
+}
 
 static volatile sig_atomic_t WANT_RELOAD = 0;
 static volatile sig_atomic_t WANT_EXIT   = 0;
@@ -170,6 +369,18 @@ static void cfg_defaults(struct config *c){
     snprintf(c->src_ip, sizeof(c->src_ip), "0.0.0.0");
     c->rcvbuf=0; c->sndbuf=0; c->bufsz=9000; c->tos=0;
     c->bind_count=0;
+    for (int i=0;i<MAX_UARTS;i++){
+        struct uart_cfg *u = &c->uart[i];
+        u->device[0] = '\0';
+        u->baud = 115200;
+        u->databits = 8;
+        snprintf(u->parity, sizeof(u->parity), "none");
+        u->stopbits = 1;
+        snprintf(u->flow, sizeof(u->flow), "none");
+        u->tx_buf = UART_TX_BUF_DEFAULT;
+        u->rx_buf = UART_RX_BUF_DEFAULT;
+        u->to[0] = '\0';
+    }
 }
 
 static int load_file(const char *path, char **out, size_t *outlen){
@@ -225,6 +436,51 @@ static int load_ini_text(const char *text, struct config *c){
             if(c->bind_count<MAX_BINDS){
                 snprintf(c->bind_lines[c->bind_count++],MAX_LINE,"%s",val);
             }
+        } else if(!strncmp(key,"uart",4)){
+            int idx = 0;
+            const char *p = key + 4;
+            if (*p && isdigit((unsigned char)*p)){
+                char *end=NULL;
+                long v = strtol(p, &end, 10);
+                if (end && end!=p){
+                    idx = (int)v;
+                    p = end;
+                } else {
+                    idx = -1;
+                }
+            }
+            if (idx < 0 || idx >= MAX_UARTS) continue;
+            if (*p != '_') continue;
+            const char *attr = p + 1;
+            struct uart_cfg *u = &c->uart[idx];
+            if (!strcmp(attr,"device")){
+                snprintf(u->device, sizeof(u->device), "%s", val);
+            } else if (!strcmp(attr,"baud")){
+                int v=parse_int_bounded(val,1200,10000000); if(v>0) u->baud=v;
+            } else if (!strcmp(attr,"databits")){
+                int v=parse_int_bounded(val,5,8); if(v>0) u->databits=v;
+            } else if (!strcmp(attr,"parity")){
+                snprintf(u->parity, sizeof(u->parity), "%s", val);
+            } else if (!strcmp(attr,"stopbits")){
+                int v=parse_int_bounded(val,1,2); if(v>0) u->stopbits=v;
+            } else if (!strcmp(attr,"flow")){
+                snprintf(u->flow, sizeof(u->flow), "%s", val);
+            } else if (!strcmp(attr,"tx_buf")){
+                int v=parse_int_bounded(val,128,4*1024*1024); if(v>0) u->tx_buf=v;
+            } else if (!strcmp(attr,"rx_buf")){
+                int v=parse_int_bounded(val,128,4*1024*1024); if(v>0) u->rx_buf=v;
+            } else if (!strcmp(attr,"to")){
+                if (u->to[0]){
+                    size_t cur = strlen(u->to);
+                    if (cur + 1 < sizeof(u->to)){
+                        u->to[cur++] = ',';
+                        u->to[cur] = '\0';
+                    }
+                    strncat(u->to, val, sizeof(u->to) - strlen(u->to) - 1);
+                } else {
+                    snprintf(u->to, sizeof(u->to), "%s", val);
+                }
+            }
         }
         /* UI-only keys are ignored by backend (dest_* / group_yellow) */
     }
@@ -251,21 +507,41 @@ static inline int sockaddr_equal(const struct sockaddr_in *a, const struct socka
            a->sin_addr.s_addr==b->sin_addr.s_addr;
 }
 
-static int add_dest(struct relay *r, const char *ip, int port){
-    if (r->dest_cnt >= MAX_DESTS) return -1;
-    struct dest *d=&r->dests[r->dest_cnt];
+static int add_dest_udp(struct dest *dests, int *cnt, int max, const char *ip, int port){
+    if (*cnt >= max) return -1;
+    struct dest *d=&dests[*cnt];
     memset(d,0,sizeof(*d));
+    d->type = DEST_UDP;
     d->addr.sin_family=AF_INET;
     d->addr.sin_port=htons(port);
     if (inet_pton(AF_INET, ip, &d->addr.sin_addr)!=1) return -1;
     d->pkts_out=0;
-    r->dest_cnt++;
+    (*cnt)++;
     return 0;
 }
 
-static int parse_dest_token(struct relay *r, const char *tok){
+static int parse_dest_token(struct dest *dests, int *cnt, int max, const char *tok, bool allow_uart){
+    if (!tok) return -1;
     char buf[128]; snprintf(buf,sizeof(buf),"%s",tok);
     char *s=trim(buf);
+    if (!*s) return -1;
+
+    int uart_idx = uart_token_parse(s);
+    if (uart_idx >= 0){
+        if (!allow_uart) return -1;
+        for (int i=0;i<*cnt;i++){
+            if (dests[i].type==DEST_UART && dests[i].uart_idx==uart_idx) return 0;
+        }
+        if (*cnt >= max) return -1;
+        struct dest *d=&dests[*cnt];
+        memset(d,0,sizeof(*d));
+        d->type = DEST_UART;
+        d->uart_idx = uart_idx;
+        d->pkts_out = 0;
+        (*cnt)++;
+        return 0;
+    }
+
     char *ip_part=NULL, *port_part=s;
     char *colon=strchr(s,':');
     if (colon){ *colon=0; ip_part=s; port_part=colon+1; }
@@ -278,33 +554,414 @@ static int parse_dest_token(struct relay *r, const char *tok){
         if (a<0 || b<0) return -1;
         if (a>b){ int t=a; a=b; b=t; }
         for (int p=a; p<=b; p++){
-            if (add_dest(r,ip,p)<0) break;
+            if (add_dest_udp(dests, cnt, max, ip, p)<0) break;
         }
         return 0;
     } else {
         int p=parse_int_bounded(port_part,1,65535);
         if (p<0) return -1;
-        return add_dest(r,ip,p);
+        return add_dest_udp(dests, cnt, max, ip, p);
     }
 }
 
-static int parse_dest_list(struct relay *r, const char *list, bool replace){
-    struct relay tmp={0};
+static int parse_dest_list(struct dest *dests, int *cnt, int max, const char *list, bool replace, bool allow_uart){
+    struct dest tmp[MAX_DESTS];
+    int tmp_cnt = 0;
     if (list && *list){
         char *dup=strdup(list); if(!dup) return -1;
         char *save=NULL;
         for(char *tok=strtok_r(dup,",",&save); tok; tok=strtok_r(NULL,",",&save)){
-            if (parse_dest_token(&tmp, trim(tok))<0){ free(dup); return -1; }
+            if (parse_dest_token(tmp, &tmp_cnt, MAX_DESTS, trim(tok), allow_uart)<0){ free(dup); return -1; }
         }
         free(dup);
     }
     if (replace){
-        r->dest_cnt=0; /* stats preserved */
+        *cnt = 0; /* stats preserved by caller if needed */
     }
-    for (int i=0;i<tmp.dest_cnt && r->dest_cnt<MAX_DESTS;i++){
-        r->dests[r->dest_cnt++] = tmp.dests[i];
+    for (int i=0;i<tmp_cnt && *cnt<max;i++){
+        dests[*cnt] = tmp[i];
+        (*cnt)++;
     }
     return 0;
+}
+
+static int uart_open_fd(const struct uart_cfg *cfg){
+    int fd = open(cfg->device, O_RDWR | O_NOCTTY | O_NONBLOCK);
+    if (fd < 0) return -1;
+
+    struct termios tio;
+    if (tcgetattr(fd, &tio) < 0){
+        int saved = errno;
+        close(fd);
+        errno = saved;
+        return -1;
+    }
+    cfmakeraw(&tio);
+
+    speed_t sp = baud_to_speed(cfg->baud);
+    if (sp){
+        cfsetispeed(&tio, sp);
+        cfsetospeed(&tio, sp);
+    } else {
+        cfsetispeed(&tio, B38400);
+        cfsetospeed(&tio, B38400);
+    }
+
+    tio.c_cflag &= ~CSIZE;
+    switch (cfg->databits){
+        case 5: tio.c_cflag |= CS5; break;
+        case 6: tio.c_cflag |= CS6; break;
+        case 7: tio.c_cflag |= CS7; break;
+        default: tio.c_cflag |= CS8; break;
+    }
+
+    if (!strcasecmp(cfg->parity, "even")){
+        tio.c_cflag |= PARENB;
+        tio.c_cflag &= ~PARODD;
+    } else if (!strcasecmp(cfg->parity, "odd")){
+        tio.c_cflag |= PARENB;
+        tio.c_cflag |= PARODD;
+    } else {
+        tio.c_cflag &= ~PARENB;
+    }
+
+    if (cfg->stopbits == 2) tio.c_cflag |= CSTOPB;
+    else                       tio.c_cflag &= ~CSTOPB;
+
+    if (!strcasecmp(cfg->flow, "rtscts")) tio.c_cflag |= CRTSCTS;
+    else                                      tio.c_cflag &= ~CRTSCTS;
+
+    tio.c_cflag |= (CLOCAL | CREAD);
+    tio.c_cc[VMIN] = 1;
+    tio.c_cc[VTIME] = 0;
+
+    if (tcsetattr(fd, TCSANOW, &tio) < 0){
+        int saved = errno;
+        close(fd);
+        errno = saved;
+        return -1;
+    }
+
+    if (!sp){
+        if (set_custom_baud(fd, cfg->baud) < 0){
+            int saved = errno;
+            close(fd);
+            errno = saved;
+            return -1;
+        }
+    }
+
+    return fd;
+}
+
+static int uart_open_udp_socket(const char *ip, int port){
+    int fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (fd < 0) return -1;
+    int one = 1;
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+#ifdef SO_REUSEPORT
+    setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &one, sizeof(one));
+#endif
+    struct sockaddr_in sa={0};
+    sa.sin_family = AF_INET;
+    sa.sin_port = htons(port);
+    if (inet_pton(AF_INET, ip, &sa.sin_addr) != 1){
+        int saved = errno;
+        close(fd);
+        errno = saved ? saved : EINVAL;
+        return -1;
+    }
+    if (bind(fd, (struct sockaddr*)&sa, sizeof(sa)) < 0){
+        int saved = errno;
+        close(fd);
+        errno = saved;
+        return -1;
+    }
+    if (set_nonblock(fd) < 0){
+        int saved = errno;
+        close(fd);
+        errno = saved;
+        return -1;
+    }
+    return fd;
+}
+
+
+static void uart_update_epoll_interest(struct uart_runtime *u){
+    if (!u || u->fd < 0 || EPFD < 0) return;
+    uint32_t events = EPOLLIN;
+    if (u->out.len > 0) events |= EPOLLOUT;
+    struct epoll_event ev={.events=events, .data.fd=u->fd};
+    if (epoll_ctl(EPFD, EPOLL_CTL_MOD, u->fd, &ev)<0){
+        /* best effort; ignore */
+    }
+}
+
+static void uart_flush_output(struct uart_runtime *u){
+    if (!u || u->fd < 0) return;
+    while (u->out.len > 0){
+        const uint8_t *p1=NULL,*p2=NULL;
+        size_t l1=0,l2=0;
+        ring_peek(&u->out, &p1, &l1, &p2, &l2);
+        if (!l1) break;
+        ssize_t w = write(u->fd, p1, l1);
+        if (w > 0){
+            ring_consume(&u->out, (size_t)w);
+            continue;
+        } else if (w < 0 && errno == EINTR){
+            continue;
+        } else if (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)){
+            break;
+        } else {
+            u->send_errs++;
+            size_t drop = u->out.len;
+            ring_consume(&u->out, drop);
+            break;
+        }
+    }
+}
+
+static int uart_send_bytes(struct uart_runtime *u, const uint8_t *data, size_t len){
+    if (!u || u->fd < 0 || !data || !len) return -1;
+
+    uart_flush_output(u);
+
+    size_t done = 0;
+    while (done < len){
+        ssize_t w = write(u->fd, data + done, len - done);
+        if (w > 0){
+            done += (size_t)w;
+            continue;
+        } else if (w < 0 && errno == EINTR){
+            continue;
+        } else if (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)){
+            break;
+        } else {
+            u->send_errs++;
+            return -1;
+        }
+    }
+
+    if (done < len){
+        size_t queued = ring_write(&u->out, data + done, len - done);
+        if (queued < len - done){
+            u->drops += (uint64_t)((len - done) - queued);
+            u->send_errs++;
+            return -1;
+        }
+        uart_update_epoll_interest(u);
+    }
+
+    return 0;
+}
+
+static void uart_maybe_rollover(struct uart_runtime *u){
+    if (!u) return;
+    if (u->pkts_in > PKTS_ROLLOVER_LIMIT ||
+        u->bytes_in > BYTES_ROLLOVER_LIMIT ||
+        u->pkts_out > PKTS_ROLLOVER_LIMIT ||
+        u->bytes_out > BYTES_ROLLOVER_LIMIT ||
+        u->send_errs > PKTS_ROLLOVER_LIMIT ||
+        u->drops > PKTS_ROLLOVER_LIMIT)
+    {
+        u->pkts_in  >>= 1;
+        u->bytes_in  >>= 1;
+        u->pkts_out >>= 1;
+        u->bytes_out >>= 1;
+        u->send_errs >>= 1;
+        u->drops    >>= 1;
+        for (int i=0;i<u->dest_cnt;i++) u->dests[i].pkts_out >>= 1;
+    }
+}
+
+static void uart_close(struct uart_runtime *u){
+    if (!u) return;
+    if (u->fd >= 0){
+        if (EPFD >= 0) epoll_ctl(EPFD, EPOLL_CTL_DEL, u->fd, NULL);
+        close(u->fd);
+    }
+    if (u->udp_fd >= 0){
+        close(u->udp_fd);
+    }
+    ring_free(&u->out);
+    if (u->rx_buf){
+        free(u->rx_buf);
+        u->rx_buf = NULL;
+    }
+    u->rx_buf_cap = 0;
+    u->dest_cnt = 0;
+    u->fd = -1;
+    u->udp_fd = -1;
+    u->enabled = 0;
+    memset(&u->cfg, 0, sizeof(u->cfg));
+    u->pkts_in = u->bytes_in = 0;
+    u->pkts_out = u->bytes_out = 0;
+    u->send_errs = u->drops = 0;
+    u->last_rx_ns = 0;
+}
+
+static int uart_apply_one(int idx, const struct config *c){
+    if (idx < 0 || idx >= MAX_UARTS) return -1;
+    struct uart_runtime *u = &UARTS[idx];
+    const struct uart_cfg *src = &c->uart[idx];
+
+    if (!src->device[0]){
+        uart_close(u);
+        return 0;
+    }
+
+    int fd = uart_open_fd(src);
+    if (fd < 0){
+        perror("uart open");
+        return -1;
+    }
+
+    size_t tx_cap = (size_t)((src->tx_buf>0)?src->tx_buf:UART_TX_BUF_DEFAULT);
+    ringbuf_t new_out;
+    if (ring_init(&new_out, tx_cap) < 0){
+        close(fd);
+        return -1;
+    }
+
+    size_t rx_cap = (size_t)((src->rx_buf>0)?src->rx_buf:UART_RX_BUF_DEFAULT);
+    uint8_t *rx_buf = malloc(rx_cap);
+    if (!rx_buf){
+        ring_free(&new_out);
+        close(fd);
+        return -1;
+    }
+
+    struct dest new_dests[MAX_DESTS];
+    int new_dest_cnt = 0;
+    if (parse_dest_list(new_dests, &new_dest_cnt, MAX_DESTS, src->to, true, false)<0){
+        free(rx_buf);
+        ring_free(&new_out);
+        close(fd);
+        return -1;
+    }
+
+    const char *bind_ip = c->src_ip[0] ? c->src_ip : "0.0.0.0";
+    int udp_fd = uart_open_udp_socket(bind_ip, 0);
+    if (udp_fd < 0){
+        perror("uart udp bind");
+        free(rx_buf);
+        ring_free(&new_out);
+        close(fd);
+        return -1;
+    }
+
+    uart_close(u);
+
+    u->fd = fd;
+    u->udp_fd = udp_fd;
+    u->out = new_out;
+    u->rx_buf = rx_buf;
+    u->rx_buf_cap = rx_cap;
+    memcpy(u->dests, new_dests, (size_t)new_dest_cnt * sizeof(struct dest));
+    u->dest_cnt = new_dest_cnt;
+    u->cfg = *src;
+    u->cfg.tx_buf = (int)tx_cap;
+    u->cfg.rx_buf = (int)rx_cap;
+    u->enabled = 1;
+    u->pkts_in = u->bytes_in = 0;
+    u->pkts_out = u->bytes_out = 0;
+    u->send_errs = u->drops = 0;
+    u->last_rx_ns = 0;
+
+    if (EPFD >= 0){
+        struct epoll_event ev={.events=EPOLLIN, .data.fd=u->fd};
+        if (epoll_ctl(EPFD, EPOLL_CTL_ADD, u->fd, &ev)<0){
+            perror("epoll_ctl add uart");
+            uart_close(u);
+            return -1;
+        }
+    }
+
+    fprintf(stderr,"UART[%s] enabled on %s (baud=%d, dests=%d)
+",
+            u->token[0]?u->token:"uart", u->cfg.device, u->cfg.baud, u->dest_cnt);
+    return 0;
+}
+
+static int uart_apply_config_all(const struct config *c){
+    int rc = 0;
+    for (int i=0;i<MAX_UARTS;i++){
+        if (uart_apply_one(i, c) != 0) rc = -1;
+    }
+    return rc;
+}
+
+static int uart_send_from_udp(struct uart_runtime *u, const uint8_t *data, size_t len){
+    if (!u || !u->enabled || u->fd < 0) return -1;
+    if (uart_send_bytes(u, data, len) == 0){
+        u->pkts_out++;
+        u->bytes_out += (uint64_t)len;
+        uart_maybe_rollover(u);
+        return 0;
+    }
+    return -1;
+}
+
+static void uart_handle_write(struct uart_runtime *u){
+    uart_flush_output(u);
+    uart_update_epoll_interest(u);
+}
+
+static void uart_handle_read(struct uart_runtime *u){
+    if (!u || !u->enabled || u->fd < 0 || !u->rx_buf || u->rx_buf_cap==0) return;
+    while (1){
+        ssize_t r = read(u->fd, u->rx_buf, u->rx_buf_cap);
+        if (r > 0){
+            u->pkts_in++;
+            u->bytes_in += (uint64_t)r;
+            u->last_rx_ns = now_ns();
+            if (u->dest_cnt > 0 && u->udp_fd >= 0){
+                int cnt = 0;
+                struct mmsghdr msgs[MAX_DESTS];
+                struct iovec iov[MAX_DESTS];
+                struct dest *refs[MAX_DESTS];
+                for (int i=0;i<u->dest_cnt;i++){
+                    if (u->dests[i].type != DEST_UDP) continue;
+                    if (cnt >= MAX_DESTS) break;
+                    refs[cnt] = &u->dests[i];
+                    memset(&msgs[cnt], 0, sizeof(struct mmsghdr));
+                    iov[cnt].iov_base = u->rx_buf;
+                    iov[cnt].iov_len = (size_t)r;
+                    msgs[cnt].msg_hdr.msg_iov = &iov[cnt];
+                    msgs[cnt].msg_hdr.msg_iovlen = 1;
+                    msgs[cnt].msg_hdr.msg_name = &u->dests[i].addr;
+                    msgs[cnt].msg_hdr.msg_namelen = sizeof(u->dests[i].addr);
+                    cnt++;
+                }
+                int sent = 0;
+                while (sent < cnt){
+                    int rc = sendmmsg(u->udp_fd, msgs + sent, (unsigned)(cnt - sent), 0);
+                    if (rc > 0){
+                        for (int j=0;j<rc;j++){
+                            refs[sent + j]->pkts_out++;
+                        }
+                        sent += rc;
+                    } else if (rc < 0 && (errno==EAGAIN || errno==EWOULDBLOCK || errno==ENOBUFS)){
+                        u->send_errs += (uint64_t)(cnt - sent);
+                        break;
+                    } else {
+                        u->send_errs += (uint64_t)(cnt - sent);
+                        break;
+                    }
+                }
+            }
+            uart_maybe_rollover(u);
+        } else if (r == 0){
+            break;
+        } else if (r < 0 && errno == EINTR){
+            continue;
+        } else if (r < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)){
+            break;
+        } else {
+            u->send_errs++;
+            break;
+        }
+    }
 }
 
 static int make_udp_socket(const char *bind_ip, int port, int rcvbuf, int sndbuf, int tos){
@@ -369,7 +1026,7 @@ static int apply_config_relays(const struct config *c){
         if (epoll_ctl(EPFD, EPOLL_CTL_ADD, r->fd, &ev)<0){ perror("epoll_ctl add udp"); close(r->fd); continue; }
 
         if (list && *list){
-            if (parse_dest_list(r, list, true)<0){
+            if (parse_dest_list(r->dests, &r->dest_cnt, MAX_DESTS, list, true, true)<0){
                 fprintf(stderr,"Bad dest list on %d, starting empty\n", sport);
                 r->dest_cnt=0;
             }
@@ -484,7 +1141,17 @@ static int json_extract_dest_token(const char *body, char *ip, size_t iplen, int
     token[n] = 0;
 
     char *c = strchr(token, ':');
-    if (!c) return -1;
+    if (!c){
+        int idx = uart_token_parse(token);
+        if (idx >= 0){
+            char canon[16];
+            uart_token_format(idx, canon, sizeof(canon));
+            snprintf(ip, iplen, "%s", canon);
+            *port = 0;
+            return 0;
+        }
+        return -1;
+    }
     *c = 0;
     int p = parse_int_bounded(c + 1, 1, 65535);
     if (p < 0) return -1;
@@ -524,7 +1191,8 @@ static int apply_set_like(int port, const char *body, bool replace){
     char *arr=malloc(n+1); if(!arr) return -3;
     memcpy(arr, lb+1, n); arr[n]=0;
 
-    struct relay tmp={0};
+    struct dest tmp[MAX_DESTS];
+    int tmp_cnt = 0;
     char *s=arr;
     while (*s){
         while (*s && (isspace((unsigned char)*s) || *s==',')) s++;
@@ -532,12 +1200,12 @@ static int apply_set_like(int port, const char *body, bool replace){
         if (*s=='"'){
             s++; char *e=strchr(s,'"'); if(!e) break;
             *e=0;
-            if (parse_dest_token(&tmp, s)<0){ free(arr); return -4; }
+            if (parse_dest_token(tmp, &tmp_cnt, MAX_DESTS, s, true)<0){ free(arr); return -4; }
             s=e+1;
         } else {
             char *e=s; while(*e && *e!=',') e++;
             char sv=*e; *e=0;
-            if (strlen(s)) if(parse_dest_token(&tmp,trim(s))<0){ *e=sv; free(arr); return -4; }
+            if (strlen(s)) if(parse_dest_token(tmp,&tmp_cnt,MAX_DESTS,trim(s),true)<0){ *e=sv; free(arr); return -4; }
             *e=sv; s=e;
         }
     }
@@ -546,8 +1214,8 @@ static int apply_set_like(int port, const char *body, bool replace){
     if (replace){
         r->dest_cnt=0; /* stats preserved */
     }
-    for (int i=0;i<tmp.dest_cnt && r->dest_cnt<MAX_DESTS;i++)
-        r->dests[r->dest_cnt++]=tmp.dests[i];
+    for (int i=0;i<tmp_cnt && r->dest_cnt<MAX_DESTS;i++)
+        r->dests[r->dest_cnt++]=tmp[i];
     return 0;
 }
 
@@ -569,7 +1237,7 @@ static int apply_append_range(const char *body){
     if (!r) return -2;
 
     for (int p=start; p<=end && r->dest_cnt<MAX_DESTS; p++){
-        if (add_dest(r, ip, p)<0) break;
+        if (add_dest_udp(r->dests, &r->dest_cnt, MAX_DESTS, ip, p)<0) break;
     }
     return 0;
 }
@@ -588,14 +1256,20 @@ static int apply_clear_to(const char *body){
     struct relay *r=NULL; for (int i=0;i<REL_N;i++) if (REL[i].src_port==port){ r=&REL[i]; break; }
     if (!r) return -2;
 
-    struct sockaddr_in target={0};
-    target.sin_family=AF_INET;
-    target.sin_port=htons(dport);
-    if (inet_pton(AF_INET, ip, &target.sin_addr)!=1) return -1;
-
     int idx=-1;
-    for (int j=0;j<r->dest_cnt;j++){
-        if (sockaddr_equal(&r->dests[j].addr, &target)){ idx=j; break; }
+    int uart_idx = uart_token_parse(ip);
+    if (uart_idx >= 0){
+        for (int j=0;j<r->dest_cnt;j++){
+            if (r->dests[j].type == DEST_UART && r->dests[j].uart_idx == uart_idx){ idx=j; break; }
+        }
+    } else {
+        struct sockaddr_in target={0};
+        target.sin_family=AF_INET;
+        target.sin_port=htons(dport);
+        if (inet_pton(AF_INET, ip, &target.sin_addr)!=1) return -1;
+        for (int j=0;j<r->dest_cnt;j++){
+            if (r->dests[j].type == DEST_UDP && sockaddr_equal(&r->dests[j].addr, &target)){ idx=j; break; }
+        }
     }
     if (idx<0) return -3;
 
@@ -628,28 +1302,63 @@ static void http_handle_status(int fd){
         if (off >= STATUS_CAP) { goto SEND; } \
     } while (0)
 
-    APPEND("HTTP/1.0 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n");
+    APPEND("HTTP/1.0 200 OK
+Content-Type: application/json
+Connection: close
+
+");
     APPEND("{\"relays\":[");
     for (int i=0;i<REL_N;i++){
         if (i) APPEND(",");
         struct relay *r=&REL[i];
         uint64_t pkts_out_total=0;
         for (int j=0;j<r->dest_cnt;j++) pkts_out_total += r->dests[j].pkts_out;
-        APPEND("{\"port\":%d,\"pkts_in\":%" PRIu64 ",\"bytes_in\":%" PRIu64 ",\"bytes_out\":%" PRIu64 ",\"send_errs\":%" PRIu64 ",\"last_rx_ns\":%" PRIu64 ",\"rx_drops\":%" PRIu64 ",\"trunc_drops\":%" PRIu64 ",\"pkts_out_total\":%" PRIu64 ",\"dests\":[",
+        APPEND("{\"port\":%d,\"pkts_in\":%" PRIu64 ",\"bytes_in\":%" PRIu64 ",\"bytes_out\":%" PRIu64 ",\"send_errs\":%" PRIu64",\"last_rx_ns\":%" PRIu64 ",\"rx_drops\":%" PRIu64 ",\"trunc_drops\":%" PRIu64 ",\"pkts_out_total\":%" PRIu64 ",\"dests\":[",
                r->src_port, r->pkts_in, r->bytes_in, r->bytes_out, r->send_errs, r->last_rx_ns, r->rx_drops, r->trunc_drops, pkts_out_total);
         for (int j=0;j<r->dest_cnt;j++){
             if (j) APPEND(",");
-            char ip[INET_ADDRSTRLEN]; inet_ntop(AF_INET,&r->dests[j].addr.sin_addr,ip,sizeof(ip));
-            APPEND("{\"ip\":\"%s\",\"port\":%d,\"pkts\":%" PRIu64 "}", ip,
-                   ntohs(r->dests[j].addr.sin_port), r->dests[j].pkts_out);
+            if (r->dests[j].type == DEST_UART){
+                char token_buf[16]; uart_token_format(r->dests[j].uart_idx, token_buf, sizeof(token_buf));
+                APPEND("{\"type\":\"uart\",\"token\":\"%s\",\"pkts\":%" PRIu64 "}", token_buf, r->dests[j].pkts_out);
+            } else {
+                char ip[INET_ADDRSTRLEN]; inet_ntop(AF_INET,&r->dests[j].addr.sin_addr,ip,sizeof(ip));
+                APPEND("{\"type\":\"udp\",\"ip\":\"%s\",\"port\":%d,\"pkts\":%" PRIu64 "}", ip,
+                       ntohs(r->dests[j].addr.sin_port), r->dests[j].pkts_out);
+            }
         }
         APPEND("]}");
     }
+    APPEND(",\"uarts\":[");
+    for (int ui=0; ui<MAX_UARTS; ui++){
+        if (ui) APPEND(",");
+        struct uart_runtime *u = &UARTS[ui];
+        char token[16]; uart_token_format(ui, token, sizeof(token));
+        if (u->enabled && u->fd >= 0){
+            APPEND("{\"token\":\"%s\",\"enabled\":true,\"device\":\"%s\",\"baud\":%d,\"pkts_in\":%" PRIu64 ",\"bytes_in\":%" PRIu64 ",\"pkts_out\":%" PRIu64 ",\"bytes_out\":%" PRIu64 ",\"send_errs\":%" PRIu64 ",\"drops\":%" PRIu64 ",\"last_rx_ns\":%" PRIu64 ",\"dests\":[",
+                   token, u->cfg.device, u->cfg.baud, u->pkts_in, u->bytes_in, u->pkts_out, u->bytes_out,
+                   u->send_errs, u->drops, u->last_rx_ns);
+            int first = 1;
+            for (int j=0;j<u->dest_cnt;j++){
+                if (u->dests[j].type != DEST_UDP) continue;
+                if (!first) APPEND(",");
+                first = 0;
+                char ip[INET_ADDRSTRLEN]; inet_ntop(AF_INET,&u->dests[j].addr.sin_addr,ip,sizeof(ip));
+                APPEND("{\"ip\":\"%s\",\"port\":%d,\"pkts\":%" PRIu64 "}", ip,
+                       ntohs(u->dests[j].addr.sin_port), u->dests[j].pkts_out);
+            }
+            APPEND("]}");
+        } else {
+            APPEND("{\"token\":\"%s\",\"enabled\":false}", token);
+        }
+    }
     APPEND("]}\n");
+
 SEND:
     (void)send(fd, out, off, 0);
     #undef APPEND
 }
+
+
 
 static void http_handle_get_config(int fd){
     char *txt=NULL; size_t len=0;
@@ -704,6 +1413,19 @@ static void http_handle_post_config(int fd, const char *body, size_t len){
         free(new_udp);
         if (new_http_fd >= 0) close(new_http_fd);
         http_send(fd,"HTTP/1.0 400 Bad Request\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nno valid binds\n");
+        return;
+    }
+
+    if (uart_apply_config_all(&newc)!=0){
+        if (apply_config_relays(&oldc)!=0){
+            fprintf(stderr,"Failed to restore previous relay config after UART error\n");
+        }
+        if (uart_apply_config_all(&oldc)!=0){
+            fprintf(stderr,"Failed to restore previous UART config after error\n");
+        }
+        free(new_udp);
+        if (new_http_fd >= 0) close(new_http_fd);
+        http_send(fd,"HTTP/1.0 400 Bad Request\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nuart setup failed\n");
         return;
     }
 
@@ -959,6 +1681,10 @@ static int reload_from_disk(void){
         /* still proceed; allows clearing */
     }
 
+    if (uart_apply_config_all(&G)!=0){
+        fprintf(stderr,"Reload warning: UART setup failed\n");
+    }
+
     /* Resize UDP buffer */
     if (UDP_BUF){ free(UDP_BUF); UDP_BUF=NULL; }
     UDP_BUF = malloc((size_t)G.bufsz);
@@ -1008,6 +1734,8 @@ int main(int argc, char **argv){
     sigaction(SIGTERM,&sa,NULL);
     signal(SIGPIPE, SIG_IGN);
 
+    uart_runtime_init_all();
+
     EPFD = epoll_create1(EPOLL_CLOEXEC);
     if (EPFD<0){ perror("epoll_create1"); return 1; }
 
@@ -1021,6 +1749,11 @@ int main(int argc, char **argv){
 
     if (apply_config_relays(&G)!=0){
         fprintf(stderr,"No valid bind entries; exiting.\n");
+        return 1;
+    }
+
+    if (uart_apply_config_all(&G)!=0){
+        fprintf(stderr,"UART setup failed\n");
         return 1;
     }
 
@@ -1060,6 +1793,24 @@ int main(int argc, char **argv){
 
             /* HTTP client readable */
             if (hc_find(fd)){ handle_http_on_fd(fd, evs); continue; }
+
+            int handled_uart = 0;
+            for (int ui=0; ui<MAX_UARTS; ui++){
+                struct uart_runtime *u = &UARTS[ui];
+                if (!u->enabled || u->fd < 0) continue;
+                if (fd == u->fd){
+                    handled_uart = 1;
+                    if (evs & (EPOLLHUP|EPOLLERR)){
+                        fprintf(stderr,"UART[%s] connection closed\n", u->token[0]?u->token:"uart");
+                        uart_close(u);
+                    } else {
+                        if (evs & EPOLLIN) uart_handle_read(u);
+                        if (evs & EPOLLOUT) uart_handle_write(u);
+                    }
+                    break;
+                }
+            }
+            if (handled_uart) continue;
 
             /* UDP readable on a relay */
             if (evs & EPOLLIN){
@@ -1107,37 +1858,66 @@ int main(int argc, char **argv){
                             dest_refs[d] = &r->dests[d];
                         }
 
-                        /* build sendmmsg batch (same payload to N dests) */
                         struct mmsghdr msgs[MAX_DESTS];
                         struct iovec   siov[MAX_DESTS];
-                        memset(msgs,0,(size_t)cnt*sizeof(struct mmsghdr));
+                        struct dest   *udp_refs[MAX_DESTS];
+                        int uart_seen[MAX_UARTS] = {0};
+                        struct dest *uart_dest_for_idx[MAX_UARTS] = {0};
+                        memset(msgs,0,sizeof(msgs));
+
+                        int udp_cnt = 0;
                         for (int d=0; d<cnt; d++){
-                            siov[d].iov_base = UDP_BUF;
-                            siov[d].iov_len  = (size_t)m;
-                            msgs[d].msg_hdr.msg_iov = &siov[d];
-                            msgs[d].msg_hdr.msg_iovlen = 1;
-                            msgs[d].msg_hdr.msg_name = &snap[d].addr;
-                            msgs[d].msg_hdr.msg_namelen = sizeof(snap[d].addr);
+                            dest_refs[d] = &r->dests[d];
+                            if (snap[d].type == DEST_UART){
+                                int ui = snap[d].uart_idx;
+                                if (ui >= 0 && ui < MAX_UARTS){
+                                    uart_seen[ui] = 1;
+                                    uart_dest_for_idx[ui] = dest_refs[d];
+                                }
+                                continue;
+                            }
+                            if (udp_cnt >= MAX_DESTS) continue;
+                            udp_refs[udp_cnt] = dest_refs[d];
+                            siov[udp_cnt].iov_base = UDP_BUF;
+                            siov[udp_cnt].iov_len  = (size_t)m;
+                            msgs[udp_cnt].msg_hdr.msg_iov = &siov[udp_cnt];
+                            msgs[udp_cnt].msg_hdr.msg_iovlen = 1;
+                            msgs[udp_cnt].msg_hdr.msg_name = &snap[d].addr;
+                            msgs[udp_cnt].msg_hdr.msg_namelen = sizeof(snap[d].addr);
+                            udp_cnt++;
                         }
 
-                        int sent_total = 0;
-                        while (sent_total < cnt){
-                            int rc = sendmmsg(fd, msgs + sent_total, (unsigned)(cnt - sent_total), 0);
-                            if (rc > 0){
-                                for (int j=0; j<rc; j++){
-                                    r->bytes_out += (uint64_t)m;
-                                    struct dest *dd = dest_refs[sent_total + j];
-                                    if (dd){
-                                        dd->pkts_out++;
+                        if (udp_cnt > 0){
+                            int sent_total = 0;
+                            while (sent_total < udp_cnt){
+                                int rc = sendmmsg(fd, msgs + sent_total, (unsigned)(udp_cnt - sent_total), 0);
+                                if (rc > 0){
+                                    for (int j=0; j<rc; j++){
+                                        r->bytes_out += (uint64_t)m;
+                                        struct dest *dd = udp_refs[sent_total + j];
+                                        if (dd){
+                                            dd->pkts_out++;
+                                        }
                                     }
+                                    sent_total += rc;
+                                } else if (rc < 0 && (errno==EAGAIN || errno==EWOULDBLOCK)){
+                                    r->send_errs += (uint64_t)(udp_cnt - sent_total);
+                                    break;
+                                } else {
+                                    r->send_errs += (uint64_t)(udp_cnt - sent_total);
+                                    break;
                                 }
-                                sent_total += rc;
-                            } else if (rc < 0 && (errno==EAGAIN || errno==EWOULDBLOCK)){
-                                r->send_errs += (uint64_t)(cnt - sent_total);
-                                break;
+                            }
+                        }
+
+                        for (int ui=0; ui<MAX_UARTS; ui++){
+                            if (!uart_seen[ui]) continue;
+                            struct uart_runtime *u = &UARTS[ui];
+                            if (uart_send_from_udp(u, (const uint8_t*)UDP_BUF, (size_t)m)==0){
+                                r->bytes_out += (uint64_t)m;
+                                if (uart_dest_for_idx[ui]) uart_dest_for_idx[ui]->pkts_out++;
                             } else {
-                                r->send_errs += (uint64_t)(cnt - sent_total);
-                                break;
+                                r->send_errs++;
                             }
                         }
 
@@ -1154,6 +1934,7 @@ int main(int argc, char **argv){
     if (HTTP_LFD>=0){ epoll_ctl(EPFD, EPOLL_CTL_DEL, HTTP_LFD, NULL); close(HTTP_LFD); }
     close_relays();
     for (int i=0;i<MAX_HTTP_CONN;i++) if (HC[i].fd) hc_del(HC[i].fd);
+    for (int ui=0; ui<MAX_UARTS; ui++) uart_close(&UARTS[ui]);
     if (UDP_BUF) free(UDP_BUF);
     if (UI_BUF) free(UI_BUF);
     if (EPFD>=0) close(EPFD);
