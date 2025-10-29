@@ -643,15 +643,21 @@ static void try_rt(int prio)
 
 static inline uint16_t scale_axis(int32_t v)
 {
-    double span = (double)CRSF_RANGE;
-    double scaled = (double)CRSF_MIN + ((double)v + 32768.0) * span / 65535.0;
-    if (scaled < CRSF_MIN) {
-        scaled = CRSF_MIN;
+    if (v <= -32768) {
+        return CRSF_MIN;
     }
-    if (scaled > CRSF_MAX) {
-        scaled = CRSF_MAX;
+    if (v >= 32767) {
+        return CRSF_MAX;
     }
-    return (uint16_t)(scaled + 0.5);
+
+    uint32_t shifted = (uint32_t)((int64_t)v + 32768LL);
+    uint64_t scaled = (uint64_t)shifted * (uint64_t)CRSF_RANGE;
+    uint32_t rounded = (uint32_t)((scaled + 32767ULL) / 65535ULL);
+    uint32_t out = (uint32_t)CRSF_MIN + rounded;
+    if (out > CRSF_MAX) {
+        out = CRSF_MAX;
+    }
+    return (uint16_t)out;
 }
 
 static inline uint16_t scale_bool(int on)
@@ -667,7 +673,9 @@ static inline int32_t clip_dead(int32_t v, int thr)
     return v;
 }
 
-static void build_channels(SDL_Joystick *js, const int dead[16], uint16_t ch_s[16], int32_t ch_r[16])
+static void build_channels(SDL_Joystick *js, const int dead[16],
+                           uint16_t ch_s[16], int32_t ch_r[16],
+                           int hat_count, int axis_count, int button_count)
 {
     ch_r[0] = SDL_JoystickGetAxis(js, 0);
     ch_r[1] = SDL_JoystickGetAxis(js, 1);
@@ -687,14 +695,14 @@ static void build_channels(SDL_Joystick *js, const int dead[16], uint16_t ch_s[1
     ch_s[5] = scale_axis(ch_r[5]);
 
     int dpx = 0, dpy = 0;
-    if (SDL_JoystickNumHats(js) > 0) {
+    if (hat_count > 0) {
         uint8_t h = SDL_JoystickGetHat(js, 0);
         dpx = (h & SDL_HAT_RIGHT) ? 1 : (h & SDL_HAT_LEFT) ? -1 : 0;
         dpy = (h & SDL_HAT_UP) ? 1 : (h & SDL_HAT_DOWN) ? -1 : 0;
-    } else if (SDL_JoystickNumAxes(js) >= 8) {
+    } else if (axis_count >= 8) {
         dpx = SDL_JoystickGetAxis(js, 6) / 32767;
         dpy = -SDL_JoystickGetAxis(js, 7) / 32767;
-    } else if (SDL_JoystickNumButtons(js) >= 15) {
+    } else if (button_count >= 15) {
         dpy = SDL_JoystickGetButton(js, 11) ? 1 : SDL_JoystickGetButton(js, 12) ? -1 : 0;
         dpx = SDL_JoystickGetButton(js, 13) ? -1 : SDL_JoystickGetButton(js, 14) ? 1 : 0;
     }
@@ -1097,6 +1105,9 @@ int main(int argc, char **argv)
         struct sockaddr_storage udp_addr;
         socklen_t udp_addrlen = 0;
         SDL_Joystick *js = NULL;
+        int js_axes = 0;
+        int js_hats = 0;
+        int js_buttons = 0;
 
         int fatal_error = 0;
         int restart_requested = 0;
@@ -1184,6 +1195,10 @@ int main(int argc, char **argv)
 
         uint64_t loops = 0;
         uint64_t every = LOOP_HZ / (uint64_t)cfg.rate;
+        if (every == 0) {
+            every = 1;
+        }
+        uint64_t frame_count = 0;
 
         double t_min = 1e9, t_max = 0.0, t_sum = 0.0;
         uint64_t t_cnt = 0;
@@ -1224,6 +1239,9 @@ int main(int argc, char **argv)
                 fprintf(stderr, "Joystick %d detached\n", cfg.joystick_index);
                 SDL_JoystickClose(js);
                 js = NULL;
+                js_axes = 0;
+                js_hats = 0;
+                js_buttons = 0;
                 restart_requested = 1;
                 restart_sleep = 1;
                 break;
@@ -1235,6 +1253,9 @@ int main(int argc, char **argv)
                     SDL_Joystick *candidate = SDL_JoystickOpen(cfg.joystick_index);
                     if (candidate) {
                         js = candidate;
+                        js_axes = SDL_JoystickNumAxes(js);
+                        js_hats = SDL_JoystickNumHats(js);
+                        js_buttons = SDL_JoystickNumButtons(js);
                         const char *name = SDL_JoystickName(js);
                         fprintf(stderr, "Joystick %d connected: %s\n",
                                 cfg.joystick_index, name ? name : "unknown");
@@ -1265,7 +1286,8 @@ int main(int argc, char **argv)
 
             uint16_t ch_source[16];
             int32_t raw_source[16];
-            build_channels(js, cfg.dead, ch_source, raw_source);
+            build_channels(js, cfg.dead, ch_source, raw_source,
+                           js_hats, js_axes, js_buttons);
 
             uint16_t ch_out[16];
             int32_t raw_out[16];
@@ -1335,7 +1357,9 @@ int main(int argc, char **argv)
                 }
             }
 
-            if (loops % every == 0) {
+            frame_count++;
+            if (frame_count >= every) {
+                frame_count = 0;
                 if (cfg.protocol == PROTOCOL_CRSF) {
                     pack_channels(ch_out, frame + 3);
                     frame[CRSF_FRAME_LEN + 1] = crc8(frame + 2, CRSF_FRAME_LEN - 1);
@@ -1356,14 +1380,6 @@ int main(int argc, char **argv)
                     putchar('\n');
                 }
 
-                if (frame_len > 0 && serial_fd >= 0) {
-                    if (send_all(serial_fd, frame, frame_len) < 0) {
-                        perror("serial write");
-                        g_run = 0;
-                    } else {
-                        serial_packets++;
-                    }
-                }
                 if (frame_len > 0 && udp_fd >= 0) {
                     ssize_t sent = sendto(udp_fd, frame, frame_len, 0,
                                            (struct sockaddr *)&udp_addr, udp_addrlen);
@@ -1374,6 +1390,14 @@ int main(int argc, char **argv)
                         }
                     } else {
                         udp_packets++;
+                    }
+                }
+                if (frame_len > 0 && serial_fd >= 0) {
+                    if (send_all(serial_fd, frame, frame_len) < 0) {
+                        perror("serial write");
+                        g_run = 0;
+                    } else {
+                        serial_packets++;
                     }
                 }
             }
