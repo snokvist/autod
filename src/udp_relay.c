@@ -271,15 +271,39 @@ struct dest {
     uint64_t pkts_out;
 };
 
+enum relay_kind {
+    RELAY_KIND_UDP = 0,
+    RELAY_KIND_UART = 1,
+};
+
 struct relay {
+    int kind;
     int src_port;
     int fd;
+    int uart_idx;
     struct dest dests[MAX_DESTS];
     int dest_cnt;
     uint64_t pkts_in, bytes_in, bytes_out, send_errs, last_rx_ns;
     uint64_t rx_drops;    /* kernel-reported drops (SO_RXQ_OVFL accumulation) */
     uint64_t trunc_drops; /* datagrams > bufsz (MSG_TRUNC) — dropped instead of forwarded */
 };
+
+static void relay_id_format(const struct relay *r, char *out, size_t len){
+    if (!out || len == 0){
+        return;
+    }
+    if (!r){
+        out[0] = '\0';
+        return;
+    }
+    if (r->kind == RELAY_KIND_UART){
+        uart_token_format(r->uart_idx, out, len);
+    } else {
+        snprintf(out, len, "%d", r->src_port);
+    }
+}
+
+static void maybe_rollover_relay(struct relay *r);
 
 struct uart_cfg {
     char device[128];
@@ -290,7 +314,6 @@ struct uart_cfg {
     char flow[16];
     int  tx_buf;
     int  rx_buf;
-    char to[MAX_LINE];
 };
 
 struct config {
@@ -318,8 +341,7 @@ struct uart_runtime {
     ringbuf_t out;   /* pending bytes to write to UART */
     uint8_t *rx_buf; /* buffer for UART reads */
     size_t   rx_buf_cap;
-    struct dest dests[MAX_DESTS];
-    int dest_cnt;
+    struct relay *relay;
     struct uart_cfg cfg;
     uint64_t pkts_in;    /* UART -> UDP */
     uint64_t bytes_in;
@@ -340,6 +362,7 @@ static void uart_runtime_init_all(void){
         u->udp_fd = -1;
         u->index = i;
         uart_token_format(i, u->token, sizeof(u->token));
+        u->relay = NULL;
     }
 }
 
@@ -379,7 +402,6 @@ static void cfg_defaults(struct config *c){
         snprintf(u->flow, sizeof(u->flow), "none");
         u->tx_buf = UART_TX_BUF_DEFAULT;
         u->rx_buf = UART_RX_BUF_DEFAULT;
-        u->to[0] = '\0';
     }
 }
 
@@ -469,17 +491,6 @@ static int load_ini_text(const char *text, struct config *c){
                 int v=parse_int_bounded(val,128,4*1024*1024); if(v>0) u->tx_buf=v;
             } else if (!strcmp(attr,"rx_buf")){
                 int v=parse_int_bounded(val,128,4*1024*1024); if(v>0) u->rx_buf=v;
-            } else if (!strcmp(attr,"to")){
-                if (u->to[0]){
-                    size_t cur = strlen(u->to);
-                    if (cur + 1 < sizeof(u->to)){
-                        u->to[cur++] = ',';
-                        u->to[cur] = '\0';
-                    }
-                    strncat(u->to, val, sizeof(u->to) - strlen(u->to) - 1);
-                } else {
-                    snprintf(u->to, sizeof(u->to), "%s", val);
-                }
             }
         }
         /* UI-only keys are ignored by backend (dest_* / group_yellow) */
@@ -770,7 +781,9 @@ static void uart_maybe_rollover(struct uart_runtime *u){
         u->bytes_out >>= 1;
         u->send_errs >>= 1;
         u->drops    >>= 1;
-        for (int i=0;i<u->dest_cnt;i++) u->dests[i].pkts_out >>= 1;
+        if (u->relay){
+            for (int i=0;i<u->relay->dest_cnt;i++) u->relay->dests[i].pkts_out >>= 1;
+        }
     }
 }
 
@@ -789,7 +802,6 @@ static void uart_close(struct uart_runtime *u){
         u->rx_buf = NULL;
     }
     u->rx_buf_cap = 0;
-    u->dest_cnt = 0;
     u->fd = -1;
     u->udp_fd = -1;
     u->enabled = 0;
@@ -831,15 +843,6 @@ static int uart_apply_one(int idx, const struct config *c){
         return -1;
     }
 
-    struct dest new_dests[MAX_DESTS];
-    int new_dest_cnt = 0;
-    if (parse_dest_list(new_dests, &new_dest_cnt, MAX_DESTS, src->to, true, false)<0){
-        free(rx_buf);
-        ring_free(&new_out);
-        close(fd);
-        return -1;
-    }
-
     const char *bind_ip = c->src_ip[0] ? c->src_ip : "0.0.0.0";
     int udp_fd = uart_open_udp_socket(bind_ip, 0);
     if (udp_fd < 0){
@@ -857,8 +860,6 @@ static int uart_apply_one(int idx, const struct config *c){
     u->out = new_out;
     u->rx_buf = rx_buf;
     u->rx_buf_cap = rx_cap;
-    memcpy(u->dests, new_dests, (size_t)new_dest_cnt * sizeof(struct dest));
-    u->dest_cnt = new_dest_cnt;
     u->cfg = *src;
     u->cfg.tx_buf = (int)tx_cap;
     u->cfg.rx_buf = (int)rx_cap;
@@ -877,8 +878,9 @@ static int uart_apply_one(int idx, const struct config *c){
         }
     }
 
+    int dests = (u->relay) ? u->relay->dest_cnt : 0;
     fprintf(stderr, "UART[%s] enabled on %s (baud=%d, dests=%d)\n",
-            u->token[0] ? u->token : "uart", u->cfg.device, u->cfg.baud, u->dest_cnt);
+            u->token[0] ? u->token : "uart", u->cfg.device, u->cfg.baud, dests);
     return 0;
 }
 
@@ -908,28 +910,29 @@ static void uart_handle_write(struct uart_runtime *u){
 
 static void uart_handle_read(struct uart_runtime *u){
     if (!u || !u->enabled || u->fd < 0 || !u->rx_buf || u->rx_buf_cap==0) return;
+    struct relay *relay_binding = u->relay;
     while (1){
         ssize_t r = read(u->fd, u->rx_buf, u->rx_buf_cap);
         if (r > 0){
             u->pkts_in++;
             u->bytes_in += (uint64_t)r;
             u->last_rx_ns = now_ns();
-            if (u->dest_cnt > 0 && u->udp_fd >= 0){
+            if (relay_binding && relay_binding->dest_cnt > 0 && u->udp_fd >= 0){
                 int cnt = 0;
                 struct mmsghdr msgs[MAX_DESTS];
                 struct iovec iov[MAX_DESTS];
                 struct dest *refs[MAX_DESTS];
-                for (int i=0;i<u->dest_cnt;i++){
-                    if (u->dests[i].type != DEST_UDP) continue;
+                for (int i=0;i<relay_binding->dest_cnt;i++){
+                    if (relay_binding->dests[i].type != DEST_UDP) continue;
                     if (cnt >= MAX_DESTS) break;
-                    refs[cnt] = &u->dests[i];
+                    refs[cnt] = &relay_binding->dests[i];
                     memset(&msgs[cnt], 0, sizeof(struct mmsghdr));
                     iov[cnt].iov_base = u->rx_buf;
                     iov[cnt].iov_len = (size_t)r;
                     msgs[cnt].msg_hdr.msg_iov = &iov[cnt];
                     msgs[cnt].msg_hdr.msg_iovlen = 1;
-                    msgs[cnt].msg_hdr.msg_name = &u->dests[i].addr;
-                    msgs[cnt].msg_hdr.msg_namelen = sizeof(u->dests[i].addr);
+                    msgs[cnt].msg_hdr.msg_name = &relay_binding->dests[i].addr;
+                    msgs[cnt].msg_hdr.msg_namelen = sizeof(relay_binding->dests[i].addr);
                     cnt++;
                 }
                 int sent = 0;
@@ -950,6 +953,7 @@ static void uart_handle_read(struct uart_runtime *u){
                 }
             }
             uart_maybe_rollover(u);
+            if (relay_binding) maybe_rollover_relay(relay_binding);
         } else if (r == 0){
             break;
         } else if (r < 0 && errno == EINTR){
@@ -994,8 +998,11 @@ static int make_udp_socket(const char *bind_ip, int port, int rcvbuf, int sndbuf
 }
 
 static void close_relays(void){
+    for (int ui=0; ui<MAX_UARTS; ui++){
+        UARTS[ui].relay = NULL;
+    }
     for (int i=0;i<REL_N;i++){
-        if (REL[i].fd>=0){
+        if (REL[i].kind == RELAY_KIND_UDP && REL[i].fd>=0){
             epoll_ctl(EPFD, EPOLL_CTL_DEL, REL[i].fd, NULL);
             close(REL[i].fd);
         }
@@ -1010,13 +1017,44 @@ static int apply_config_relays(const struct config *c){
         if (REL_N >= MAX_RELAYS){ fprintf(stderr,"Too many binds\n"); break; }
         char line[MAX_LINE]; snprintf(line,sizeof(line),"%s", c->bind_lines[i]);
         char *sep=strchr(line,':');
-        int sport=-1; char *list=NULL;
-        if (sep){ *sep=0; sport=parse_int_bounded(trim(line),1,65535); list=trim(sep+1); }
-        else sport=parse_int_bounded(trim(line),1,65535);
-        if (sport<0){ fprintf(stderr,"Bad bind line: %s\n", c->bind_lines[i]); continue; }
+        char *lhs = trim(line);
+        char *list = NULL;
+        if (sep){ *sep = 0; list = trim(sep+1); }
 
+        int uart_idx = uart_token_parse(lhs);
         struct relay *r=&REL[REL_N];
         memset(r,0,sizeof(*r));
+
+        if (uart_idx >= 0){
+            if (uart_idx >= MAX_UARTS){
+                fprintf(stderr,"UART index out of range in bind: %s\n", c->bind_lines[i]);
+                continue;
+            }
+            if (UARTS[uart_idx].relay){
+                fprintf(stderr,"Duplicate bind for UART index %d ignored\n", uart_idx);
+                continue;
+            }
+            r->kind = RELAY_KIND_UART;
+            r->uart_idx = uart_idx;
+            r->fd = -1;
+            if (list && *list){
+                if (parse_dest_list(r->dests, &r->dest_cnt, MAX_DESTS, list, true, false)<0){
+                    fprintf(stderr,"Bad UART dest list for uart%d, starting empty\n", uart_idx);
+                    r->dest_cnt = 0;
+                }
+            }
+            UARTS[uart_idx].relay = r;
+            char token[16]; uart_token_format(uart_idx, token, sizeof(token));
+            fprintf(stderr,"Bound %s fan-out (dests=%d)\n", token, r->dest_cnt);
+            REL_N++;
+            continue;
+        }
+
+        int sport=parse_int_bounded(lhs,1,65535);
+        if (sport<0){ fprintf(stderr,"Bad bind line: %s\n", c->bind_lines[i]); continue; }
+
+        r->kind = RELAY_KIND_UDP;
+        r->uart_idx = -1;
         r->src_port=sport;
         r->fd=make_udp_socket(c->src_ip, sport, c->rcvbuf, c->sndbuf, c->tos);
         if (r->fd<0){ fprintf(stderr,"Bind failed %d\n", sport); continue; }
@@ -1035,6 +1073,43 @@ static int apply_config_relays(const struct config *c){
         REL_N++;
     }
     return (REL_N>0)?0:-1;
+}
+
+static struct relay* relay_find_by_port(int port){
+    if (port <= 0) return NULL;
+    for (int i=0;i<REL_N;i++){
+        if (REL[i].kind == RELAY_KIND_UDP && REL[i].src_port == port){
+            return &REL[i];
+        }
+    }
+    return NULL;
+}
+
+static struct relay* relay_find_by_uart_idx(int idx){
+    if (idx < 0 || idx >= MAX_UARTS) return NULL;
+    for (int i=0;i<REL_N;i++){
+        if (REL[i].kind == RELAY_KIND_UART && REL[i].uart_idx == idx){
+            return &REL[i];
+        }
+    }
+    return NULL;
+}
+
+static struct relay* relay_find_by_id(const char *id){
+    if (!id) return NULL;
+    char buf[32];
+    snprintf(buf, sizeof(buf), "%s", id);
+    char *name = trim(buf);
+    if (!*name) return NULL;
+    int uart_idx = uart_token_parse(name);
+    if (uart_idx >= 0){
+        return relay_find_by_uart_idx(uart_idx);
+    }
+    int port = parse_int_bounded(name, 1, 65535);
+    if (port > 0){
+        return relay_find_by_port(port);
+    }
+    return NULL;
 }
 
 /* ------------------- HTTP tiny server (nonblocking) ---------- */
@@ -1110,6 +1185,39 @@ static inline int json_get_int(const char *body, const char *key, int defv){
 
 static inline int json_extract_port(const char *b){ return json_get_int(b,"\"port\"", -1); }
 
+static int json_extract_string(const char *body, const char *key, char *out, size_t outlen){
+    if (!body || !key || !out || outlen == 0) return -1;
+    const char *p = strstr(body, key);
+    if (!p) return -1;
+    const char *col = strchr(p, ':');
+    if (!col) return -1;
+    const char *q1 = strchr(col, '"');
+    if (!q1) return -1;
+    q1++;
+    const char *q2 = strchr(q1, '"');
+    if (!q2) return -1;
+    size_t n = (size_t)(q2 - q1);
+    if (n >= outlen) n = outlen - 1;
+    memcpy(out, q1, n);
+    out[n] = '\0';
+    return 0;
+}
+
+static struct relay* json_find_relay(const char *body){
+    char idbuf[32];
+    if (json_extract_string(body, "\"id\"", idbuf, sizeof(idbuf))==0){
+        return relay_find_by_id(idbuf);
+    }
+    int port = json_extract_port(body);
+    if (port > 0){
+        return relay_find_by_port(port);
+    }
+    if (json_extract_string(body, "\"token\"", idbuf, sizeof(idbuf))==0){
+        return relay_find_by_id(idbuf);
+    }
+    return NULL;
+}
+
 static inline int json_get_bool(const char *body, const char *key, int def){
     const char *p = strstr(body, key);
     if (!p) return def;
@@ -1176,9 +1284,7 @@ static int json_extract_ip_port(const char *body, char *ip, size_t iplen, int *p
 }
 
 /* dests: ["9000","1.2.3.4:7000","7000-7005"] */
-static int apply_set_like(int port, const char *body, bool replace){
-    if (port<=0) return -1;
-    struct relay *r=NULL; for (int i=0;i<REL_N;i++) if (REL[i].src_port==port){ r=&REL[i]; break; }
+static int apply_set_like(struct relay *r, const char *body, bool replace){
     if (!r) return -2;
 
     /* Extract array slice of dests */
@@ -1199,12 +1305,16 @@ static int apply_set_like(int port, const char *body, bool replace){
         if (*s=='"'){
             s++; char *e=strchr(s,'"'); if(!e) break;
             *e=0;
-            if (parse_dest_token(tmp, &tmp_cnt, MAX_DESTS, s, true)<0){ free(arr); return -4; }
+            bool allow_uart = (r->kind == RELAY_KIND_UDP);
+            if (parse_dest_token(tmp, &tmp_cnt, MAX_DESTS, s, allow_uart)<0){ free(arr); return -4; }
             s=e+1;
         } else {
             char *e=s; while(*e && *e!=',') e++;
             char sv=*e; *e=0;
-            if (strlen(s)) if(parse_dest_token(tmp,&tmp_cnt,MAX_DESTS,trim(s),true)<0){ *e=sv; free(arr); return -4; }
+            if (strlen(s)){
+                bool allow_uart = (r->kind == RELAY_KIND_UDP);
+                if(parse_dest_token(tmp,&tmp_cnt,MAX_DESTS,trim(s),allow_uart)<0){ *e=sv; free(arr); return -4; }
+            }
             *e=sv; s=e;
         }
     }
@@ -1219,8 +1329,8 @@ static int apply_set_like(int port, const char *body, bool replace){
 }
 
 /* append_range: {"port":5801,"ip":"1.2.3.4","start":7000,"end":7005} (ip optional) */
-static int apply_append_range(const char *body){
-    int port=json_extract_port(body); if(port<=0) return -1;
+static int apply_append_range(struct relay *r, const char *body){
+    if (!r || r->kind != RELAY_KIND_UDP) return -1;
     int start=json_get_int(body,"\"start\"", -1);
     int end  =json_get_int(body,"\"end\"", -1);
     if (start<=0 || end<=0) return -1;
@@ -1232,9 +1342,6 @@ static int apply_append_range(const char *body){
         const char *q=strchr(k,'"'); if(q){ q=strchr(q+1,'"'); if(q){ const char *q2=strchr(q+1,'"'); if(q2){
             size_t n=(size_t)(q2-(q+1)); if (n>0 && n<sizeof(ip)){ memcpy(ip,q+1,n); ip[n]=0; }
         }}}}
-    struct relay *r=NULL; for (int i=0;i<REL_N;i++) if (REL[i].src_port==port){ r=&REL[i]; break; }
-    if (!r) return -2;
-
     for (int p=start; p<=end && r->dest_cnt<MAX_DESTS; p++){
         if (add_dest_udp(r->dests, &r->dest_cnt, MAX_DESTS, ip, p)<0) break;
     }
@@ -1242,18 +1349,14 @@ static int apply_append_range(const char *body){
 }
 
 /* Remove one destination from one relay (atomic) */
-static int apply_clear_to(const char *body){
-    int port = json_extract_port(body);
+static int apply_clear_to(struct relay *r, const char *body){
     char ip[64]={0}; int dport=-1;
-    if (port<=0) return -1;
+    if (!r) return -1;
 
     /* Accept either {"dest":"ip:port"} or {"ip":"..","port":..} */
     if (json_extract_dest_token(body, ip, sizeof(ip), &dport)!=0){
         if (json_extract_ip_port(body, ip, sizeof(ip), &dport)!=0) return -1;
     }
-
-    struct relay *r=NULL; for (int i=0;i<REL_N;i++) if (REL[i].src_port==port){ r=&REL[i]; break; }
-    if (!r) return -2;
 
     int idx=-1;
     int uart_idx = uart_token_parse(ip);
@@ -1309,10 +1412,24 @@ static void http_handle_status(int fd){
     for (int i=0;i<REL_N;i++){
         if (i) APPEND(",");
         struct relay *r=&REL[i];
+        char idbuf[32]; relay_id_format(r, idbuf, sizeof(idbuf));
         uint64_t pkts_out_total=0;
         for (int j=0;j<r->dest_cnt;j++) pkts_out_total += r->dests[j].pkts_out;
-        APPEND("{\"port\":%d,\"pkts_in\":%" PRIu64 ",\"bytes_in\":%" PRIu64 ",\"bytes_out\":%" PRIu64 ",\"send_errs\":%" PRIu64",\"last_rx_ns\":%" PRIu64 ",\"rx_drops\":%" PRIu64 ",\"trunc_drops\":%" PRIu64 ",\"pkts_out_total\":%" PRIu64 ",\"dests\":[",
-               r->src_port, r->pkts_in, r->bytes_in, r->bytes_out, r->send_errs, r->last_rx_ns, r->rx_drops, r->trunc_drops, pkts_out_total);
+        if (r->kind == RELAY_KIND_UART){
+            struct uart_runtime *u = (r->uart_idx>=0 && r->uart_idx<MAX_UARTS) ? &UARTS[r->uart_idx] : NULL;
+            uint64_t pkts_in = u ? u->pkts_in : 0;
+            uint64_t bytes_in = u ? u->bytes_in : 0;
+            uint64_t bytes_out = u ? u->bytes_out : 0;
+            uint64_t send_errs = u ? u->send_errs : 0;
+            uint64_t drops = u ? u->drops : 0;
+            uint64_t last_rx = u ? u->last_rx_ns : 0;
+            int enabled = (u && u->enabled && u->fd >= 0);
+            APPEND("{\"id\":\"%s\",\"kind\":\"uart\",\"token\":\"%s\",\"enabled\":%s,\"pkts_in\":%" PRIu64 ",\"bytes_in\":%" PRIu64 ",\"bytes_out\":%" PRIu64 ",\"send_errs\":%" PRIu64 ",\"drops\":%" PRIu64 ",\"last_rx_ns\":%" PRIu64 ",\"pkts_out_total\":%" PRIu64 ",\"dests\":[",
+                   idbuf, idbuf, enabled?"true":"false", pkts_in, bytes_in, bytes_out, send_errs, drops, last_rx, pkts_out_total);
+        } else {
+            APPEND("{\"id\":\"%s\",\"kind\":\"udp\",\"port\":%d,\"pkts_in\":%" PRIu64 ",\"bytes_in\":%" PRIu64 ",\"bytes_out\":%" PRIu64 ",\"send_errs\":%" PRIu64 ",\"last_rx_ns\":%" PRIu64 ",\"rx_drops\":%" PRIu64 ",\"trunc_drops\":%" PRIu64 ",\"pkts_out_total\":%" PRIu64 ",\"dests\":[",
+                   idbuf, r->src_port, r->pkts_in, r->bytes_in, r->bytes_out, r->send_errs, r->last_rx_ns, r->rx_drops, r->trunc_drops, pkts_out_total);
+        }
         for (int j=0;j<r->dest_cnt;j++){
             if (j) APPEND(",");
             if (r->dests[j].type == DEST_UART){
@@ -1331,22 +1448,37 @@ static void http_handle_status(int fd){
         if (ui) APPEND(",");
         struct uart_runtime *u = &UARTS[ui];
         char token[16]; uart_token_format(ui, token, sizeof(token));
+        struct relay *relay = relay_find_by_uart_idx(ui);
         if (u->enabled && u->fd >= 0){
             APPEND("{\"token\":\"%s\",\"enabled\":true,\"device\":\"%s\",\"baud\":%d,\"pkts_in\":%" PRIu64 ",\"bytes_in\":%" PRIu64 ",\"pkts_out\":%" PRIu64 ",\"bytes_out\":%" PRIu64 ",\"send_errs\":%" PRIu64 ",\"drops\":%" PRIu64 ",\"last_rx_ns\":%" PRIu64 ",\"dests\":[",
                    token, u->cfg.device, u->cfg.baud, u->pkts_in, u->bytes_in, u->pkts_out, u->bytes_out,
                    u->send_errs, u->drops, u->last_rx_ns);
             int first = 1;
-            for (int j=0;j<u->dest_cnt;j++){
-                if (u->dests[j].type != DEST_UDP) continue;
-                if (!first) APPEND(",");
-                first = 0;
-                char ip[INET_ADDRSTRLEN]; inet_ntop(AF_INET,&u->dests[j].addr.sin_addr,ip,sizeof(ip));
-                APPEND("{\"ip\":\"%s\",\"port\":%d,\"pkts\":%" PRIu64 "}", ip,
-                       ntohs(u->dests[j].addr.sin_port), u->dests[j].pkts_out);
+            if (relay){
+                for (int j=0;j<relay->dest_cnt;j++){
+                    if (relay->dests[j].type != DEST_UDP) continue;
+                    if (!first) APPEND(",");
+                    first = 0;
+                    char ip[INET_ADDRSTRLEN]; inet_ntop(AF_INET,&relay->dests[j].addr.sin_addr,ip,sizeof(ip));
+                    APPEND("{\"ip\":\"%s\",\"port\":%d,\"pkts\":%" PRIu64 "}", ip,
+                           ntohs(relay->dests[j].addr.sin_port), relay->dests[j].pkts_out);
+                }
             }
             APPEND("]}");
         } else {
-            APPEND("{\"token\":\"%s\",\"enabled\":false}", token);
+            APPEND("{\"token\":\"%s\",\"enabled\":false,\"dests\":[", token);
+            int first = 1;
+            if (relay){
+                for (int j=0;j<relay->dest_cnt;j++){
+                    if (relay->dests[j].type != DEST_UDP) continue;
+                    if (!first) APPEND(",");
+                    first = 0;
+                    char ip[INET_ADDRSTRLEN]; inet_ntop(AF_INET,&relay->dests[j].addr.sin_addr,ip,sizeof(ip));
+                    APPEND("{\"ip\":\"%s\",\"port\":%d,\"pkts\":%" PRIu64 "}", ip,
+                           ntohs(relay->dests[j].addr.sin_port), relay->dests[j].pkts_out);
+                }
+            }
+            APPEND("]}");
         }
     }
     APPEND("]}\n");
@@ -1467,30 +1599,34 @@ static void http_handle_post_config(int fd, const char *body, size_t len){
 
 static void http_handle_action(int fd, const char *verb, const char *body){
     int rc=-1;
+    struct relay *r = NULL;
     if (!strcmp(verb,"set")){
-        int port=json_extract_port(body);
-        rc=apply_set_like(port, body, true);
+        r = json_find_relay(body);
+        rc=apply_set_like(r, body, true);
     } else if (!strcmp(verb,"append")){
-        int port=json_extract_port(body);
-        rc=apply_set_like(port, body, false);
+        r = json_find_relay(body);
+        rc=apply_set_like(r, body, false);
     } else if (!strcmp(verb,"append_range")){
-        rc=apply_append_range(body);
+        r = json_find_relay(body);
+        rc=apply_append_range(r, body);
     } else if (!strcmp(verb,"clear")){
-        int port=json_extract_port(body);
-        if (port>0){
-            struct relay *r=NULL; for (int i=0;i<REL_N;i++) if (REL[i].src_port==port){ r=&REL[i]; break; }
-            if (r){ r->dest_cnt=0; rc=0; }
-        }
+        r = json_find_relay(body);
+        if (r){ r->dest_cnt=0; rc=0; }
     } else if (!strcmp(verb,"reset")){
-        int port=json_extract_port(body);
-        if (port>0){
-            struct relay *r=NULL; for (int i=0;i<REL_N;i++) if (REL[i].src_port==port){ r=&REL[i]; break; }
-            if (r){ r->pkts_in=r->bytes_in=r->bytes_out=r->send_errs=0;
-                    for(int j=0;j<r->dest_cnt;j++) r->dests[j].pkts_out=0;
-                    rc=0; }
+        r = json_find_relay(body);
+        if (r){
+            r->pkts_in=r->bytes_in=r->bytes_out=r->send_errs=0;
+            for(int j=0;j<r->dest_cnt;j++) r->dests[j].pkts_out=0;
+            if (r->kind == RELAY_KIND_UART && r->uart_idx >=0 && r->uart_idx < MAX_UARTS){
+                struct uart_runtime *u = &UARTS[r->uart_idx];
+                u->pkts_in = u->bytes_in = u->pkts_out = u->bytes_out = 0;
+                u->send_errs = u->drops = 0;
+            }
+            rc=0;
         }
     } else if (!strcmp(verb,"clear_to")){
-        rc=apply_clear_to(body);
+        r = json_find_relay(body);
+        rc=apply_clear_to(r, body);
     } else {
         http_send(fd,"HTTP/1.0 404 Not Found\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nunknown verb\n");
         return;

@@ -188,7 +188,7 @@
     blues:[],       // ["ip:port", ...]
     groups:[],      // [{name, members:[...]}]
     uarts:[],
-    selected:null   // selected bind port (number)
+    selected:null   // selected bind id (string)
   };
 
   /* ---------------- Helpers ---------------- */
@@ -223,6 +223,23 @@
   }
 
   const relays = ()=> (state.status && Array.isArray(state.status.relays)) ? state.status.relays : [];
+  const relayId = (r)=>{
+    if (!r) return '';
+    if (typeof r.id === 'string' && r.id.length) return r.id;
+    if (typeof r.port !== 'undefined') return String(r.port);
+    return '';
+  };
+  const relayKind = (r)=> String(r?.kind||'').toLowerCase();
+  const relayIsUart = (r)=> relayKind(r) === 'uart';
+  const relayToken = (r)=> canonicalUartToken(r?.token || relayId(r));
+  const relayLabel = (r)=>{
+    if (!r) return 'bind';
+    if (relayIsUart(r)){
+      const tok = relayToken(r) || relayId(r);
+      return friendlyUartLabel(tok);
+    }
+    return `UDP ${relayId(r)}`;
+  };
   const destToken = d => {
     if(!d) return null;
     if(d.type === 'uart'){
@@ -245,7 +262,7 @@
         const token = destToken(d);
         if(!token) continue;
         if(!idx.has(token)) idx.set(token, []);
-        idx.get(token).push({port:r.port, pkts:d.pkts||0, in:r.pkts_in||0});
+        idx.get(token).push({id:relayId(r), pkts:d.pkts||0, in:r.pkts_in||0, label:relayLabel(r)});
       }
     }
     return idx;
@@ -263,7 +280,7 @@
             const tok = destToken(d);
             if(tok && g.members.includes(tok)) outSum += (d.pkts||0);
           }
-          gidx.get(g.name).push({port:r.port, in:r.pkts_in||0, out:outSum});
+          gidx.get(g.name).push({id:relayId(r), in:r.pkts_in||0, out:outSum, label:relayLabel(r)});
           break;
         }
       }
@@ -272,21 +289,21 @@
   }
 
   /* ---------------- Actions (unchanged endpoints) ---------------- */
-  async function removeDestFromPort(port, dest){ await action('clear_to', {port, dest}); }
+  async function removeDestFromRelay(id, dest){ await action('clear_to', {id, dest}); }
   async function clearDestinationEverywhere(dest){
-    for(const r of relays()){ if(listTokens(r).includes(dest)) await removeDestFromPort(r.port, dest); }
+    for(const r of relays()){ if(listTokens(r).includes(dest)) await removeDestFromRelay(relayId(r), dest); }
   }
-  async function clearGroupFromPort(port, members){
-    for(const d of members) await removeDestFromPort(port, d);
+  async function clearGroupFromRelay(id, members){
+    for(const d of members) await removeDestFromRelay(id, d);
   }
   async function clearGroupEverywhere(members){
     for(const r of relays()){
       const tokens = listTokens(r);
       let hasAny = members.some(d=>tokens.includes(d));
-      if(hasAny){ for(const d of members) await removeDestFromPort(r.port, d); }
+      if(hasAny){ for(const d of members) await removeDestFromRelay(relayId(r), d); }
     }
   }
-  async function clearAll(){ for(const r of relays()) await action('clear',{port:r.port}); }
+  async function clearAll(){ for(const r of relays()) await action('clear',{id:relayId(r)}); }
 
   // feedback flash
   function flash(el, ok=true){
@@ -297,66 +314,64 @@
     setTimeout(()=>el.classList.remove('flash-ok','flash-err'), 750);
   }
 
-  async function dropGreen(srcPort, dest, cardEl){
+  async function dropGreen(srcId, dest, cardEl){
     try{
       const label = labelDest(dest);
       await clearDestinationEverywhere(dest);
-      await action('set', {port:srcPort, dests:[dest]});
-      log(`bind ${srcPort} → ${label} (exclusive)`,'ok');
+      await action('set', {id:srcId, dests:[dest]});
+      log(`bind ${srcId} → ${label} (exclusive)`,'ok');
       flash(cardEl, true);
       await refresh();
     }catch(e){ flash(cardEl,false); log(e,'err'); }
   }
-  async function dropBlue(srcPort, dest, cardEl){
+  async function dropBlue(srcId, dest, cardEl){
     try{
       const label = labelDest(dest);
-      const r = relays().find(x=>x.port===srcPort);
+      const r = relays().find(x=>relayId(x)===srcId);
       if(!r) return;
       if(!listTokens(r).includes(dest)){
-        await action('append',{port:srcPort, dests:[dest]});
-        log(`bind ${srcPort} +→ ${label}`,'ok');
+        await action('append',{id:srcId, dests:[dest]});
+        log(`bind ${srcId} +→ ${label}`,'ok');
         flash(cardEl, true);
         await refresh();
       } else {
-        log(`bind ${srcPort} already has ${label}`,'warn');
+        log(`bind ${srcId} already has ${label}`,'warn');
         flash(cardEl, true);
       }
     }catch(e){ flash(cardEl,false); log(e,'err'); }
   }
-  async function dropYellow(srcPort, groupMembers, cardEl){
+  async function dropYellow(srcId, groupMembers, cardEl){
     try{
-      await action('set', {port:srcPort, dests:[...groupMembers]});
+      await action('set', {id:srcId, dests:[...groupMembers]});
       const labelMembers = groupMembers.map(labelDest).join(', ');
-      log(`bind ${srcPort} → [${labelMembers}] (group)`, 'ok');
+      log(`bind ${srcId} → [${labelMembers}] (group)`, 'ok');
       flash(cardEl, true);
       await refresh();
     }catch(e){ flash(cardEl,false); log(e,'err'); }
   }
 
   /* ---------------- Drag / Tap wiring ---------------- */
-  function setSelected(port){
-    state.selected = port;
-    $$('.chip').forEach(c => c.classList.toggle('selected', Number(c.dataset.port)===port));
+  function setSelected(id){
+    state.selected = id;
+    $$('.chip').forEach(c => c.classList.toggle('selected', String(c.dataset.id||'')===String(id||'')));
   }
 
-  function wireChip(el, port){
+  function wireChip(el, id){
     el.setAttribute('draggable','true');
     el.setAttribute('tabindex','0');
-    el.dataset.port = String(port);
+    el.dataset.id = String(id);
     el.addEventListener('dragstart', e=>{
       el.classList.add('dragging');
       try {
-        e.dataTransfer.setData('text/plain', String(port));
-        e.dataTransfer.setData('application/x-bind-port', String(port));
+        e.dataTransfer.setData('text/plain', String(id));
+        e.dataTransfer.setData('application/x-bind-id', String(id));
         e.dataTransfer.effectAllowed = 'copy';
       }catch{}
     });
     el.addEventListener('dragend', ()=> el.classList.remove('dragging'));
-    el.addEventListener('click', ()=>{
-      setSelected(state.selected===port ? null : port);
-    });
+    el.addEventListener('click', ()=>{ setSelected(state.selected===id ? null : id); });
     el.addEventListener('keydown', (e)=>{
-      if(e.key==='Enter' || e.key===' '){ e.preventDefault(); setSelected(state.selected===port ? null : port); }
+      if(e.key==='Enter' || e.key===' '){ e.preventDefault(); setSelected(state.selected===id ? null : id); }
     });
   }
 
@@ -368,10 +383,10 @@
     el.addEventListener('drop', e=>{
       allow(e); el.classList.remove('drag-over');
       let txt = '';
-      try{ txt = e.dataTransfer.getData('application/x-bind-port') || e.dataTransfer.getData('text/plain') || ''; }catch{}
-      const p = parseInt(txt,10);
-      if(!Number.isFinite(p)) return;
-      onDo(p);
+      try{ txt = e.dataTransfer.getData('application/x-bind-id') || e.dataTransfer.getData('text/plain') || ''; }catch{}
+      txt = String(txt||'').trim();
+      if(!txt) return;
+      onDo(txt);
     });
     el.addEventListener('click', ()=>{
       if(state.selected) onDo(state.selected);
@@ -384,24 +399,41 @@
   function renderBinds(){
     const wrap = $('#bindChips');
     const frag = document.createDocumentFragment();
-    const rel = [...relays()].sort((a,b)=>a.port-b.port);
+    const rel = [...relays()].sort((a,b)=>{
+      const ka = relayKind(a);
+      const kb = relayKind(b);
+      if (ka === kb){
+        if (ka === 'udp'){
+          const na = Number(relayId(a));
+          const nb = Number(relayId(b));
+          if (Number.isFinite(na) && Number.isFinite(nb)) return na-nb;
+        }
+        return relayId(a).localeCompare(relayId(b));
+      }
+      return ka.localeCompare(kb);
+    });
     for(const r of rel){
       const el = document.createElement('div');
       el.className = 'chip';
-      el.innerHTML = `<strong>bind ${r.port}</strong> <span class="tag">in:${r.pkts_in||0}</span>`;
-      wireChip(el, r.port);
-      if (state.selected === r.port) el.classList.add('selected');
+      const id = relayId(r);
+      const name = relayLabel(r);
+      const enabledTag = relayIsUart(r) ? `<span class="tag">${r.enabled ? 'UART on' : 'UART off'}</span>` : '';
+      el.innerHTML = `<strong>${name}</strong> <span class="tag mono">${id}</span> <span class="tag">in:${r.pkts_in||0}</span>${enabledTag}`;
+      wireChip(el, id);
+      if (state.selected === id) el.classList.add('selected');
       frag.appendChild(el);
     }
     wrap.innerHTML = ''; wrap.appendChild(frag);
   }
 
-  function mkBindPill(port, info, remover){
+  function mkBindPill(bindInfo, info, remover){
     const p = document.createElement('span');
     p.className = 'bindpill small mono';
     const pk = (info && typeof info.pkts!=='undefined') ? ` · pkts:${info.pkts}` : '';
     const inpk = (info && typeof info.in!=='undefined') ? ` · in:${info.in}` : '';
-    p.innerHTML = `bind ${port}<span class="mut">${inpk}${pk}</span>`;
+    const id = typeof bindInfo === 'object' ? bindInfo.id : bindInfo;
+    const label = (typeof bindInfo === 'object' && bindInfo.label) ? bindInfo.label : `bind ${id}`;
+    p.innerHTML = `${label}<span class="mut"> · id:${id}${inpk}${pk}</span>`;
     const x = document.createElement('button');
     x.className = 'rm';
     x.title = 'Remove mapping';
@@ -537,8 +569,13 @@
         const m = document.createElement('div'); m.className='empty'; m.textContent='(none)'; list.appendChild(m);
       }else{
         for(const it of arr){
-          const pill = mkBindPill(it.port, {pkts:it.pkts, in:it.in}, async ()=>{
-            try{ await removeDestFromPort(it.port, useToken); log(`Removed bind ${it.port} → ${displayLabel}`,'ok'); await refresh(); }
+          const pill = mkBindPill(it, {pkts:it.pkts, in:it.in}, async ()=>{
+            try{
+              await removeDestFromRelay(it.id, useToken);
+              const name = it.label || `bind ${it.id}`;
+              log(`Removed ${name} → ${displayLabel}`,'ok');
+              await refresh();
+            }
             catch(e){ log(e,'err'); }
           });
           list.appendChild(pill);
@@ -593,8 +630,13 @@
         const m = document.createElement('div'); m.className='empty'; m.textContent='(none)'; list.appendChild(m);
       }else{
         for(const it of arr){
-          const pill = mkBindPill(it.port, {pkts:it.pkts, in:it.in}, async ()=>{
-            try{ await removeDestFromPort(it.port, useToken); log(`Removed bind ${it.port} → ${displayLabel}`,'ok'); await refresh(); }
+          const pill = mkBindPill(it, {pkts:it.pkts, in:it.in}, async ()=>{
+            try{
+              await removeDestFromRelay(it.id, useToken);
+              const name = it.label || `bind ${it.id}`;
+              log(`Removed ${name} → ${displayLabel}`,'ok');
+              await refresh();
+            }
             catch(e){ log(e,'err'); }
           });
           list.appendChild(pill);
@@ -634,8 +676,13 @@
         const m = document.createElement('div'); m.className='empty'; m.textContent='(none)'; list.appendChild(m);
       }else{
         for(const it of arr){
-          const pill = mkBindPill(it.port, {in:it.in}, async ()=>{
-            try{ await clearGroupFromPort(it.port, g.members); log(`Removed bind ${it.port} from group ${g.name}`,'ok'); await refresh(); }
+          const pill = mkBindPill(it, {in:it.in}, async ()=>{
+            try{
+              await clearGroupFromRelay(it.id, g.members);
+              const name = it.label || `bind ${it.id}`;
+              log(`Removed ${name} from group ${g.name}`,'ok');
+              await refresh();
+            }
             catch(e){ log(e,'err'); }
           });
           list.appendChild(pill);
@@ -660,15 +707,30 @@
       if(!hasAny){
         const el = document.createElement('div');
         el.className='chip';
-        el.innerHTML = `<strong>bind ${r.port}</strong> <span class="tag">in:${r.pkts_in||0}</span>`;
-        wireChip(el, r.port);
+        const id = relayId(r);
+        const name = relayLabel(r);
+        const enabledTag = relayIsUart(r) ? `<span class="tag">${r.enabled ? 'UART on' : 'UART off'}</span>` : '';
+        el.innerHTML = `<strong>${name}</strong> <span class="tag mono">${id}</span> <span class="tag">in:${r.pkts_in||0}</span>${enabledTag}`;
+        wireChip(el, id);
         items.push(el);
       }
     }
     if(items.length===0){
       const m = document.createElement('div'); m.className='empty'; m.textContent='(none)'; frag.appendChild(m);
     }else{
-      for(const el of items.sort((a,b)=>Number(a.dataset.port)-Number(b.dataset.port))) frag.appendChild(el);
+      items.sort((a,b)=>{
+        const idA = a.dataset.id||'';
+        const idB = b.dataset.id||'';
+        const ua = canonicalUartToken(idA);
+        const ub = canonicalUartToken(idB);
+        if(ua && !ub) return 1;
+        if(!ua && ub) return -1;
+        const na = Number(idA);
+        const nb = Number(idB);
+        if(Number.isFinite(na) && Number.isFinite(nb)) return na-nb;
+        return idA.localeCompare(idB);
+      });
+      for(const el of items) frag.appendChild(el);
     }
     box.appendChild(frag);
   }
@@ -701,7 +763,7 @@
     const sel = state.selected; // keep selection
     await Promise.all([loadConfig(), loadStatus()]);
     renderBinds(); renderTargets(); renderUnmapped();
-    if (sel){ state.selected = sel; const chip = document.querySelector(`.chip[data-port="${sel}"]`); if(chip) chip.classList.add('selected'); }
+    if (sel){ state.selected = sel; const chip = document.querySelector(`.chip[data-id="${sel}"]`); if(chip) chip.classList.add('selected'); }
   }
 
   /* ---------------- Header buttons ---------------- */
@@ -745,7 +807,7 @@
       await loadStatus();
       const sel = state.selected;
       renderBinds(); renderTargets(); renderUnmapped();
-      if (sel){ state.selected = sel; const chip = document.querySelector(`.chip[data-port="${sel}"]`); if(chip) chip.classList.add('selected'); }
+      if (sel){ state.selected = sel; const chip = document.querySelector(`.chip[data-id="${sel}"]`); if(chip) chip.classList.add('selected'); }
     }catch(_){}
   }, 1500);
 })();
