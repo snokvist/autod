@@ -1326,7 +1326,7 @@ static void http_handle_status(int fd){
         }
         APPEND("]}");
     }
-    APPEND(",\"uarts\":[");
+    APPEND("],\"uarts\":[");
     for (int ui=0; ui<MAX_UARTS; ui++){
         if (ui) APPEND(",");
         struct uart_runtime *u = &UARTS[ui];
