@@ -106,8 +106,8 @@ $1-ip2uart: $$($1_BIN_IP2U)
 
 # Link rules (strip output if strip tool exists)
 $$($1_BIN_CORE): $$($1_OBJ_CORE)
-        $$($1_CC) $$^ $$($1_LDFLAGS) $$($1_LDLIBS) -o $$@
-        @command -v $$($1_STRIP) >/dev/null 2>&1 && $$($1_STRIP) $$@ || true
+	$$($1_CC) $$^ $$($1_LDFLAGS) $$($1_LDLIBS) -o $$@
+	@command -v $$($1_STRIP) >/dev/null 2>&1 && $$($1_STRIP) $$@ || true
 
 $$($1_BIN_SSE): $$($1_OBJ_SSE)
 	$$($1_CC) $$^ -o $$@
@@ -127,11 +127,11 @@ $$($1_BIN_IP2U): $$($1_OBJ_IP2U)
 
 # Compile rules
 $$($1_BUILD)/%.o: $(SRC_DIR)/%.c | $$($1_BUILD)
-        $$($1_CC) $$($1_CPPFLAGS) $$($1_CFLAGS) -c $$< -o $$@
+	$$($1_CC) $$($1_CPPFLAGS) $$($1_CFLAGS) -c $$< -o $$@
 
 # CivetWeb with extra flag
 $$($1_BUILD)/civetweb.o: $(SRC_DIR)/civetweb.c | $$($1_BUILD)
-        $$($1_CC) $$($1_CPPFLAGS) $$($1_CFLAGS_CIVETWEB) -c $$< -o $$@
+	$$($1_CC) $$($1_CPPFLAGS) $$($1_CFLAGS_CIVETWEB) -c $$< -o $$@
 
 # Tool compile rules with their specific flags
 $$($1_BUILD)/sse_tail.o: $(SRC_DIR)/sse_tail.c | $$($1_BUILD)
@@ -175,11 +175,11 @@ tools-musl: sse_tail-musl udp_relay-musl antenna_osd-musl ip2uart-musl
 tools-gnu: sse_tail-gnu udp_relay-gnu antenna_osd-gnu ip2uart-gnu
 
 clean:
-        rm -rf build \
-               $(APP) $(APP)-musl $(APP)-gnu \
-               sse_tail sse_tail-musl sse_tail-gnu \
-               udp_relay udp_relay-musl udp_relay-gnu \
-               antenna_osd antenna_osd-musl antenna_osd-gnu \
+	rm -rf build \
+	       $(APP) $(APP)-musl $(APP)-gnu \
+	       sse_tail sse_tail-musl sse_tail-gnu \
+	       udp_relay udp_relay-musl udp_relay-gnu \
+	       antenna_osd antenna_osd-musl antenna_osd-gnu \
 	       ip2uart ip2uart-musl ip2uart-gnu \
 	       joystick2crfs
 
@@ -272,13 +272,13 @@ install: native udp_relay joystick2crfs
 	fi
 
 help:
-        @echo "Builds:"
-        @echo "  make                 -> native => ./$(APP)"
-        @echo "  make musl            -> musl   => ./$(APP)-musl"
-        @echo "  make gnu             -> gnu    => ./$(APP)-gnu"
-        @echo ""
-        @echo "Utilities:"
-        @echo "  make tools           -> native sse_tail and udp_relay"
+	@echo "Builds:"
+	@echo "  make                 -> native => ./$(APP)"
+	@echo "  make musl            -> musl   => ./$(APP)-musl"
+	@echo "  make gnu             -> gnu    => ./$(APP)-gnu"
+	@echo ""
+	@echo "Utilities:"
+	@echo "  make tools           -> native sse_tail and udp_relay"
 	@echo "  make tools-musl      -> musl  sse_tail-musl and udp_relay-musl"
 	@echo "  make tools-gnu       -> gnu   sse_tail-gnu  and udp_relay-gnu"
 	@echo ""
