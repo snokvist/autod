@@ -877,9 +877,8 @@ static int uart_apply_one(int idx, const struct config *c){
         }
     }
 
-    fprintf(stderr,"UART[%s] enabled on %s (baud=%d, dests=%d)
-",
-            u->token[0]?u->token:"uart", u->cfg.device, u->cfg.baud, u->dest_cnt);
+    fprintf(stderr, "UART[%s] enabled on %s (baud=%d, dests=%d)\n",
+            u->token[0] ? u->token : "uart", u->cfg.device, u->cfg.baud, u->dest_cnt);
     return 0;
 }
 
@@ -1302,11 +1301,10 @@ static void http_handle_status(int fd){
         if (off >= STATUS_CAP) { goto SEND; } \
     } while (0)
 
-    APPEND("HTTP/1.0 200 OK
-Content-Type: application/json
-Connection: close
-
-");
+    APPEND("HTTP/1.0 200 OK\r\n"
+           "Content-Type: application/json\r\n"
+           "Connection: close\r\n"
+           "\r\n");
     APPEND("{\"relays\":[");
     for (int i=0;i<REL_N;i++){
         if (i) APPEND(",");
