@@ -30,12 +30,12 @@ Baseline assumption: a Radxa Zero 3 runs the ground station with autod and joyst
 2. **Vehicle Node**
    - Deploy autod alongside `ip2uart` (from `make tools` or `make install`).
    - Wire the UART from the flight controller or ExpressLRS module and record its device path (for example `/dev/ttyUSB0`).
-   - Edit `/etc/ip2uart.conf` with the chosen network mode (`tcp_server`, `tcp_client`, or `udp_peer`), baud rate (commonly 420000 for CRSF), and logging cadence. Confirm the daemon can reload the file with `SIGHUP` during tuning.
+   - Edit `/etc/ip2uart.conf` with the desired UART settings and UDP peer parameters (baud rate commonly 420000 for CRSF). Confirm the daemon can reload the file with `SIGHUP` during tuning.
    - Start autod to host status dashboards and expose control endpoints for remote management.
 
 3. **Link Orchestration**
    - autod’s HTTP API (documented in `README.md`) lets you start/stop helpers, stream telemetry, and push UDP packets. Use it to coordinate joystick2crfs start-up once a controller is detected and to monitor ip2uart statistics.
-   - Establish an IP path between the nodes (direct Wi-Fi, Ethernet tether, or VPN). When using TCP client mode, ip2uart will automatically redial if the ground link drops.
+   - Establish an IP path between the nodes (direct Wi-Fi, Ethernet tether, or VPN).
    - Use autod’s SSE feeds to visualize link health in the browser UI and surface alarms if cadence deviates from the expected rate configured in ip2uart.
 
 ## Alternative CRSF Routing Scenarios
@@ -43,20 +43,20 @@ ip2uart can operate on either side of the network tunnel, enabling several CRSF 
 
 ### A. Ground Station as CRSF Forwarder (ELRS Receiver to IP)
 1. Attach an ExpressLRS receiver to the ground station via USB/UART.
-2. Configure `/etc/ip2uart.conf` with `uart_backend=tty` pointed at the receiver and `net_mode=tcp_server` or `udp_peer` to stream frames outward.
+2. Configure `/etc/ip2uart.conf` with `uart_backend=tty` pointed at the receiver and the appropriate UDP peer settings to stream frames outward.
 3. Run autod to expose the helper’s status and, if desired, relay the CRSF stream to other tools through its `/udp` endpoint or SSE announcements.
 
 **Use case:** Bench testing a vehicle or forwarding live CRSF telemetry to a remote simulator while the airborne radio stays offline.
 
 ### B. Ground Station Driving an ELRS Transmitter (CRSF to ELRS TX)
 1. Generate CRSF frames with joystick2crfs using the calibrated controller profile.
-2. Configure ip2uart in transmit mode (UART connected to the ELRS transmitter module) and choose a network transport for the upstream frames.
+2. Configure ip2uart in transmit mode (UART connected to the ELRS transmitter module) and point the UDP peer at the ground station.
 3. Employ autod to synchronize process lifecycles, adjust channel maps remotely, and log statistics for later analysis.
 
 **Use case:** Replace a handheld transmitter with a networked ground station while retaining ELRS compatibility.
 
 ### C. Vehicle Loopback for Diagnostics
-1. Run ip2uart directly on the vehicle with `uart_backend=tty` and `net_mode=udp_peer` to mirror CRSF traffic back to the ground station.
+1. Run ip2uart directly on the vehicle with `uart_backend=tty` configured for UDP peer mode to mirror CRSF traffic back to the ground station.
 2. Capture and inspect the stream with another ip2uart or a UDP consumer to validate timing, packet integrity, and channel values.
 
 **Use case:** Debugging intermittent control issues without modifying the primary control loop.
