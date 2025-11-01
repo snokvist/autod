@@ -687,13 +687,16 @@ int main(int argc, char **argv){
                         }
                     }
                     int outfd = (cfg.uart_backend==UART_STDIO)? STDOUT_FILENO : st.fd_uart;
+                    size_t accepted = 0;
                     ssize_t w=write(outfd, buf_net, (size_t)r);
                     if(w>0){
-                        st.bytes_net_to_uart+=(uint64_t)w; st.pkts_net_to_uart+=1;
+                        st.bytes_net_to_uart+=(uint64_t)w;
+                        accepted += (size_t)w;
                         if(w<r){
                             size_t rem=(size_t)r-(size_t)w;
                             size_t wr=ring_write(&st.uart_out, buf_net+w, rem);
                             if(wr<rem) st.drops_net_to_uart+=(uint64_t)(rem-wr);
+                            if(wr>0) accepted += wr;
                             if(cfg.uart_backend==UART_STDIO){
                                 if(!st.stdout_registered){ add_ep(st.epfd, STDOUT_FILENO, EPOLLOUT); st.stdout_registered=true; }
                             } else {
@@ -703,11 +706,15 @@ int main(int argc, char **argv){
                     } else if(w<0 && (errno==EAGAIN||errno==EWOULDBLOCK)){
                         size_t wr=ring_write(&st.uart_out, buf_net, (size_t)r);
                         if(wr<(size_t)r) st.drops_net_to_uart+=(uint64_t)((size_t)r-wr);
+                        if(wr>0) accepted += wr;
                         if(cfg.uart_backend==UART_STDIO){
                             if(!st.stdout_registered){ add_ep(st.epfd, STDOUT_FILENO, EPOLLOUT); st.stdout_registered=true; }
                         } else {
                             mod_ep(st.epfd, st.fd_uart, EPOLLIN|EPOLLOUT);
                         }
+                    }
+                    if(accepted>0){
+                        st.pkts_net_to_uart+=1;
                     }
                 }
             }
