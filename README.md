@@ -28,7 +28,7 @@ Key executables built from `src/`:
 - **`autod`** – HTTP control daemon.
 - **`sse_tail`** – Convenience tool that follows Server-Sent Events endpoints.
 - **`udp_relay`** – UDP fan-out utility (with optional UART sink) controlled through the daemon/UI.
-- **`ip2uart`** – Bidirectional bridge between a UART (real TTY or stdio) and TCP/UDP sockets.
+- **`ip2uart`** – Bidirectional bridge between a UART (real TTY or stdio) and a UDP peer.
 - **`antenna_osd`** – MSP/Canvas OSD renderer with configurable telemetry overlays.
 - **`joystick2crfs`** – SDL2 joystick bridge that emits CRSF frames and optional SSE telemetry.
 
@@ -158,7 +158,7 @@ Static files under `html/` can be served by the daemon (when `serve_ui=1`) or by
 - `antenna_osd`: build with `make antenna_osd` (or the `musl`/`gnu` variants) to render an MSP/Canvas OSD overlay. It reads `/etc/antenna_osd.conf` by default and accepts an alternate path as its sole positional argument, with a sample config in [`configs/antenna_osd.conf`](configs/antenna_osd.conf). The helper can poll up to two telemetry files, smooth RSSI values across samples, and exposes configurable bar glyphs, headers, and system-message overlays. When both `info_file` and `info_file2` are provided, prefix telemetry keys with `file1:` or `file2:` to choose which source supplies each value.
 - `sse_tail`: build with `make tools` and run `./sse_tail http://host:port/path` to observe SSE streams announced in the config.
 - `udp_relay`: controlled through its own config file [`configs/udp_relay.conf`](configs/udp_relay.conf). When installed system-wide the default path is `/etc/udp_relay/udp_relay.conf`; you can run it directly or via UI bindings. Dest tokens now accept the literal UART tokens (`uart`, `uart1`, …), letting binds forward into up to four configured UART sinks. Populate the matching `uart<n>_*` keys (`uart0_device`, etc.) and add `bind=uart`/`bind=uart1:ip:port` entries so each serial bridge shows up as a regular bind source and can fan out to UDP peers. Outbound packets reuse the daemon's global `src_ip`, so no UART-specific source binding is required.
-- `ip2uart`: run `make ip2uart` (or any of the cross variants) to build a bidirectional bridge between a UART and a TCP or UDP peer. It uses `/etc/ip2uart.conf` by default; a sample lives in [`configs/ip2uart.conf`](configs/ip2uart.conf). Pass `-c /path/to/conf` to point at a different configuration, `-v`/`-vv`/`-vvv` for progressively verbose logging, and send `SIGHUP` to reload the config without dropping the process.
+- `ip2uart`: run `make ip2uart` (or any of the cross variants) to build a bidirectional bridge between a UART and a UDP peer. It uses `/etc/ip2uart.conf` by default; a sample lives in [`configs/ip2uart.conf`](configs/ip2uart.conf). Pass `-c /path/to/conf` to point at a different configuration, use `-v` for once-per-second stats, and send `SIGHUP` to reload the config without dropping the process.
 - `joystick2crfs`: build with `make joystick2crfs` to translate an SDL2 joystick into CRSF or MAVLink RC frames. The utility requires SDL2 development headers (`libsdl2-dev` on Debian-based systems) and reads `/etc/joystick2crfs.conf` by default. A documented sample lives in [`configs/joystick2crfs.conf`](configs/joystick2crfs.conf); adjust the transport, SSE streaming options, and channel mapping there. Set `protocol=crsf` (default) for the existing 16-channel CRSF frame packer or `protocol=mavlink` to emit MAVLink v2 `RC_CHANNELS_OVERRIDE` messages with the first eight channels scaled to 1000–2000 µs. When using MAVLink, tune `mavlink_sysid`, `mavlink_compid`, `mavlink_target_sysid`, and `mavlink_target_compid` to match your vehicle IDs. The `arm_toggle` key (default `5`) designates the momentary control that latches channel 5 high after a 1 s hold and releases on a short tap. Send `SIGHUP` to reload the config without restarting; when `sse_enabled=true` the binary hosts a single-client SSE feed at `sse_bind` + `sse_path`, publishing the latest channel values at 10 Hz.
 
 For a complete walk-through that ties `autod`, `joystick2crfs`, and `ip2uart` together across a ground/vehicle link, read [`remote.md`](remote.md).
@@ -170,22 +170,12 @@ The bridge consumes a simple `key=value` configuration file. Important options e
 | Section | Key | Description |
 | ------- | --- | ----------- |
 | Selector | `uart_backend` | `tty` opens the TTY listed in `uart_device`, while `stdio` reads stdin and writes stdout (useful for chaining processes). |
-| Selector | `net_mode` | Choose `tcp_server`, `tcp_client`, or `udp_peer`. The TCP server accepts a single client at a time; the client mode auto-reconnects. |
 | UART | `uart_device`, `uart_baud`, `uart_databits`, `uart_parity`, `uart_stopbits`, `uart_flow` | Standard serial-port parameters when `uart_backend=tty`. |
-| TCP server | `listen_addr`, `listen_port`, `tcp_listen_backlog` | Bind address/port and backlog depth for `net_mode=tcp_server`. |
-| TCP client | `remote_host`, `remote_port`, `reconnect_delay_ms`, `tcp_nodelay` | Target host/port plus timer-driven reconnect delay for `net_mode=tcp_client`. |
-| UDP peer | `udp_bind_addr`, `udp_bind_port`, `udp_peer_addr`, `udp_peer_port` | Local bind address/port and optional static peer for UDP. If no peer is set the bridge accepts datagrams from any sender and only uses outbound addressing when a peer is provided. |
+| UDP peer | `udp_bind_addr`, `udp_bind_port`, `udp_peer_addr`, `udp_peer_port` | Local bind address/port and optional static peer for UDP. If no peer is set the bridge accepts datagrams from any sender and learns the outbound destination from the most recent packet. |
 | UDP coalescing | `udp_coalesce_bytes`, `udp_coalesce_idle_ms`, `udp_max_datagram` | Controls the packet-aggregation buffer before flushing to the peer. |
-| Logging/stats | `log_file`, `dump_on_start`, `status_interval_ms`, `expected_hz` | Periodically dump counters, timing metrics, and TCP peer metadata to an INI-style log file. `expected_hz` (0 disables) lets the daemon compute cadence health scores. |
 | Buffers | `rx_buf`, `tx_buf` | Size in bytes of receive scratch buffers and the ring buffers used for non-blocking short-write handling. |
 
-The daemon keeps ring buffers for both directions so short writes (for example when a UART blocks) do not stall the network path. When `net_mode=udp_peer` is active the bridge gathers bytes until the coalesce threshold is met or the idle timer expires, logging why a datagram was sent. Statistics snapshots include byte and packet counters for each direction plus TCP session metadata, rolling inter-arrival timing (min/max/p95 and recent packets-per-second), and optional cadence health scores when `expected_hz` is configured. The TCP client path maintains a timer-driven reconnect loop so UART reads and writes continue immediately even while the socket is offline, and the TCP server backlog can be tuned to absorb bursts of incoming clients. Leaving `udp_peer_addr` blank tells the bridge to learn the remote endpoint from inbound packets automatically, which keeps UART data flowing without manual configuration.
-
-##### Behavior notes
-
-- `reconnect_delay_ms` acts as a non-blocking retry interval; the bridge continues servicing the UART while it waits to redial the TCP client connection.
-- `tcp_listen_backlog` defaults to 8 so short reconnect storms are queued instead of refused; raise or lower it to fit your deployment.
-- If `udp_peer_addr` is empty the bridge updates its outbound peer each time it hears from a sender, so the last inbound datagram controls the return path.
+The daemon keeps ring buffers for both directions so short writes (for example when a UART blocks) do not stall the network path. Bytes read from the UART accumulate until the coalesce threshold is met or the idle timer expires, at which point a datagram is emitted. Launching ip2uart with `-v` prints once-per-second stats (packets/s, bytes/s, and drop counters) to stderr. Leaving `udp_peer_addr` blank tells the bridge to learn the remote endpoint from inbound packets automatically, which keeps UART data flowing without manual configuration.
 
 ---
 
