@@ -1913,8 +1913,8 @@ const udpSenderImageState = { token:0 };
 
 const UDP_SENDER_ROI_KEYS = ['xsize','ysize','xpos','ypos'];
 const UDP_SENDER_ROI_LIMITS = Object.freeze({
-  xsize:{ min:25, max:100 },
-  ysize:{ min:25, max:100 },
+  xsize:{ min:25, max:300 },
+  ysize:{ min:25, max:300 },
   xpos:{ min:0, max:100 },
   ypos:{ min:0, max:100 }
 });
@@ -1981,18 +1981,18 @@ function clampUdpSenderCenter(centerKey, sizeKey, fallback){
   if (!Number.isFinite(next)) next = 0;
   const minBound = Math.max(minLimit, half);
   const maxBound = Math.min(maxLimit, 100 - half);
-  if (minBound > maxBound){
-    const fallbackQuantized = quantizeUdpSenderValue(fallback);
-    const safe = Number.isFinite(fallbackQuantized) ? fallbackQuantized : Math.max(minLimit, Math.min(maxLimit, 50));
-    if (udpSenderState.values[centerKey] !== safe){
-      udpSenderState.values[centerKey] = Math.round(Math.max(minLimit, Math.min(maxLimit, safe)));
-      return true;
-    }
-    return false;
-  }
   const step = UDP_SENDER_STEP;
-  const minStep = Math.ceil(minBound / step) * step;
-  const maxStep = Math.floor(maxBound / step) * step;
+  let desiredLower = minBound;
+  let desiredUpper = maxBound;
+  if (minBound > maxBound){
+    // When the ROI is larger than the viewport (e.g. shrink presets > 100%),
+    // allow the operator's chosen center within the full limit range instead
+    // of forcing a fallback value.
+    desiredLower = minLimit;
+    desiredUpper = maxLimit;
+  }
+  const minStep = Math.ceil(desiredLower / step) * step;
+  const maxStep = Math.floor(desiredUpper / step) * step;
   let lower = Math.max(minLimit, Math.min(maxLimit, minStep));
   let upper = Math.max(minLimit, Math.min(maxLimit, maxStep));
   if (upper < lower) upper = lower;
