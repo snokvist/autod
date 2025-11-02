@@ -1913,8 +1913,8 @@ const udpSenderImageState = { token:0 };
 
 const UDP_SENDER_ROI_KEYS = ['xsize','ysize','xpos','ypos'];
 const UDP_SENDER_ROI_LIMITS = Object.freeze({
-  xsize:{ min:25, max:100 },
-  ysize:{ min:25, max:100 },
+  xsize:{ min:25, max:300 },
+  ysize:{ min:25, max:300 },
   xpos:{ min:0, max:100 },
   ypos:{ min:0, max:100 }
 });
