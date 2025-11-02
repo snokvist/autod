@@ -4,7 +4,7 @@
 The remote-control stack brings together three C utilities that ship with this repository:
 
 1. **autod web UI / API backend** – a CivetWeb-powered HTTP control plane written in C. It exposes discovery, execution, UDP relay, and helper-management endpoints while optionally serving the bundled HTML UI. Operators use it to supervise joystick2crfs and ip2uart, persist configuration, and surface telemetry through Server-Sent Events.
-2. **joystick2crfs** – an SDL2-based utility that samples a USB HID controller at up to 250 Hz, maps inputs to 16 CRSF channels, and outputs frames over UART or UDP. Runtime behaviour is defined in `/etc/joystick2crfs.conf`.
+2. **joystick2crfs** – an SDL2-based utility that samples a USB HID controller at up to 250 Hz, maps inputs to 16 CRSF channels, and outputs frames over UDP. Runtime behaviour is defined in `/etc/joystick2crfs.conf`.
 3. **ip2uart** – a UART↔IP bridge with TCP server/client and UDP peer modes. It can coalesce UDP packets, maintain reconnect loops, and reload settings from `/etc/ip2uart.conf` on `SIGHUP`.
 
 Together they keep CRSF as the control language while IP networking provides transport flexibility.
@@ -24,7 +24,7 @@ Baseline assumption: a Radxa Zero 3 runs the ground station with autod and joyst
 1. **Ground Station (Radxa Zero 3)**
    - Build and install the tools with `make install`, or copy `autod`, `joystick2crfs`, and the UI bundle to the device.
    - Connect the USB controller and confirm it registers under `/dev/input/js*` or through SDL2 diagnostics.
-   - Populate `/etc/joystick2crfs.conf` with the joystick index, channel map, inversion flags, deadbands, and UART/UDP transport parameters. Enable SSE streaming if the autod UI should show live channels.
+   - Populate `/etc/joystick2crfs.conf` with the joystick index, channel map, inversion flags, deadbands, and UDP transport parameters. Enable SSE streaming if the autod UI should show live channels.
    - Launch autod (optionally via `systemd`) so the HTML UI and helper endpoints are available. Configure joystick2crfs to run under autod supervision or as a companion service.
 
 2. **Vehicle Node**
