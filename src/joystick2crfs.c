@@ -1,9 +1,9 @@
 /**
- * joystick2crfs.c - SDL joystick to CRSF bridge with UART/UDP outputs
+ * joystick2crfs.c - SDL joystick to CRSF bridge with UDP/SSE outputs
  *
  * The utility samples the selected joystick at 250 Hz, maps its controls to
- * 16 CRSF channels, and streams the packed frames either directly over a UART
- * or to a UDP peer. Runtime behaviour is configured exclusively via a config
+ * 16 CRSF channels, and streams the packed frames to a UDP peer. Runtime
+ * behaviour is configured exclusively via a config
  * file (default: /etc/joystick2crfs.conf).
  */
 
@@ -24,7 +24,6 @@
 #include <strings.h>
 #include <sys/socket.h>
 #include <sys/time.h>
-#include <termios.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -67,12 +66,8 @@
 typedef struct {
     int rate;                   /* 50 | 125 | 250 Hz */
     int stats;                  /* print timing stats */
-    int simulation;             /* skip serial output */
     int channels;               /* print channels */
     int protocol;               /* PROTOCOL_* selector */
-    int serial_enabled;
-    char serial_device[128];
-    int serial_baud;
     int udp_enabled;
     char udp_target[256];
     int sse_enabled;
@@ -210,86 +205,6 @@ static size_t pack_mavlink_rc_override(const config_t *cfg, const uint16_t ch[16
     out[off++] = (uint8_t)(crc >> 8);
 
     return off;
-}
-
-static speed_t baud_const(int baud)
-{
-    switch (baud) {
-        case   9600: return B9600;
-        case  19200: return B19200;
-        case  38400: return B38400;
-        case  57600: return B57600;
-        case 115200: return B115200;
-#ifdef B230400
-        case 230400: return B230400;
-#endif
-#ifdef B400000
-        case 400000: return B400000;
-#endif
-        default:     return 0;
-    }
-}
-
-static int open_serial(const char *dev, int baud)
-{
-    int fd = open(dev, O_RDWR | O_NOCTTY | O_SYNC | O_NONBLOCK);
-    if (fd < 0) {
-        perror("serial");
-        return -1;
-    }
-
-    struct termios t;
-    if (tcgetattr(fd, &t) < 0) {
-        perror("tcgetattr");
-        close(fd);
-        return -1;
-    }
-    cfmakeraw(&t);
-
-    speed_t sp = baud_const(baud);
-    if (!sp) {
-        fprintf(stderr, "Unsupported baud %d, falling back to 115200\n", baud);
-        sp = B115200;
-    }
-    if (cfsetspeed(&t, sp) < 0) {
-        perror("cfsetspeed");
-        close(fd);
-        return -1;
-    }
-
-    t.c_cflag |= CLOCAL | CREAD;
-    if (tcsetattr(fd, TCSANOW, &t) < 0) {
-        perror("tcsetattr");
-        close(fd);
-        return -1;
-    }
-    return fd;
-}
-
-static int send_all(int fd, const uint8_t *buf, size_t len)
-{
-    size_t off = 0;
-    while (off < len) {
-        ssize_t n = write(fd, buf + off, len - off);
-        if (n > 0) {
-            off += (size_t)n;
-            continue;
-        }
-        if (n == 0) {
-            errno = EPIPE;
-            return -1;
-        }
-        if (errno == EINTR) {
-            continue;
-        }
-        if (errno == EAGAIN || errno == EWOULDBLOCK) {
-            struct timespec ts = {0, 1000000L};
-            nanosleep(&ts, NULL);
-            continue;
-        }
-        return -1;
-    }
-    return 0;
 }
 
 static int parse_host_port(const char *spec, char **host_out, char **port_out)
@@ -828,12 +743,8 @@ static void config_defaults(config_t *cfg)
 {
     cfg->rate = 125;
     cfg->stats = 0;
-    cfg->simulation = 0;
     cfg->channels = 0;
     cfg->protocol = PROTOCOL_CRSF;
-    cfg->serial_enabled = 0;
-    snprintf(cfg->serial_device, sizeof(cfg->serial_device), "%s", "/dev/ttyUSB0");
-    cfg->serial_baud = 115200;
     cfg->udp_enabled = 1;
     snprintf(cfg->udp_target, sizeof(cfg->udp_target), "%s", "192.168.0.1:14550");
     cfg->sse_enabled = 0;
@@ -891,11 +802,6 @@ static int config_load(config_t *cfg, const char *path)
             if (parse_bool_value(val, &b) == 0) {
                 cfg->stats = b;
             }
-        } else if (!strcasecmp(key, "simulation")) {
-            int b;
-            if (parse_bool_value(val, &b) == 0) {
-                cfg->simulation = b;
-            }
         } else if (!strcasecmp(key, "channels")) {
             int b;
             if (parse_bool_value(val, &b) == 0) {
@@ -909,15 +815,6 @@ static int config_load(config_t *cfg, const char *path)
             } else {
                 fprintf(stderr, "%s:%d: protocol must be 'crsf' or 'mavlink'\n", path, lineno);
             }
-        } else if (!strcasecmp(key, "serial_enabled")) {
-            int b;
-            if (parse_bool_value(val, &b) == 0) {
-                cfg->serial_enabled = b;
-            }
-        } else if (!strcasecmp(key, "serial_device")) {
-            snprintf(cfg->serial_device, sizeof(cfg->serial_device), "%s", val);
-        } else if (!strcasecmp(key, "serial_baud")) {
-            cfg->serial_baud = atoi(val);
         } else if (!strcasecmp(key, "udp_enabled")) {
             int b;
             if (parse_bool_value(val, &b) == 0) {
@@ -1098,7 +995,6 @@ int main(int argc, char **argv)
             break;
         }
 
-        int serial_fd = -1;
         int udp_fd = -1;
         int sse_fd = -1;
         int sse_client_fd = -1;
@@ -1112,14 +1008,6 @@ int main(int argc, char **argv)
         int fatal_error = 0;
         int restart_requested = 0;
         int restart_sleep = 0;
-
-        if (cfg.serial_enabled && !cfg.simulation) {
-            serial_fd = open_serial(cfg.serial_device, cfg.serial_baud);
-            if (serial_fd < 0) {
-                exit_code = 1;
-                fatal_error = 1;
-            }
-        }
 
         if (!fatal_error && cfg.udp_enabled) {
             if (cfg.udp_target[0] == '\0') {
@@ -1153,9 +1041,6 @@ int main(int argc, char **argv)
             if (js) {
                 SDL_JoystickClose(js);
             }
-            if (serial_fd >= 0) {
-                close(serial_fd);
-            }
             if (udp_fd >= 0) {
                 close(udp_fd);
             }
@@ -1168,7 +1053,7 @@ int main(int argc, char **argv)
             break;
         }
 
-        if (serial_fd < 0 && udp_fd < 0 && (!cfg.sse_enabled || sse_fd < 0)) {
+        if (udp_fd < 0 && (!cfg.sse_enabled || sse_fd < 0)) {
             fprintf(stderr, "Warning: no output destinations configured; frames will stay local.\n");
         }
 
@@ -1202,11 +1087,8 @@ int main(int argc, char **argv)
 
         double t_min = 1e9, t_max = 0.0, t_sum = 0.0;
         uint64_t t_cnt = 0;
-        uint64_t serial_packets = 0;
         uint64_t udp_packets = 0;
         uint64_t sse_packets = 0;
-        char rxbuf[256];
-        size_t rxlen = 0;
 
         uint8_t frame[FRAME_BUFFER_MAX];
         size_t frame_len = 0;
@@ -1392,14 +1274,6 @@ int main(int argc, char **argv)
                         udp_packets++;
                     }
                 }
-                if (frame_len > 0 && serial_fd >= 0) {
-                    if (send_all(serial_fd, frame, frame_len) < 0) {
-                        perror("serial write");
-                        g_run = 0;
-                    } else {
-                        serial_packets++;
-                    }
-                }
             }
             loops++;
 
@@ -1420,10 +1294,6 @@ int main(int argc, char **argv)
                         printf("loop min %.3f  max %.3f  avg %.3f ms",
                                t_min * 1e3, t_max * 1e3,
                                (t_sum / (double)t_cnt) * 1e3);
-                        if (serial_fd >= 0) {
-                            printf("  serial %llu/s",
-                                   (unsigned long long)serial_packets);
-                        }
                         if (udp_fd >= 0) {
                             printf("  udp %llu/s",
                                    (unsigned long long)udp_packets);
@@ -1437,26 +1307,8 @@ int main(int argc, char **argv)
                         t_max = 0.0;
                         t_sum = 0.0;
                         t_cnt = 0;
-                        serial_packets = 0;
                         udp_packets = 0;
                         sse_packets = 0;
-                    }
-                }
-            }
-
-            if (cfg.stats && serial_fd >= 0) {
-                char tmp[64];
-                ssize_t n;
-                while ((n = read(serial_fd, tmp, sizeof(tmp))) > 0) {
-                    for (ssize_t i = 0; i < n; i++) {
-                        if (rxlen < sizeof(rxbuf) - 1) {
-                            rxbuf[rxlen++] = tmp[i];
-                        }
-                        if (tmp[i] == '\n') {
-                            rxbuf[rxlen] = '\0';
-                            fputs(rxbuf, stdout);
-                            rxlen = 0;
-                        }
                     }
                 }
             }
@@ -1471,10 +1323,6 @@ int main(int argc, char **argv)
         if (js) {
             SDL_JoystickClose(js);
             js = NULL;
-        }
-        if (serial_fd >= 0) {
-            close(serial_fd);
-            serial_fd = -1;
         }
         if (udp_fd >= 0) {
             close(udp_fd);
