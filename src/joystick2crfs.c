@@ -83,6 +83,7 @@ typedef struct {
     int arm_toggle;             /* -1 disables, otherwise channel index */
     int joystick_index;
     int rescan_interval;        /* seconds */
+    int use_gamecontroller;
 } config_t;
 
 /* ------------------------------------------------------------------------- */
@@ -861,6 +862,7 @@ static void config_defaults(config_t *cfg)
     cfg->arm_toggle = 4;
     cfg->joystick_index = 0;
     cfg->rescan_interval = 5;
+    cfg->use_gamecontroller = 1;
     for (int i = 0; i < 16; i++) {
         cfg->map[i] = i;
         cfg->invert[i] = 0;
@@ -962,6 +964,11 @@ static int config_load(config_t *cfg, const char *path)
             cfg->joystick_index = atoi(val);
         } else if (!strcasecmp(key, "rescan_interval")) {
             cfg->rescan_interval = atoi(val);
+        } else if (!strcasecmp(key, "use_gamecontroller")) {
+            int b;
+            if (parse_bool_value(val, &b) == 0) {
+                cfg->use_gamecontroller = b;
+            }
         } else {
             fprintf(stderr, "%s:%d: unknown key '%s'\n", path, lineno, key);
         }
@@ -1261,7 +1268,8 @@ int main(int argc, char **argv)
                 int count = SDL_NumJoysticks();
                 if (cfg.joystick_index < count) {
                     const char *name = NULL;
-                    if (SDL_IsGameController(cfg.joystick_index)) {
+                    int has_mapping = SDL_IsGameController(cfg.joystick_index);
+                    if (cfg.use_gamecontroller && has_mapping) {
                         SDL_GameController *candidate = SDL_GameControllerOpen(cfg.joystick_index);
                         if (candidate) {
                             gc = candidate;
@@ -1301,8 +1309,19 @@ int main(int argc, char **argv)
                             js_hats = SDL_JoystickNumHats(js);
                             js_buttons = SDL_JoystickNumButtons(js);
                             name = SDL_JoystickName(js);
-                            fprintf(stderr, "Joystick %d connected (no game controller mapping): %s\n",
-                                    cfg.joystick_index, name ? name : "unknown");
+                            const char *reason = NULL;
+                            if (!cfg.use_gamecontroller && has_mapping) {
+                                reason = "game controller mapping disabled";
+                            } else if (cfg.use_gamecontroller && !has_mapping) {
+                                reason = "no game controller mapping";
+                            }
+                            if (reason) {
+                                fprintf(stderr, "Joystick %d connected (%s): %s\n",
+                                        cfg.joystick_index, reason, name ? name : "unknown");
+                            } else {
+                                fprintf(stderr, "Joystick %d connected: %s\n",
+                                        cfg.joystick_index, name ? name : "unknown");
+                            }
                         } else {
                             fprintf(stderr, "Failed to open joystick %d: %s\n",
                                     cfg.joystick_index, SDL_GetError());
