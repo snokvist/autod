@@ -588,9 +588,23 @@ static inline int32_t clip_dead(int32_t v, int thr)
     return v;
 }
 
-static void build_channels(SDL_Joystick *js, const int dead[16],
-                           uint16_t ch_s[16], int32_t ch_r[16],
-                           int hat_count, int axis_count, int button_count)
+static inline int32_t normalize_trigger_axis(int32_t v)
+{
+    if (v >= 0) {
+        int32_t scaled = (v * 2) - 32768;
+        if (scaled < -32768) {
+            scaled = -32768;
+        } else if (scaled > 32767) {
+            scaled = 32767;
+        }
+        return scaled;
+    }
+    return v;
+}
+
+static void build_channels_joystick(SDL_Joystick *js, const int dead[16],
+                                    uint16_t ch_s[16], int32_t ch_r[16],
+                                    int hat_count, int axis_count, int button_count)
 {
     ch_r[0] = SDL_JoystickGetAxis(js, 0);
     ch_r[1] = SDL_JoystickGetAxis(js, 1);
@@ -632,6 +646,96 @@ static void build_channels(SDL_Joystick *js, const int dead[16],
         int b = SDL_JoystickGetButton(js, i - 8);
         ch_r[i] = b;
         ch_s[i] = scale_bool(b);
+    }
+}
+
+static void build_channels_gamecontroller(SDL_GameController *gc,
+                                          SDL_Joystick *js,
+                                          const int dead[16],
+                                          uint16_t ch_s[16], int32_t ch_r[16],
+                                          int hat_count, int axis_count, int button_count)
+{
+    int32_t left_x = SDL_GameControllerGetAxis(gc, SDL_CONTROLLER_AXIS_LEFTX);
+    int32_t left_y = SDL_GameControllerGetAxis(gc, SDL_CONTROLLER_AXIS_LEFTY);
+    int32_t right_x = SDL_GameControllerGetAxis(gc, SDL_CONTROLLER_AXIS_RIGHTX);
+    int32_t right_y = SDL_GameControllerGetAxis(gc, SDL_CONTROLLER_AXIS_RIGHTY);
+
+    ch_r[0] = clip_dead(left_x, dead[0]);
+    ch_r[1] = clip_dead(left_y, dead[1]);
+    ch_r[2] = clip_dead(right_x, dead[2]);
+    ch_r[3] = clip_dead(right_y, dead[3]);
+
+    ch_s[0] = scale_axis(ch_r[0]);
+    ch_s[1] = scale_axis(-ch_r[1]);
+    ch_s[2] = scale_axis(ch_r[2]);
+    ch_s[3] = scale_axis(-ch_r[3]);
+
+    int32_t trigger_left = normalize_trigger_axis(SDL_GameControllerGetAxis(gc, SDL_CONTROLLER_AXIS_TRIGGERLEFT));
+    int32_t trigger_right = normalize_trigger_axis(SDL_GameControllerGetAxis(gc, SDL_CONTROLLER_AXIS_TRIGGERRIGHT));
+
+    ch_r[4] = clip_dead(trigger_left, dead[4]);
+    ch_r[5] = clip_dead(trigger_right, dead[5]);
+    ch_s[4] = scale_axis(ch_r[4]);
+    ch_s[5] = scale_axis(ch_r[5]);
+
+    int dpx = 0, dpy = 0;
+    int up = SDL_GameControllerGetButton(gc, SDL_CONTROLLER_BUTTON_DPAD_UP);
+    int down = SDL_GameControllerGetButton(gc, SDL_CONTROLLER_BUTTON_DPAD_DOWN);
+    int left = SDL_GameControllerGetButton(gc, SDL_CONTROLLER_BUTTON_DPAD_LEFT);
+    int right = SDL_GameControllerGetButton(gc, SDL_CONTROLLER_BUTTON_DPAD_RIGHT);
+    if (up || down || left || right) {
+        dpy = up ? 1 : down ? -1 : 0;
+        dpx = left ? -1 : right ? 1 : 0;
+    } else if (js && hat_count > 0) {
+        uint8_t h = SDL_JoystickGetHat(js, 0);
+        dpx = (h & SDL_HAT_RIGHT) ? 1 : (h & SDL_HAT_LEFT) ? -1 : 0;
+        dpy = (h & SDL_HAT_UP) ? 1 : (h & SDL_HAT_DOWN) ? -1 : 0;
+    } else if (js && axis_count >= 8) {
+        dpx = SDL_JoystickGetAxis(js, 6) / 32767;
+        dpy = -SDL_JoystickGetAxis(js, 7) / 32767;
+    } else if (js && button_count >= 15) {
+        dpy = SDL_JoystickGetButton(js, 11) ? 1 : SDL_JoystickGetButton(js, 12) ? -1 : 0;
+        dpx = SDL_JoystickGetButton(js, 13) ? -1 : SDL_JoystickGetButton(js, 14) ? 1 : 0;
+    }
+
+    int32_t dpx_axis = dpx * 32767;
+    int32_t dpy_axis = dpy * 32767;
+    ch_r[6] = dpx_axis;
+    ch_r[7] = dpy_axis;
+    ch_s[6] = scale_axis(dpx_axis);
+    ch_s[7] = scale_axis(dpy_axis);
+
+    static const SDL_GameControllerButton button_order[8] = {
+        SDL_CONTROLLER_BUTTON_A,
+        SDL_CONTROLLER_BUTTON_B,
+        SDL_CONTROLLER_BUTTON_X,
+        SDL_CONTROLLER_BUTTON_Y,
+        SDL_CONTROLLER_BUTTON_LEFTSHOULDER,
+        SDL_CONTROLLER_BUTTON_RIGHTSHOULDER,
+        SDL_CONTROLLER_BUTTON_BACK,
+        SDL_CONTROLLER_BUTTON_START
+    };
+    for (int i = 0; i < 8; i++) {
+        int pressed = SDL_GameControllerGetButton(gc, button_order[i]) ? 1 : 0;
+        if (!pressed && js && i < button_count) {
+            pressed = SDL_JoystickGetButton(js, i);
+        }
+        ch_r[8 + i] = pressed;
+        ch_s[8 + i] = scale_bool(pressed);
+    }
+}
+
+static void build_channels(SDL_GameController *gc, SDL_Joystick *js,
+                           const int dead[16], uint16_t ch_s[16], int32_t ch_r[16],
+                           int hat_count, int axis_count, int button_count)
+{
+    if (gc) {
+        build_channels_gamecontroller(gc, js, dead, ch_s, ch_r, hat_count, axis_count, button_count);
+    } else if (js) {
+        build_channels_joystick(js, dead, ch_s, ch_r, hat_count, axis_count, button_count);
+    } else {
+        memset(ch_s, 0, sizeof(uint16_t) * 16);
+        memset(ch_r, 0, sizeof(int32_t) * 16);
     }
 }
 
@@ -973,7 +1077,7 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    if (SDL_Init(SDL_INIT_JOYSTICK) < 0) {
+    if (SDL_Init(SDL_INIT_JOYSTICK | SDL_INIT_GAMECONTROLLER) < 0) {
         fprintf(stderr, "SDL: %s\n", SDL_GetError());
         return 1;
     }
@@ -1000,7 +1104,9 @@ int main(int argc, char **argv)
         int sse_client_fd = -1;
         struct sockaddr_storage udp_addr;
         socklen_t udp_addrlen = 0;
+        SDL_GameController *gc = NULL;
         SDL_Joystick *js = NULL;
+        int js_owned = 0;
         int js_axes = 0;
         int js_hats = 0;
         int js_buttons = 0;
@@ -1038,9 +1144,14 @@ int main(int argc, char **argv)
         }
 
         if (fatal_error) {
-            if (js) {
+            if (gc) {
+                SDL_GameControllerClose(gc);
+                gc = NULL;
+            } else if (js && js_owned) {
                 SDL_JoystickClose(js);
             }
+            js = NULL;
+            js_owned = 0;
             if (udp_fd >= 0) {
                 close(udp_fd);
             }
@@ -1116,11 +1227,28 @@ int main(int argc, char **argv)
                 break;
             }
 
+            SDL_GameControllerUpdate();
             SDL_JoystickUpdate();
-            if (js && !SDL_JoystickGetAttached(js)) {
-                fprintf(stderr, "Joystick %d detached\n", cfg.joystick_index);
-                SDL_JoystickClose(js);
+            if (gc && !SDL_GameControllerGetAttached(gc)) {
+                fprintf(stderr, "Game controller %d detached\n", cfg.joystick_index);
+                SDL_GameControllerClose(gc);
+                gc = NULL;
                 js = NULL;
+                js_owned = 0;
+                js_axes = 0;
+                js_hats = 0;
+                js_buttons = 0;
+                restart_requested = 1;
+                restart_sleep = 1;
+                break;
+            }
+            if (!gc && js && !SDL_JoystickGetAttached(js)) {
+                fprintf(stderr, "Joystick %d detached\n", cfg.joystick_index);
+                if (js_owned) {
+                    SDL_JoystickClose(js);
+                }
+                js = NULL;
+                js_owned = 0;
                 js_axes = 0;
                 js_hats = 0;
                 js_buttons = 0;
@@ -1132,21 +1260,56 @@ int main(int argc, char **argv)
             if (!js && timespec_cmp(&now, &next_rescan) >= 0) {
                 int count = SDL_NumJoysticks();
                 if (cfg.joystick_index < count) {
-                    SDL_Joystick *candidate = SDL_JoystickOpen(cfg.joystick_index);
-                    if (candidate) {
-                        js = candidate;
-                        js_axes = SDL_JoystickNumAxes(js);
-                        js_hats = SDL_JoystickNumHats(js);
-                        js_buttons = SDL_JoystickNumButtons(js);
-                        const char *name = SDL_JoystickName(js);
-                        fprintf(stderr, "Joystick %d connected: %s\n",
-                                cfg.joystick_index, name ? name : "unknown");
+                    const char *name = NULL;
+                    if (SDL_IsGameController(cfg.joystick_index)) {
+                        SDL_GameController *candidate = SDL_GameControllerOpen(cfg.joystick_index);
+                        if (candidate) {
+                            gc = candidate;
+                            js = SDL_GameControllerGetJoystick(gc);
+                            js_owned = 0;
+                            if (!js) {
+                                fprintf(stderr, "Game controller %d missing joystick backend\n",
+                                        cfg.joystick_index);
+                                SDL_GameControllerClose(gc);
+                                gc = NULL;
+                                restart_requested = 1;
+                                restart_sleep = 1;
+                                break;
+                            }
+                            js_axes = SDL_JoystickNumAxes(js);
+                            js_hats = SDL_JoystickNumHats(js);
+                            js_buttons = SDL_JoystickNumButtons(js);
+                            name = SDL_GameControllerName(gc);
+                            if (!name) {
+                                name = SDL_JoystickName(js);
+                            }
+                            fprintf(stderr, "Game controller %d connected: %s\n",
+                                    cfg.joystick_index, name ? name : "unknown");
+                        } else {
+                            fprintf(stderr, "Failed to open game controller %d: %s\n",
+                                    cfg.joystick_index, SDL_GetError());
+                            restart_requested = 1;
+                            restart_sleep = 1;
+                            break;
+                        }
                     } else {
-                        fprintf(stderr, "Failed to open joystick %d: %s\n",
-                                cfg.joystick_index, SDL_GetError());
-                        restart_requested = 1;
-                        restart_sleep = 1;
-                        break;
+                        SDL_Joystick *candidate = SDL_JoystickOpen(cfg.joystick_index);
+                        if (candidate) {
+                            js = candidate;
+                            js_owned = 1;
+                            js_axes = SDL_JoystickNumAxes(js);
+                            js_hats = SDL_JoystickNumHats(js);
+                            js_buttons = SDL_JoystickNumButtons(js);
+                            name = SDL_JoystickName(js);
+                            fprintf(stderr, "Joystick %d connected (no game controller mapping): %s\n",
+                                    cfg.joystick_index, name ? name : "unknown");
+                        } else {
+                            fprintf(stderr, "Failed to open joystick %d: %s\n",
+                                    cfg.joystick_index, SDL_GetError());
+                            restart_requested = 1;
+                            restart_sleep = 1;
+                            break;
+                        }
                     }
                 } else {
                     fprintf(stderr, "Joystick index %d unavailable (only %d detected)\n",
@@ -1168,7 +1331,7 @@ int main(int argc, char **argv)
 
             uint16_t ch_source[16];
             int32_t raw_source[16];
-            build_channels(js, cfg.dead, ch_source, raw_source,
+            build_channels(gc, js, cfg.dead, ch_source, raw_source,
                            js_hats, js_axes, js_buttons);
 
             uint16_t ch_out[16];
@@ -1320,9 +1483,17 @@ int main(int argc, char **argv)
             clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next_tick, NULL);
         }
 
-        if (js) {
-            SDL_JoystickClose(js);
+        if (gc) {
+            SDL_GameControllerClose(gc);
+            gc = NULL;
             js = NULL;
+            js_owned = 0;
+        } else if (js) {
+            if (js_owned) {
+                SDL_JoystickClose(js);
+            }
+            js = NULL;
+            js_owned = 0;
         }
         if (udp_fd >= 0) {
             close(udp_fd);
