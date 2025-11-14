@@ -118,7 +118,12 @@ The daemon looks for `./autod.conf` by default. You can provide an alternate pat
 ./autod configs/autod.conf
 ```
 
-Important sections inside [`configs/autod.conf`](configs/autod.conf):
+Sample configuration bundles ship with the repository:
+
+- **Master example** – [`configs/autod.conf`](configs/autod.conf)
+- **Slave example** – [`configs/slave/autod.conf`](configs/slave/autod.conf)
+
+Important sections inside the master sample ([`configs/autod.conf`](configs/autod.conf)):
 
 - `[server]` – HTTP bind address/port and whether the LAN scanner starts automatically.
 - `[scan]` – Optional list of additional CIDR blocks that should be probed every sweep.
@@ -148,6 +153,49 @@ For binary datagrams, encode the bytes in base64 and place them in `"payload_bas
 ### Optional LAN Scanner
 
 When `[server] enable_scan = 1`, the daemon seeds itself into the scan database and launches background probing via functions in [`src/scan.c`](src/scan.c). Clients can poll `/nodes` for progress and discovered peers. If you also define one or more `extra_subnet = 10.10.10.0/24` lines inside a `[scan]` section, the scanner will include those CIDR blocks alongside any directly detected interfaces. `/32` entries are treated as single hosts.
+
+### Sync master/slave coordination
+
+`autod` can now coordinate sync slots across a fleet using an HTTP-based control plane. Enable it via the `[sync]` section in `autod.conf`:
+
+```ini
+[sync]
+# role can be "master" to accept slave registrations or "slave" to follow a master.
+role = master
+# When acting as a slave, point at the master's sync identifier using sync://.
+# master_url = sync://autod-master/sync/register
+register_interval_s = 30
+allow_bind = 1        ; let POST /sync/bind re-point the slave at runtime
+# id = custom-node-id ; defaults to the system hostname
+```
+
+Masters can advertise up to ten sync slots via `[sync.slotN]` sections. Each slot lists `/exec` payloads (JSON bodies) that run sequentially on the assigned slave whenever a new sync generation is issued:
+
+```ini
+[sync.slot1]
+name = primary
+exec = {"path": "/usr/local/bin/slot1-prepare"}
+exec = {"path": "/usr/local/bin/slot1-finalise", "args": ["--ok"]}
+```
+
+- **Masters** advertise a `sync-master` capability in `/caps`, accept slave registrations at `POST /sync/register`, list known peers via `GET /sync/slaves`, and assign slots with `POST /sync/push`. The handler accepts bodies such as `{"moves": [{"slave_id": "alpha", "slot": 2}]}` to shuffle live assignments. During each heartbeat the master responds with the next slot command sequence (identified by generation) which the slave executes locally via the configured interpreter.
+- **Slaves** (advertising `sync-slave`) maintain a background thread that posts to the configured `master_url` every `register_interval_s` seconds. When the value uses the `sync://` scheme the daemon resolves the identifier through the LAN discovery cache before contacting the master. The response includes the assigned slot, optional slot label, and any commands queued for the next generation; the slave runs each command in order and acknowledges completion on subsequent heartbeats. Slaves also expose `POST /sync/bind` so an operator or master can redirect a running node to a new controller without editing disk config—send either `{ "master_id": "sync-master-id" }` or a `master_url` that already uses the `sync://` format so the daemon persists the identifier.
+
+POST `/sync/push` now accepts slot move requests (`{"moves": [...]}`) rather than configuration objects; the master increments the slot generation whenever an assignment changes so slaves replay their command list before acknowledging the new generation.
+
+See the master ([`configs/autod.conf`](configs/autod.conf)) and slave ([`configs/slave/autod.conf`](configs/slave/autod.conf)) samples for full examples and the sync handlers in [`src/autod.c`](src/autod.c) for the request/response schema.
+
+### Startup execution sequence
+
+The optional `[startup]` section lets you queue `/exec` payloads that should run automatically once the HTTP server and background threads come online. Each `exec = ...` line is a JSON blob matching the body of a `POST /exec` request:
+
+```ini
+[startup]
+exec = {"path": "/bin/echo", "args": ["autod", "ready"]}
+exec = {"path": "/usr/local/bin/bootstrap"}
+```
+
+Entries execute sequentially (waterfall style): the daemon waits for each command to complete before launching the next. Standard output/stderr from each run is logged to stderr alongside the exit code so you can track bootstrap progress without instrumenting the handler script.
 
 ### Bundled UI
 

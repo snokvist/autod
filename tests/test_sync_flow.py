@@ -1,0 +1,114 @@
+import unittest
+
+
+def build_slave_request(config_caps: str, node_id: str, ack_generation: int) -> dict:
+    caps = []
+    if config_caps:
+        for part in config_caps.split(','):
+            part = part.strip()
+            if part:
+                caps.append(part)
+    payload = {
+        "id": node_id,
+        "ack_generation": ack_generation,
+    }
+    if caps:
+        payload["caps"] = caps
+    return payload
+
+
+def extract_command_paths(response_payload: dict) -> list[str]:
+    generation = response_payload.get("generation", 0)
+    if not generation:
+        return []
+    commands = response_payload.get("commands") or []
+    paths: list[str] = []
+    for entry in commands:
+        if isinstance(entry, dict) and entry.get("path"):
+            paths.append(entry["path"])
+    return paths
+
+
+def reassign_slots(current: dict[int, str], moves: list[dict]) -> dict[int, str]:
+    planned = dict(current)
+    for move in moves:
+        slave_id = move.get("slave_id") or move.get("id")
+        slot = move.get("slot", 0)
+        if not slave_id:
+            continue
+        planned = {idx: sid for idx, sid in planned.items() if sid != slave_id}
+        if slot and slot > 0:
+            planned[slot] = slave_id
+    return dict(sorted(planned.items()))
+
+
+def parse_sync_reference(value: str) -> tuple[str, str]:
+    if not value:
+        raise ValueError("missing sync reference")
+    lowered = value.lower()
+    if "://" in value and not lowered.startswith("sync://"):
+        raise ValueError("unsupported scheme")
+    cursor = value[7:] if lowered.startswith("sync://") else value
+    slash_index = cursor.find("/")
+    if slash_index == -1:
+        sync_id = cursor
+        path = "/sync/register"
+    else:
+        sync_id = cursor[:slash_index]
+        path = cursor[slash_index:]
+    if not sync_id:
+        raise ValueError("missing sync id")
+    return sync_id, path
+
+
+class SyncFlowTest(unittest.TestCase):
+    def test_slave_request_splits_caps(self) -> None:
+        req = build_slave_request("sync,exec, nodes ", "node-1", 7)
+        self.assertEqual(req["id"], "node-1")
+        self.assertEqual(req["ack_generation"], 7)
+        self.assertEqual(req["caps"], ["sync", "exec", "nodes"])
+
+    def test_extract_command_paths_returns_paths(self) -> None:
+        response = {
+            "generation": 3,
+            "commands": [
+                {"path": "/usr/bin/slot1", "args": ["--a"]},
+                {"path": "/usr/bin/slot1b"},
+            ],
+        }
+        paths = extract_command_paths(response)
+        self.assertEqual(paths, ["/usr/bin/slot1", "/usr/bin/slot1b"])
+
+    def test_extract_command_paths_ignores_missing_generation(self) -> None:
+        response = {"generation": 0, "commands": [{"path": "/usr/bin/slot1"}]}
+        self.assertEqual(extract_command_paths(response), [])
+
+    def test_reassign_slots_handles_swap(self) -> None:
+        current = {1: "alpha", 2: "bravo"}
+        moves = [{"slave_id": "alpha", "slot": 2}, {"slave_id": "bravo", "slot": 1}]
+        planned = reassign_slots(current, moves)
+        self.assertEqual(planned[1], "bravo")
+        self.assertEqual(planned[2], "alpha")
+
+    def test_parse_sync_reference_default_path(self) -> None:
+        sync_id, path = parse_sync_reference("sync://node-master")
+        self.assertEqual(sync_id, "node-master")
+        self.assertEqual(path, "/sync/register")
+
+    def test_parse_sync_reference_plain_id(self) -> None:
+        sync_id, path = parse_sync_reference("my-master")
+        self.assertEqual(sync_id, "my-master")
+        self.assertEqual(path, "/sync/register")
+
+    def test_parse_sync_reference_with_custom_path(self) -> None:
+        sync_id, path = parse_sync_reference("sync://master-1/custom/register")
+        self.assertEqual(sync_id, "master-1")
+        self.assertEqual(path, "/custom/register")
+
+    def test_parse_sync_reference_rejects_http(self) -> None:
+        with self.assertRaises(ValueError):
+            parse_sync_reference("http://example.com")
+
+
+if __name__ == "__main__":
+    unittest.main()
