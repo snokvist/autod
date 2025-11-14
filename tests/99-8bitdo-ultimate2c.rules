@@ -1,0 +1,5 @@
+ACTION=="add", ATTRS{idVendor}=="2dc8", ATTRS{idProduct}=="310a", \
+  RUN+="/sbin/modprobe xpad", \
+  RUN+="/bin/sh -c 'echo 2dc8 310a > /sys/bus/usb/drivers/xpad/new_id'"
+
+ACTION=="add", ATTRS{idVendor}=="2dc8", ATTRS{idProduct}=="310a", MODE="0666"
