@@ -1929,7 +1929,7 @@ static int h_media(struct mg_connection *c, void *ud) {
         if (n < 0 || n >= (int)sizeof(extra)) extra[0] = '\0';
     }
 
-    add_common_headers_extra(c, 200, ctype, (size_t)st.st_size, cfg->ui_public,
+    add_common_headers_extra(c, 200, ctype, (size_t)st.st_size, cfg.ui_public,
                              extra[0] ? extra : NULL);
 
     if (is_head) {
