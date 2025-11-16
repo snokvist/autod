@@ -1,4 +1,5 @@
 import unittest
+from typing import Optional
 
 
 def build_slave_request(config_caps: str, node_id: str, ack_generation: int) -> dict:
@@ -122,11 +123,11 @@ def delete_assignments(assignments: dict[int, str],
 
 def apply_slot_plan(current_assignments: dict[int, str],
                     record_slots: dict[str, int],
-                    plan_overrides: dict[int, str | None],
+                    plan_overrides: dict[int, Optional[str]],
                     max_slots: int = 10) -> tuple[dict[int, str], dict[str, int]]:
     """Mirror sync_master_apply_slot_assignment_locked planning semantics."""
 
-    planned: dict[int, str | None] = {
+    planned: dict[int, Optional[str]] = {
         slot: current_assignments.get(slot)
         for slot in range(1, max_slots + 1)
     }
