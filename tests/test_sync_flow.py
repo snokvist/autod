@@ -120,6 +120,44 @@ def delete_assignments(assignments: dict[int, str],
     return {slot: sid for slot, sid in assignments.items() if sid not in doomed}
 
 
+def apply_slot_plan(current_assignments: dict[int, str],
+                    record_slots: dict[str, int],
+                    plan_overrides: dict[int, str | None],
+                    max_slots: int = 10) -> tuple[dict[int, str], dict[str, int]]:
+    """Mirror sync_master_apply_slot_assignment_locked planning semantics."""
+
+    planned: dict[int, str | None] = {
+        slot: current_assignments.get(slot)
+        for slot in range(1, max_slots + 1)
+    }
+    for slot, sid in plan_overrides.items():
+        planned[slot] = sid
+
+    assignments = dict(current_assignments)
+    records = dict(record_slots)
+
+    for slot in range(1, max_slots + 1):
+        new_id = planned.get(slot)
+        current_id = assignments.get(slot)
+        current_has = bool(current_id)
+        new_has = bool(new_id)
+
+        if current_has and new_has and current_id == new_id:
+            records[new_id] = slot
+            continue
+
+        if current_has and records.get(current_id) == slot:
+            records[current_id] = 0
+
+        if new_has:
+            assignments[slot] = new_id  # type: ignore[index]
+            records[new_id] = slot      # type: ignore[index]
+        else:
+            assignments.pop(slot, None)
+
+    return assignments, records
+
+
 class SyncFlowTest(unittest.TestCase):
     def test_slave_request_splits_caps(self) -> None:
         req = build_slave_request("sync,exec, nodes ", "node-1", 7)
@@ -198,6 +236,15 @@ class SyncFlowTest(unittest.TestCase):
         self.assertEqual(preferred_slot_for_id(preferences, "alpha"), 1)
         self.assertEqual(preferred_slot_for_id(preferences, "bravo"), 3)
         self.assertEqual(preferred_slot_for_id(preferences, "ghost"), 0)
+
+    def test_apply_slot_plan_preserves_manual_moves(self) -> None:
+        assignments = {1: "alpha"}
+        records = {"alpha": 1}
+        overrides = {1: None, 4: "alpha"}
+        new_assignments, new_records = apply_slot_plan(assignments, records, overrides)
+        self.assertNotIn(1, new_assignments)
+        self.assertEqual(new_assignments[4], "alpha")
+        self.assertEqual(new_records["alpha"], 4)
 
     def test_enforce_preferred_assignment_displaces_placeholder(self) -> None:
         assignments = {1: "bravo", 2: "charlie"}

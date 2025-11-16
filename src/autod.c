@@ -982,7 +982,7 @@ static void sync_master_release_slot_locked(sync_master_state_t *state,
     if (!state->slot_assignees[slot_index][0]) return;
     sync_slave_record_t *rec =
         sync_master_find_record(state, state->slot_assignees[slot_index], 0);
-    if (rec) {
+    if (rec && rec->slot_index == slot_index) {
         rec->slot_index = -1;
         rec->last_ack_generation = 0;
     }
@@ -1219,7 +1219,7 @@ static void sync_master_apply_slot_assignment_locked(sync_master_state_t *state,
 
     if (current_has) {
         sync_slave_record_t *rec = sync_master_find_record(state, current, 0);
-        if (rec) {
+        if (rec && rec->slot_index == slot_index) {
             rec->slot_index = -1;
             rec->last_ack_generation = 0;
         }
