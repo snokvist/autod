@@ -1257,6 +1257,15 @@ static int h_sync_register(struct mg_connection *c, void *ud) {
     if (assigned_slot >= 0) {
         slot_generation = app->master.slot_generation[assigned_slot];
         int slot_changed = (previous_slot != assigned_slot);
+        /*
+         * Slot commands carry a generation value so slaves can avoid
+         * re-running commands they have already applied. A slave reports the
+         * last generation it executed via ack_generation; if that matches the
+         * current slot generation we skip sending commands, otherwise we replay
+         * them. Slot changes and out-of-range acknowledgements must reset the
+         * tracking so a move to a lower-generation slot still receives its
+         * commands.
+         */
         if (slot_changed) {
             rec->last_ack_generation = 0;
         } else if (ack_generation > 0) {

@@ -77,5 +77,17 @@ The build system already supports ARM cross compilation (`make musl` or `make gn
 - Keeping autod in the foreground or using Android’s background service allowances to host the CivetWeb HTTP endpoints and static UI.
 - Monitoring power draw, as continual 250 Hz polling and Wi-Fi radios can tax phone batteries faster than on a Radxa SBC.
 
+## Sync slot generations and acknowledgements
+
+Each sync slot carries a generation counter that increments whenever the master’s slot configuration changes. Slot commands are delivered with that generation, and a slave reports the most recent one it executed as `ack_generation` on `/sync/register`.
+
+The master uses this acknowledgement to decide whether to resend commands:
+
+- If the acknowledgement is lower than the slot generation, the slave is behind and the commands are replayed.
+- If the values match, the slave has already run the latest script and replay is skipped to avoid double execution.
+- When a node moves between slots or reports an acknowledgement higher than the new slot’s generation (common when moving from a long-lived slot to a fresh one), the stored acknowledgement is cleared so the new slot’s commands are always sent.
+
+This generation-based guard prevents stale acknowledgements from suppressing the scripts that should run after a slot move, without requiring per-command bookkeeping. A more foolproof alternative would be hashing the slot’s command bundle and replaying whenever the hash changes, but the generation counter already captures that intent with less state and payload.
+
 ## Summary
 autod orchestrates the joystick2crsf and ip2uart helpers so that low-cost controllers, CRSF radios, and IP links interoperate. By leveraging C-based utilities with small footprints, the same workflow can stretch from bench-top testing to field deployments, supporting joystick-driven control, CRSF forwarding, transmitter emulation, and diagnostic loopbacks without switching toolchains.
