@@ -1,16 +1,16 @@
 {
-  "cap":"joystick2crfs",
+  "cap":"joystick2crsf",
   "contract_version":"0.1",
-  "config_path":"/etc/joystick2crfs.conf",
+  "config_path":"/etc/joystick2crsf.conf",
   "commands":[
-    {"name":"get","description":"Read a joystick2crfs setting","args":[{"key":"name","type":"string","required":true}]},
-    {"name":"set","description":"Update a joystick2crfs setting","args":[{"key":"pair","type":"string","required":true,"description":"key=value or key value"}]},
-    {"name":"reload","description":"Send SIGHUP so joystick2crfs reloads its config","args":[]},
-    {"name":"start","description":"Start the joystick2crfs service","args":[]},
-    {"name":"stop","description":"Stop the joystick2crfs service","args":[]},
-    {"name":"restart","description":"Restart the joystick2crfs service","args":[]},
-    {"name":"status","description":"Show joystick2crfs service status","args":[]},
-    {"name":"help","description":"Describe joystick2crfs controls","args":[]}
+    {"name":"get","description":"Read a joystick2crsf setting","args":[{"key":"name","type":"string","required":true}]},
+    {"name":"set","description":"Update a joystick2crsf setting","args":[{"key":"pair","type":"string","required":true,"description":"key=value or key value"}]},
+    {"name":"reload","description":"Send SIGHUP so joystick2crsf reloads its config","args":[]},
+    {"name":"start","description":"Start the joystick2crsf service","args":[]},
+    {"name":"stop","description":"Stop the joystick2crsf service","args":[]},
+    {"name":"restart","description":"Restart the joystick2crsf service","args":[]},
+    {"name":"status","description":"Show joystick2crsf service status","args":[]},
+    {"name":"help","description":"Describe joystick2crsf controls","args":[]}
   ],
   "settings":[
     {"key":"rate","type":"int","default":125,"description":"CRSF frame rate (Hz)","control":{"kind":"select","options":[50,125,250],"multi":false}},

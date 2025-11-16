@@ -10,7 +10,7 @@
 #   /sys/pixelpilot/help|start|stop|toggle_record
 #   /sys/pixelpilot_mini_rk/help|toggle_osd|toggle_recording|gamma|start|stop|restart
 #   /sys/udp_relay/help|start|stop|status
-#   /sys/joystick2crfs/help|get|set|reload|start|stop|restart|status
+#   /sys/joystick2crsf/help|get|set|reload|start|stop|restart|status
 #   /sys/link/help|mode|select|start|stop|status
 #   /sys/ping                                    (utility passthrough)
 #
@@ -27,7 +27,7 @@ HELP_DIR="${HELP_DIR:-$SCRIPT_DIR}"
 STATE_DIR="${VRX_STATE_DIR:-/tmp/vrx}"
 LINK_STATE_FILE="$STATE_DIR/link.env"
 DVR_MEDIA_DIR="${DVR_MEDIA_DIR:-/media}"
-JOYSTICK2CRFS_CONF="${JOYSTICK2CRFS_CONF:-/etc/joystick2crfs.conf}"
+JOYSTICK2CRSF_CONF="${JOYSTICK2CRSF_CONF:-/etc/joystick2crsf.conf}"
 SYNC_MAX_SLOTS=10
 AUTOD_HTTP_PORT="${AUTOD_HTTP_PORT:-55667}"
 AUTOD_HTTP_HOST="${AUTOD_HTTP_HOST:-127.0.0.1}"
@@ -274,13 +274,13 @@ udp_relay_status(){
 }
 
 # ======================= Joystick2CRFS =======================
-joystick2crfs_conf_path(){ echo "$JOYSTICK2CRFS_CONF"; }
+joystick2crsf_conf_path(){ echo "$JOYSTICK2CRSF_CONF"; }
 
-joystick2crfs_conf_get(){
+joystick2crsf_conf_get(){
   key="$1"
-  file="$(joystick2crfs_conf_path)"
+  file="$(joystick2crsf_conf_path)"
   if [ ! -r "$file" ]; then
-    echo "joystick2crfs config not found: $file" 1>&2
+    echo "joystick2crsf config not found: $file" 1>&2
     return 4
   fi
   result="$(awk -v key="$key" '
@@ -307,12 +307,12 @@ joystick2crfs_conf_get(){
   ' "$file" 2>/dev/null)"
   rc=$?
   if [ $rc -ne 0 ]; then
-    echo "failed to read joystick2crfs config" 1>&2
+    echo "failed to read joystick2crsf config" 1>&2
     return 4
   fi
   case "$result" in
     MISSING)
-      echo "joystick2crfs config key not found: $key" 1>&2
+      echo "joystick2crsf config key not found: $key" 1>&2
       return 4
       ;;
     FOUND:*)
@@ -321,15 +321,15 @@ joystick2crfs_conf_get(){
       return 0
       ;;
     *)
-      echo "failed to read joystick2crfs config" 1>&2
+      echo "failed to read joystick2crsf config" 1>&2
       return 4
       ;;
   esac
 }
 
-joystick2crfs_conf_set(){
+joystick2crsf_conf_set(){
   key="$1"; value="$2"
-  file="$(joystick2crfs_conf_path)"
+  file="$(joystick2crsf_conf_path)"
   ensure_parent_dir "$(dirname "$file")"
   tmp="$file.tmp.$$"
   if [ -f "$file" ]; then
@@ -371,144 +371,144 @@ joystick2crfs_conf_set(){
       }
     ' "$file" >"$tmp"; then
       rm -f "$tmp"
-      echo "failed to update joystick2crfs config" 1>&2
+      echo "failed to update joystick2crsf config" 1>&2
       return 4
     fi
   else
     if ! printf '%s=%s\n' "$key" "$value" >"$tmp"; then
       rm -f "$tmp"
-      echo "failed to write joystick2crfs config" 1>&2
+      echo "failed to write joystick2crsf config" 1>&2
       return 4
     fi
   fi
   if ! mv "$tmp" "$file"; then
     rm -f "$tmp"
-    echo "failed to write joystick2crfs config" 1>&2
+    echo "failed to write joystick2crsf config" 1>&2
     return 4
   fi
   chmod 644 "$file" 2>/dev/null || true
   return 0
 }
 
-joystick2crfs_pids(){ pidof joystick2crfs 2>/dev/null; }
+joystick2crsf_pids(){ pidof joystick2crsf 2>/dev/null; }
 
-joystick2crfs_unit_candidates(){
-  echo "joystick2crfs.service"
-  echo "joystick2crfs"
+joystick2crsf_unit_candidates(){
+  echo "joystick2crsf.service"
+  echo "joystick2crsf"
 }
 
-joystick2crfs_start(){
+joystick2crsf_start(){
   if have systemctl; then
-    for unit in $(joystick2crfs_unit_candidates); do
+    for unit in $(joystick2crsf_unit_candidates); do
       if systemctl start "$unit" >/dev/null 2>&1; then
-        echo "joystick2crfs started"
+        echo "joystick2crsf started"
         return 0
       fi
     done
   fi
   if have service; then
-    if service joystick2crfs start >/dev/null 2>&1; then
-      echo "joystick2crfs started"
+    if service joystick2crsf start >/dev/null 2>&1; then
+      echo "joystick2crsf started"
       return 0
     fi
   fi
-  echo "joystick2crfs start unsupported on this device" 1>&2
+  echo "joystick2crsf start unsupported on this device" 1>&2
   return 3
 }
 
-joystick2crfs_stop(){
+joystick2crsf_stop(){
   if have systemctl; then
-    for unit in $(joystick2crfs_unit_candidates); do
+    for unit in $(joystick2crsf_unit_candidates); do
       if systemctl stop "$unit" >/dev/null 2>&1; then
-        echo "joystick2crfs stopped"
+        echo "joystick2crsf stopped"
         return 0
       fi
     done
   fi
   if have service; then
-    if service joystick2crfs stop >/dev/null 2>&1; then
-      echo "joystick2crfs stopped"
+    if service joystick2crsf stop >/dev/null 2>&1; then
+      echo "joystick2crsf stopped"
       return 0
     fi
   fi
-  echo "joystick2crfs stop unsupported on this device" 1>&2
+  echo "joystick2crsf stop unsupported on this device" 1>&2
   return 3
 }
 
-joystick2crfs_restart(){
+joystick2crsf_restart(){
   if have systemctl; then
-    for unit in $(joystick2crfs_unit_candidates); do
+    for unit in $(joystick2crsf_unit_candidates); do
       if systemctl restart "$unit" >/dev/null 2>&1; then
-        echo "joystick2crfs restarted"
+        echo "joystick2crsf restarted"
         return 0
       fi
     done
   fi
-  if joystick2crfs_stop; then
+  if joystick2crsf_stop; then
     sleep 1
-    if joystick2crfs_start; then
-      echo "joystick2crfs restarted"
+    if joystick2crsf_start; then
+      echo "joystick2crsf restarted"
       return 0
     fi
   fi
-  echo "joystick2crfs restart unsupported on this device" 1>&2
+  echo "joystick2crsf restart unsupported on this device" 1>&2
   return 3
 }
 
-joystick2crfs_status(){
+joystick2crsf_status(){
   if have systemctl; then
-    for unit in $(joystick2crfs_unit_candidates); do
+    for unit in $(joystick2crsf_unit_candidates); do
       if systemctl is-active --quiet "$unit" >/dev/null 2>&1; then
-        echo "joystick2crfs running (systemd)"
+        echo "joystick2crsf running (systemd)"
         return 0
       fi
     done
   fi
-  pids="$(joystick2crfs_pids)"
+  pids="$(joystick2crsf_pids)"
   if [ -n "$pids" ]; then
-    echo "joystick2crfs running (pid $pids)"
+    echo "joystick2crsf running (pid $pids)"
   else
-    echo "joystick2crfs not running"
+    echo "joystick2crsf not running"
   fi
   return 0
 }
 
-joystick2crfs_reload(){
+joystick2crsf_reload(){
   if have systemctl; then
-    for unit in $(joystick2crfs_unit_candidates); do
+    for unit in $(joystick2crsf_unit_candidates); do
       if systemctl reload "$unit" >/dev/null 2>&1; then
-        echo "joystick2crfs reloaded via systemctl"
+        echo "joystick2crsf reloaded via systemctl"
         return 0
       fi
     done
   fi
-  pids="$(joystick2crfs_pids)"
+  pids="$(joystick2crsf_pids)"
   if [ -z "$pids" ]; then
-    echo "joystick2crfs not running" 1>&2
+    echo "joystick2crsf not running" 1>&2
     return 3
   fi
   if kill -HUP $pids 2>/dev/null; then
-    echo "joystick2crfs reloaded via SIGHUP ($pids)"
+    echo "joystick2crsf reloaded via SIGHUP ($pids)"
     return 0
   fi
-  echo "failed to signal joystick2crfs" 1>&2
+  echo "failed to signal joystick2crsf" 1>&2
   return 4
 }
 
-joystick2crfs_get(){
+joystick2crsf_get(){
   if [ $# -ne 1 ]; then
-    echo "usage: joystick2crfs/get <key>" 1>&2
+    echo "usage: joystick2crsf/get <key>" 1>&2
     return 2
   fi
   key="$1"
   if [ -z "$key" ]; then
-    echo "usage: joystick2crfs/get <key>" 1>&2
+    echo "usage: joystick2crsf/get <key>" 1>&2
     return 2
   fi
-  joystick2crfs_conf_get "$key"
+  joystick2crsf_conf_get "$key"
 }
 
-joystick2crfs_set(){
+joystick2crsf_set(){
   if [ $# -eq 1 ]; then
     case "$1" in
       *=*)
@@ -516,7 +516,7 @@ joystick2crfs_set(){
         value="${1#*=}"
         ;;
       *)
-        echo "usage: joystick2crfs/set key=value" 1>&2
+        echo "usage: joystick2crsf/set key=value" 1>&2
         return 2
         ;;
     esac
@@ -524,14 +524,14 @@ joystick2crfs_set(){
     key="$1"
     value="$2"
   else
-    echo "usage: joystick2crfs/set key=value" 1>&2
+    echo "usage: joystick2crsf/set key=value" 1>&2
     return 2
   fi
   if [ -z "$key" ]; then
     echo "missing key" 1>&2
     return 2
   fi
-  joystick2crfs_conf_set "$key" "$value"
+  joystick2crsf_conf_set "$key" "$value"
   rc=$?
   if [ $rc -ne 0 ]; then
     return $rc
@@ -1061,15 +1061,15 @@ case "$1" in
   /sys/udp_relay/stop)     shift; udp_relay_stop "$@" ;;
   /sys/udp_relay/status)   shift; udp_relay_status "$@" ;;
 
-  # joystick2crfs
-  /sys/joystick2crfs/help)     print_help_msg "joystick2crfs_help.msg" ;;
-  /sys/joystick2crfs/get)      shift; joystick2crfs_get "$@" ;;
-  /sys/joystick2crfs/set)      shift; joystick2crfs_set "$@" ;;
-  /sys/joystick2crfs/reload)   shift; joystick2crfs_reload "$@" ;;
-  /sys/joystick2crfs/start)    shift; joystick2crfs_start "$@" ;;
-  /sys/joystick2crfs/stop)     shift; joystick2crfs_stop "$@" ;;
-  /sys/joystick2crfs/restart)  shift; joystick2crfs_restart "$@" ;;
-  /sys/joystick2crfs/status)   shift; joystick2crfs_status "$@" ;;
+  # joystick2crsf
+  /sys/joystick2crsf/help)     print_help_msg "joystick2crsf_help.msg" ;;
+  /sys/joystick2crsf/get)      shift; joystick2crsf_get "$@" ;;
+  /sys/joystick2crsf/set)      shift; joystick2crsf_set "$@" ;;
+  /sys/joystick2crsf/reload)   shift; joystick2crsf_reload "$@" ;;
+  /sys/joystick2crsf/start)    shift; joystick2crsf_start "$@" ;;
+  /sys/joystick2crsf/stop)     shift; joystick2crsf_stop "$@" ;;
+  /sys/joystick2crsf/restart)  shift; joystick2crsf_restart "$@" ;;
+  /sys/joystick2crsf/status)   shift; joystick2crsf_status "$@" ;;
 
   # link aggregation
   /sys/link/help)          print_help_msg "link_help.msg" ;;

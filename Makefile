@@ -14,7 +14,7 @@ UDP_CONFDIR  ?= $(SYSCONFDIR)/$(UDP_APP)
 UDP_HTMLDIR  ?= $(AUTOD_DATADIR)/udp_relay
 UDP_UI_ASSET ?= vrx_udp_relay.html
 UDP_UI_PATH  ?= $(UDP_HTMLDIR)/$(UDP_UI_ASSET)
-JOYSTICK2CRFS_CONF ?= $(SYSCONFDIR)/joystick2crfs.conf
+JOYSTICK2CRSF_CONF ?= $(SYSCONFDIR)/joystick2crsf.conf
 
 # Paths
 SRC_DIR      := src
@@ -45,8 +45,8 @@ CFLAGS_TOOL_O2_C11   := -O2 -std=c11  -Wall -Wextra -MMD -MP
 # udp_relay: gcc -O2 -Wall -Wextra -std=gnu11
 CFLAGS_TOOL_O2_GNU11 := -O2 -std=gnu11 -Wall -Wextra -MMD -MP
 
-# SDL-only helpers (used by joystick2crfs)
-SDL_GOALS    := joystick2crfs tools install
+# SDL-only helpers (used by joystick2crsf)
+SDL_GOALS    := joystick2crsf tools install
 
 ifeq ($(filter $(SDL_GOALS),$(MAKECMDGOALS)),)
 SDL2_CFLAGS  :=
@@ -61,7 +61,7 @@ SDL2_LDLIBS  = $(shell sdl2-config --libs   2>/dev/null)
 endif
 
 ifeq ($(strip $(SDL2_CFLAGS)$(SDL2_LDLIBS)),)
-$(error SDL2 development files not found. Install libsdl2-dev (or equivalent) to build joystick2crfs.)
+$(error SDL2 development files not found. Install libsdl2-dev (or equivalent) to build joystick2crsf.)
 endif
 endif
 
@@ -177,7 +177,7 @@ $(eval $(call DEFINE_FLAVOR,gnu,$(CC_GNU),gnu,$(APP)-gnu,-gnu,$(STRIP_GNU)))
 all: native
 
 # Utilities (native by default)
-tools: sse_tail udp_relay antenna_osd ip2uart joystick2crfs
+tools: sse_tail udp_relay antenna_osd ip2uart joystick2crsf
 tools-musl: sse_tail-musl udp_relay-musl antenna_osd-musl ip2uart-musl
 tools-gnu: sse_tail-gnu udp_relay-gnu antenna_osd-gnu ip2uart-gnu
 
@@ -188,33 +188,33 @@ clean:
 	       udp_relay udp_relay-musl udp_relay-gnu \
 	       antenna_osd antenna_osd-musl antenna_osd-gnu \
 	       ip2uart ip2uart-musl ip2uart-gnu \
-	       joystick2crfs
+               joystick2crsf
 
 # Strip whatever exists (no-op if strip tools missing)
 strip: ;
-	-@command -v $(STRIP_NATIVE) >/dev/null 2>&1 && $(STRIP_NATIVE) $(APP) sse_tail udp_relay antenna_osd ip2uart joystick2crfs 2>/dev/null || true
+	-@command -v $(STRIP_NATIVE) >/dev/null 2>&1 && $(STRIP_NATIVE) $(APP) sse_tail udp_relay antenna_osd ip2uart joystick2crsf 2>/dev/null || true
 	-@command -v $(STRIP_MUSL)   >/dev/null 2>&1 && $(STRIP_MUSL)   $(APP)-musl sse_tail-musl udp_relay-musl antenna_osd-musl ip2uart-musl 2>/dev/null || true
 	-@command -v $(STRIP_GNU)    >/dev/null 2>&1 && $(STRIP_GNU)    $(APP)-gnu sse_tail-gnu udp_relay-gnu antenna_osd-gnu ip2uart-gnu 2>/dev/null || true
 
-JOYSTICK2CRFS_BUILD := build/native
-JOYSTICK2CRFS_BIN   := joystick2crfs
-JOYSTICK2CRFS_OBJ   := $(JOYSTICK2CRFS_BUILD)/joystick2crfs.o
+JOYSTICK2CRSF_BUILD := build/native
+JOYSTICK2CRSF_BIN   := joystick2crsf
+JOYSTICK2CRSF_OBJ   := $(JOYSTICK2CRSF_BUILD)/joystick2crsf.o
 
-$(JOYSTICK2CRFS_BIN): $(JOYSTICK2CRFS_OBJ)
+$(JOYSTICK2CRSF_BIN): $(JOYSTICK2CRSF_OBJ)
 	$(CC_NATIVE) $^ $(LDFLAGS_COM) $(SDL2_LDLIBS) -o $@
 	@command -v $(STRIP_NATIVE) >/dev/null 2>&1 && $(STRIP_NATIVE) $@ || true
 
-$(JOYSTICK2CRFS_OBJ): $(SRC_DIR)/joystick2crfs.c | $(JOYSTICK2CRFS_BUILD)
+$(JOYSTICK2CRSF_OBJ): $(SRC_DIR)/joystick2crsf.c | $(JOYSTICK2CRSF_BUILD)
 	$(CC_NATIVE) $(CPPFLAGS_COM) $(CFLAGS_TOOL_O2_GNU11) $(SDL2_CFLAGS) -c $< -o $@
 
--include $(JOYSTICK2CRFS_OBJ:.o=.d)
+-include $(JOYSTICK2CRSF_OBJ:.o=.d)
 
-install: native udp_relay joystick2crfs
+install: native udp_relay joystick2crsf
 	@if command -v systemctl >/dev/null 2>&1 && [ -z "$(DESTDIR)" ]; then \
 	systemctl stop $(APP).service 2>/dev/null || true; \
 	systemctl stop $(UDP_APP).service 2>/dev/null || true; \
-	systemctl stop joystick2crfs.service 2>/dev/null || true; \
-	systemctl stop joystick2crfs 2>/dev/null || true; \
+        systemctl stop joystick2crsf.service 2>/dev/null || true; \
+        systemctl stop joystick2crsf 2>/dev/null || true; \
 	fi
 	install -Dm755 $(APP) $(DESTDIR)$(BINDIR)/$(APP)
 	install -d $(DESTDIR)$(VRXDIR)
@@ -251,13 +251,13 @@ install: native udp_relay joystick2crfs
 		-e 's#@VRX_DIR@#$(VRXDIR)#g' \
 		configs/autod.service > $(DESTDIR)$(SYSTEMD_DIR)/$(APP).service
 	chmod 644 $(DESTDIR)$(SYSTEMD_DIR)/$(APP).service
-	install -Dm755 $(JOYSTICK2CRFS_BIN) $(DESTDIR)$(BINDIR)/$(JOYSTICK2CRFS_BIN)
-	install -Dm644 configs/joystick2crfs.conf $(DESTDIR)$(JOYSTICK2CRFS_CONF)
+	install -Dm755 $(JOYSTICK2CRSF_BIN) $(DESTDIR)$(BINDIR)/$(JOYSTICK2CRSF_BIN)
+	install -Dm644 configs/joystick2crsf.conf $(DESTDIR)$(JOYSTICK2CRSF_CONF)
 	sed \
-		-e 's#@JOYSTICK2CRFS_BIN@#$(BINDIR)/$(JOYSTICK2CRFS_BIN)#g' \
-		-e 's#@JOYSTICK2CRFS_CONF@#$(JOYSTICK2CRFS_CONF)#g' \
-		configs/joystick2crfs.service > $(DESTDIR)$(SYSTEMD_DIR)/joystick2crfs.service
-	chmod 644 $(DESTDIR)$(SYSTEMD_DIR)/joystick2crfs.service
+		-e 's#@JOYSTICK2CRSF_BIN@#$(BINDIR)/$(JOYSTICK2CRSF_BIN)#g' \
+		-e 's#@JOYSTICK2CRSF_CONF@#$(JOYSTICK2CRSF_CONF)#g' \
+		configs/joystick2crsf.service > $(DESTDIR)$(SYSTEMD_DIR)/joystick2crsf.service
+	chmod 644 $(DESTDIR)$(SYSTEMD_DIR)/joystick2crsf.service
 	install -Dm755 $(UDP_APP) $(DESTDIR)$(BINDIR)/$(UDP_APP)
 	@set -e; \
 	udp_confdir="$(DESTDIR)$(UDP_CONFDIR)"; \
@@ -275,7 +275,7 @@ install: native udp_relay joystick2crfs
 		systemctl daemon-reload; \
 		systemctl start $(APP).service 2>/dev/null || true; \
 		systemctl start $(UDP_APP).service 2>/dev/null || true; \
-		systemctl start joystick2crfs.service 2>/dev/null || true; \
+                systemctl start joystick2crsf.service 2>/dev/null || true; \
 	fi
 
 help:

@@ -30,7 +30,7 @@ Key executables built from `src/`:
 - **`udp_relay`** – UDP fan-out utility (with optional UART sink) controlled through the daemon/UI.
 - **`ip2uart`** – Bidirectional bridge between a UART (real TTY or stdio) and a UDP peer.
 - **`antenna_osd`** – MSP/Canvas OSD renderer with configurable telemetry overlays.
-- **`joystick2crfs`** – SDL2 joystick bridge that emits CRSF frames and optional SSE telemetry.
+- **`joystick2crsf`** – SDL2 joystick bridge that emits CRSF frames and optional SSE telemetry.
 
 ---
 
@@ -38,7 +38,7 @@ Key executables built from `src/`:
 
 ### Native Linux Build
 
-Install a compiler toolchain plus SDL2 headers (required for `joystick2crfs` and therefore the aggregated `make tools` target):
+Install a compiler toolchain plus SDL2 headers (required for `joystick2crsf` and therefore the aggregated `make tools` target):
 
 ```bash
 sudo apt-get update
@@ -63,35 +63,35 @@ All commands are run from the repository root.
 | Goal | Command | Output |
 | ---- | ------- | ------ |
 | Native daemon | `make` | `./autod` |
-| Helper tools (native)  | `make tools` | `./sse_tail`, `./udp_relay`, `./antenna_osd`, `./ip2uart`, `./joystick2crfs`* |
-| `joystick2crfs` utility | `make joystick2crfs` | `./joystick2crfs` (requires SDL2; config at `/etc/joystick2crfs.conf`) |
+| Helper tools (native)  | `make tools` | `./sse_tail`, `./udp_relay`, `./antenna_osd`, `./ip2uart`, `./joystick2crsf`* |
+| `joystick2crsf` utility | `make joystick2crsf` | `./joystick2crsf` (requires SDL2; config at `/etc/joystick2crsf.conf`) |
 | Musl cross build       | `make musl` | `./autod-musl` (and friends) |
 | GNU cross build        | `make gnu`  | `./autod-gnu` (and friends) |
 | Clean intermediates    | `make clean` | removes `build/` and produced binaries |
 
 Each flavour drops intermediates under `build/<flavour>/` and strips binaries automatically when the matching `strip` tool is found.
 
-\* `joystick2crfs` depends on SDL2. The `tools` target builds it alongside the other helpers; use the stand-alone `make joystick2crfs` target if you only want to compile the joystick bridge once the SDL2 development headers are present. Cross-toolchain aggregates (`make tools-musl`, `make tools-gnu`) omit the joystick helper because the build requires native SDL2 support.
+\* `joystick2crsf` depends on SDL2. The `tools` target builds it alongside the other helpers; use the stand-alone `make joystick2crsf` target if you only want to compile the joystick bridge once the SDL2 development headers are present. Cross-toolchain aggregates (`make tools-musl`, `make tools-gnu`) omit the joystick helper because the build requires native SDL2 support.
 
 ### Installing on Debian/`systemd`
 
-`make install` builds the native daemon and the bundled `udp_relay` and `joystick2crfs` helpers, then stages a simple system-wide layout that targets Debian 11:
+`make install` builds the native daemon and the bundled `udp_relay` and `joystick2crsf` helpers, then stages a simple system-wide layout that targets Debian 11:
 
 - `autod` → `$(PREFIX)/bin/autod` (default prefix `/usr/local`).
 - VRX web UI and helpers → `$(PREFIX)/share/autod/vrx/` (`vrx_index.html`, `exec-handler.sh`, `*.msg`).
 - Configuration → `/etc/autod/autod.conf` (the shipped version overwrites any existing file so updates land immediately).
 - Service unit → `/etc/systemd/system/autod.service` pointing at the installed binary and config, running as `root` so helper scripts can signal privileged daemons.
 - `udp_relay` → `$(PREFIX)/bin/udp_relay`.
-- `joystick2crfs` → `$(PREFIX)/bin/joystick2crfs`.
+- `joystick2crsf` → `$(PREFIX)/bin/joystick2crsf`.
 - `ip2uart` → build with `make ip2uart` or via the `make tools` aggregate target when you need the UART↔IP bridge.
 - `udp_relay` configuration → `/etc/udp_relay/udp_relay.conf` (overwritten in-place during each install).
-- `joystick2crfs` configuration → `/etc/joystick2crfs.conf` (overwritten in-place during each install).
+- `joystick2crsf` configuration → `/etc/joystick2crsf.conf` (overwritten in-place during each install).
 - `ip2uart` configuration → `/etc/ip2uart.conf` (not installed automatically; see [Helper Tools](#helper-tools)).
 - `udp_relay` service unit → `/etc/systemd/system/udp_relay.service` which runs the helper as `root` for consistent behaviour with the UI bindings.
-- `joystick2crfs` service unit → `/etc/systemd/system/joystick2crfs.service` (includes an `ExecReload` that delivers `SIGHUP` so the daemon can re-read its config without a full restart).
+- `joystick2crsf` service unit → `/etc/systemd/system/joystick2crsf.service` (includes an `ExecReload` that delivers `SIGHUP` so the daemon can re-read its config without a full restart).
 - VRX udp_relay UI asset → `$(PREFIX)/share/autod/udp_relay/vrx_udp_relay.html` (the service runs the binary with `--ui` pointing at this file).
 
-During installation on a host with `systemctl` available (and no `DESTDIR`), the recipe stops any running `autod`/`udp_relay`/`joystick2crfs` services, installs the new assets and configuration in place, reloads `systemd`, and starts the services again without enabling them. If you staged into a `DESTDIR`, reload manually once the files land on the target system, then enable the daemon:
+During installation on a host with `systemctl` available (and no `DESTDIR`), the recipe stops any running `autod`/`udp_relay`/`joystick2crsf` services, installs the new assets and configuration in place, reloads `systemd`, and starts the services again without enabling them. If you staged into a `DESTDIR`, reload manually once the files land on the target system, then enable the daemon:
 
 ```bash
 sudo systemctl daemon-reload
@@ -99,7 +99,7 @@ sudo systemctl enable --now autod
 # Optional helper
 sudo systemctl enable --now udp_relay
 # Optional joystick bridge
-sudo systemctl enable --now joystick2crfs
+sudo systemctl enable --now joystick2crsf
 ```
 
 The service starts in the VRX data directory so the bundled helper scripts can find their message payloads without additional configuration.
@@ -230,9 +230,9 @@ Static files under `html/` can be served by the daemon (when `serve_ui=1`) or by
 - `sse_tail`: build with `make tools` and run `./sse_tail http://host:port/path` to observe SSE streams announced in the config.
 - `udp_relay`: controlled through its own config file [`configs/udp_relay.conf`](configs/udp_relay.conf). When installed system-wide the default path is `/etc/udp_relay/udp_relay.conf`; you can run it directly or via UI bindings. Dest tokens now accept the literal UART tokens (`uart`, `uart1`, …), letting binds forward into up to four configured UART sinks. Populate the matching `uart<n>_*` keys (`uart0_device`, etc.) and add `bind=uart`/`bind=uart1:ip:port` entries so each serial bridge shows up as a regular bind source and can fan out to UDP peers. Outbound packets reuse the daemon's global `src_ip`, so no UART-specific source binding is required.
 - `ip2uart`: run `make ip2uart` (or any of the cross variants) to build a bidirectional bridge between a UART and a UDP peer. It uses `/etc/ip2uart.conf` by default; a sample lives in [`configs/ip2uart.conf`](configs/ip2uart.conf). Pass `-c /path/to/conf` to point at a different configuration, use `-v` for once-per-second stats, and send `SIGHUP` to reload the config without dropping the process.
-- `joystick2crfs`: build with `make joystick2crfs` to translate an SDL2 joystick into CRSF or MAVLink RC frames. The utility requires SDL2 development headers (`libsdl2-dev` on Debian-based systems) and reads `/etc/joystick2crfs.conf` by default. A documented sample lives in [`configs/joystick2crfs.conf`](configs/joystick2crfs.conf); adjust the UDP target, SSE streaming options, and channel mapping there. Set `protocol=crsf` (default) for the existing 16-channel CRSF frame packer or `protocol=mavlink` to emit MAVLink v2 `RC_CHANNELS_OVERRIDE` messages with the first eight channels scaled to 1000–2000 µs. When using MAVLink, tune `mavlink_sysid`, `mavlink_compid`, `mavlink_target_sysid`, and `mavlink_target_compid` to match your vehicle IDs. The `arm_toggle` key (default `5`) designates the momentary control that latches channel 5 high after a 1 s hold and releases on a short tap. Toggle `use_gamecontroller` to choose between SDL's standardized `SDL_GameController` mappings and the legacy raw joystick layout. Send `SIGHUP` to reload the config without restarting; when `sse_enabled=true` the binary hosts a single-client SSE feed at `sse_bind` + `sse_path`, publishing the latest channel values at 10 Hz.
+- `joystick2crsf`: build with `make joystick2crsf` to translate an SDL2 joystick into CRSF or MAVLink RC frames. The utility requires SDL2 development headers (`libsdl2-dev` on Debian-based systems) and reads `/etc/joystick2crsf.conf` by default. A documented sample lives in [`configs/joystick2crsf.conf`](configs/joystick2crsf.conf); adjust the UDP target, SSE streaming options, and channel mapping there. Set `protocol=crsf` (default) for the existing 16-channel CRSF frame packer or `protocol=mavlink` to emit MAVLink v2 `RC_CHANNELS_OVERRIDE` messages with the first eight channels scaled to 1000–2000 µs. When using MAVLink, tune `mavlink_sysid`, `mavlink_compid`, `mavlink_target_sysid`, and `mavlink_target_compid` to match your vehicle IDs. The `arm_toggle` key (default `5`) designates the momentary control that latches channel 5 high after a 1 s hold and releases on a short tap. Toggle `use_gamecontroller` to choose between SDL's standardized `SDL_GameController` mappings and the legacy raw joystick layout. Send `SIGHUP` to reload the config without restarting; when `sse_enabled=true` the binary hosts a single-client SSE feed at `sse_bind` + `sse_path`, publishing the latest channel values at 10 Hz.
 
-For a complete walk-through that ties `autod`, `joystick2crfs`, and `ip2uart` together across a ground/vehicle link, read [`remote.md`](remote.md).
+For a complete walk-through that ties `autod`, `joystick2crsf`, and `ip2uart` together across a ground/vehicle link, read [`remote.md`](remote.md).
 
 #### `ip2uart` configuration keys
 

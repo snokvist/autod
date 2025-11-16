@@ -1,11 +1,11 @@
 [Unit]
-Description=joystick2crfs joystick bridge
+Description=joystick2crsf joystick bridge
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=@JOYSTICK2CRFS_BIN@ @JOYSTICK2CRFS_CONF@
+ExecStart=@JOYSTICK2CRSF_BIN@ @JOYSTICK2CRSF_CONF@
 ExecReload=/bin/kill -HUP $MAINPID
 KillSignal=SIGINT
 User=root

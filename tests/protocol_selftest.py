@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate reference CRSF and MAVLink frames for joystick2crfs."""
+"""Generate reference CRSF and MAVLink frames for joystick2crsf."""
 
 CRSF_DEST = 0xC8
 CRSF_TYPE_CHANNELS = 0x16
