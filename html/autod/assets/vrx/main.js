@@ -32,7 +32,7 @@ function findJoystickSseUrl(entries){
     if (!entry || typeof entry !== 'object') continue;
     const name = String(entry.name ?? '').toLowerCase();
     if (!entry.url) continue;
-    if (name === 'joystick2crfs' || name.includes('joystick')){
+    if (name === 'joystick2crsf' || name.includes('joystick')){
       return entry.url;
     }
   }
@@ -228,7 +228,7 @@ const joystickSse = (()=>{
 
   async function triggerJoystickReload(reason = ''){
     try {
-      const res = await postExec({ path:'/sys/joystick2crfs/reload', args:[] }, CMD_TIMEOUT_MS, 'joystick');
+      const res = await postExec({ path:'/sys/joystick2crsf/reload', args:[] }, CMD_TIMEOUT_MS, 'joystick');
       const rc = res?.rc;
       const ok = rc == null ? true : Number(rc) === 0;
       const stderr = (res?.stderr ?? '').toString().trim();
@@ -656,7 +656,7 @@ const joystickSse = (()=>{
       const es = new EventSource(url);
       source = es;
       if (typeof es.addEventListener === 'function'){
-        es.addEventListener('joystick2crfs', handleEvent);
+        es.addEventListener('joystick2crsf', handleEvent);
       }
       es.onmessage = handleEvent;
       es.onopen = ()=>{
@@ -2367,7 +2367,7 @@ const pixelpilotManager = createCapManager({
 });
 
 const joystickManager = createCapManager({
-  cap:'joystick2crfs',
+  cap:'joystick2crsf',
   prefix:'joystick',
   gridId:'joystickConfigGrid',
   statsId:'joystickConfigStats',
@@ -3494,7 +3494,7 @@ async function loadCaps(){
     const capList = Array.isArray(caps.caps) ? caps.caps : [];
     const hasExec = capList.includes('exec');
     const hasPixelpilotMiniRk = capList.includes('pixelpilot_mini_rk');
-    const hasJoystick = capList.includes('joystick2crfs');
+    const hasJoystick = capList.includes('joystick2crsf');
 
     const deviceCard = document.getElementById('capsCard');
     if (deviceCard){

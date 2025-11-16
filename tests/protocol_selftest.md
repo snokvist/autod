@@ -2,7 +2,7 @@
 
 Run `tests/protocol_selftest.py` to print reference CRSF and MAVLink frames built
 from a deterministic channel set. The script mirrors the helper algorithms used
-by `joystick2crfs` (CRSF packing, CRSF→µs scaling, and MAVLink v2 X25 checksums)
+by `joystick2crsf` (CRSF packing, CRSF→µs scaling, and MAVLink v2 X25 checksums)
 and emits both hex dumps:
 
 ```bash
@@ -11,7 +11,7 @@ python3 tests/protocol_selftest.py
 
 ## Verifying CRSF output
 
-1. Start `joystick2crfs` with `protocol=crsf` while time-slicing channel values
+1. Start `joystick2crsf` with `protocol=crsf` while time-slicing channel values
    (for example with the on-screen diagnostics or by feeding known joystick
    positions).
 2. Capture the UDP datagrams (`udp_target`) with `tcpdump -X udp port 14550`

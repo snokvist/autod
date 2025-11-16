@@ -1,10 +1,10 @@
 /**
- * joystick2crfs.c - SDL joystick to CRSF bridge with UDP/SSE outputs
+ * joystick2crsf.c - SDL joystick to CRSF bridge with UDP/SSE outputs
  *
  * The utility samples the selected joystick at 250 Hz, maps its controls to
  * 16 CRSF channels, and streams the packed frames to a UDP peer. Runtime
  * behaviour is configured exclusively via a config
- * file (default: /etc/joystick2crfs.conf).
+ * file (default: /etc/joystick2crsf.conf).
  */
 
 #define _POSIX_C_SOURCE 200809L
@@ -59,7 +59,7 @@
 #define PROTOCOL_CRSF       0
 #define PROTOCOL_MAVLINK    1
 
-#define DEFAULT_CONF       "/etc/joystick2crfs.conf"
+#define DEFAULT_CONF       "/etc/joystick2crsf.conf"
 #define MAX_LINE_LEN       512
 
 /* ------------------------------------------------------------------------- */
@@ -455,7 +455,7 @@ static int sse_handshake(int fd, const char *path)
         "Access-Control-Allow-Origin: *\r\n"
         "X-Accel-Buffering: no\r\n"
         "\r\n";
-    static const char *hello = ": joystick2crfs\n\n";
+    static const char *hello = ": joystick2crsf\n\n";
 
     if (sse_send_all(fd, headers, strlen(headers)) < 0) {
         return -1;

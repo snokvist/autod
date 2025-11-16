@@ -5,7 +5,7 @@
     "/sys/help",
     "/sys/pixelpilot/help",
     "/sys/udp_relay/help",
-    "/sys/joystick2crfs/help",
+    "/sys/joystick2crsf/help",
     "/sys/link/help",
     "/sys/pixelpilot_mini_rk/help",
     "/sys/sync/help"
