@@ -379,9 +379,15 @@ static void sync_master_force_slot_replay_locked(sync_master_state_t *state,
 
 static int sync_master_assign_slot_locked(sync_master_state_t *state,
                                           sync_slave_record_t *rec,
-                                          int slot_index) {
+                                          int slot_index,
+                                          int preserve_override) {
     if (!state || !rec || slot_index < 0 || slot_index >= SYNC_MAX_SLOTS) {
         return -1;
+    }
+
+    unsigned char had_override = 0;
+    if (preserve_override && state->slot_manual_overrides[slot_index]) {
+        had_override = state->slot_manual_overrides[slot_index];
     }
 
     if (sync_master_slot_matches(state, slot_index, rec->id)) {
@@ -389,6 +395,9 @@ static int sync_master_assign_slot_locked(sync_master_state_t *state,
         rec->last_ack_generation = 0;
         if (state->slot_generation[slot_index] <= 0) {
             state->slot_generation[slot_index] = 1;
+        }
+        if (had_override) {
+            state->slot_manual_overrides[slot_index] = had_override;
         }
         return state->slot_generation[slot_index];
     }
@@ -413,7 +422,7 @@ static int sync_master_assign_slot_locked(sync_master_state_t *state,
     strncpy(state->slot_assignees[slot_index], rec->id,
             sizeof(state->slot_assignees[slot_index]) - 1);
     state->slot_assignees[slot_index][sizeof(state->slot_assignees[slot_index]) - 1] = '\0';
-    state->slot_manual_overrides[slot_index] = 0;
+    state->slot_manual_overrides[slot_index] = had_override;
     rec->slot_index = slot_index;
     rec->last_ack_generation = 0;
     return sync_master_mark_slot_generation(state, slot_index);
@@ -429,7 +438,7 @@ static int sync_master_auto_assign_slot_locked_impl(sync_master_state_t *state,
         if (rec->slot_index == forbid_slot) {
             rec->slot_index = -1;
         } else if (!sync_master_slot_matches(state, rec->slot_index, rec->id)) {
-            (void)sync_master_assign_slot_locked(state, rec, rec->slot_index);
+            (void)sync_master_assign_slot_locked(state, rec, rec->slot_index, 1);
             return rec->slot_index;
         } else {
             if (state->slot_generation[rec->slot_index] <= 0) {
@@ -458,7 +467,7 @@ static int sync_master_auto_assign_slot_locked_impl(sync_master_state_t *state,
                     sizeof(displaced_id) - 1);
             displaced_id[sizeof(displaced_id) - 1] = '\0';
         }
-        (void)sync_master_assign_slot_locked(state, rec, preferred_slot);
+        (void)sync_master_assign_slot_locked(state, rec, preferred_slot, 1);
         if (displaced_id[0]) {
             sync_slave_record_t *displaced =
                 sync_master_find_record(state, displaced_id, 0);
@@ -474,7 +483,7 @@ static int sync_master_auto_assign_slot_locked_impl(sync_master_state_t *state,
     for (int i = 0; i < SYNC_MAX_SLOTS; i++) {
         if (i == forbid_slot) continue;
         if (sync_master_slot_matches(state, i, rec->id)) {
-            (void)sync_master_assign_slot_locked(state, rec, i);
+            (void)sync_master_assign_slot_locked(state, rec, i, 1);
             return i;
         }
     }
@@ -482,7 +491,7 @@ static int sync_master_auto_assign_slot_locked_impl(sync_master_state_t *state,
     for (int i = 0; i < SYNC_MAX_SLOTS; i++) {
         if (i == forbid_slot) continue;
         if (state->slot_assignees[i][0]) continue;
-        (void)sync_master_assign_slot_locked(state, rec, i);
+        (void)sync_master_assign_slot_locked(state, rec, i, 1);
         return i;
     }
     return -1;

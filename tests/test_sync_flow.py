@@ -276,6 +276,21 @@ class SyncFlowTest(unittest.TestCase):
                                                manual_overrides={2})
         self.assertEqual(planned, assignments)
 
+    def test_enforce_preferred_assignment_keeps_pinned_slot(self) -> None:
+        assignments = {1: "beta", 2: "alpha"}
+        preferences = {1: "alpha", 2: "beta"}
+        overrides = {1}
+
+        planned = enforce_preferred_assignment(assignments, preferences, "alpha",
+                                               manual_overrides=overrides)
+        self.assertEqual(planned, assignments)
+
+        # A second enforcement pass (as when a slave re-registers) should not
+        # discard the manual override or shuffle the pinned node back.
+        replayed = enforce_preferred_assignment(planned, preferences, "alpha",
+                                               manual_overrides=overrides)
+        self.assertEqual(replayed, assignments)
+
     def test_delete_assignments_removes_ids(self) -> None:
         assignments = {1: "alpha", 2: "bravo", 3: "charlie"}
         remaining = delete_assignments(assignments, ["bravo"])
