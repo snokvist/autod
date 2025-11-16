@@ -477,65 +477,10 @@ static int sync_master_auto_assign_slot_locked_impl(sync_master_state_t *state,
     return -1;
 }
 
-static int sync_master_auto_assign_slot_locked_impl(sync_master_state_t *state,
-                                                    sync_slave_record_t *rec,
-                                                    const config_t *cfg,
-                                                    int forbid_slot) {
-    if (!state || !rec) return -1;
-
-    if (rec->slot_index >= 0 && rec->slot_index < SYNC_MAX_SLOTS) {
-        if (rec->slot_index == forbid_slot) {
-            rec->slot_index = -1;
-        } else if (!sync_master_slot_matches(state, rec->slot_index, rec->id)) {
-            (void)sync_master_assign_slot_locked(state, rec, rec->slot_index);
-            return rec->slot_index;
-        } else {
-            if (state->slot_generation[rec->slot_index] <= 0) {
-                state->slot_generation[rec->slot_index] = 1;
-            }
-            return rec->slot_index;
-        }
-    }
-
-    int preferred_slot = sync_preferred_slot_for_id(cfg, rec->id);
-    if (preferred_slot >= 0 && preferred_slot < SYNC_MAX_SLOTS &&
-        preferred_slot != forbid_slot) {
-        char displaced_id[64];
-        displaced_id[0] = '\0';
-        if (state->slot_assignees[preferred_slot][0] &&
-            strcmp(state->slot_assignees[preferred_slot], rec->id) != 0) {
-            strncpy(displaced_id, state->slot_assignees[preferred_slot],
-                    sizeof(displaced_id) - 1);
-            displaced_id[sizeof(displaced_id) - 1] = '\0';
-        }
-        (void)sync_master_assign_slot_locked(state, rec, preferred_slot);
-        if (displaced_id[0]) {
-            sync_slave_record_t *displaced =
-                sync_master_find_record(state, displaced_id, 0);
-            if (displaced) {
-                displaced->slot_index = -1;
-                (void)sync_master_auto_assign_slot_locked_impl(
-                    state, displaced, cfg, preferred_slot);
-            }
-        }
-        return preferred_slot;
-    }
-
-    for (int i = 0; i < SYNC_MAX_SLOTS; i++) {
-        if (i == forbid_slot) continue;
-        if (sync_master_slot_matches(state, i, rec->id)) {
-            (void)sync_master_assign_slot_locked(state, rec, i);
-            return i;
-        }
-    }
-
-    for (int i = 0; i < SYNC_MAX_SLOTS; i++) {
-        if (i == forbid_slot) continue;
-        if (state->slot_assignees[i][0]) continue;
-        (void)sync_master_assign_slot_locked(state, rec, i);
-        return i;
-    }
-    return -1;
+static int sync_master_auto_assign_slot_locked(sync_master_state_t *state,
+                                               sync_slave_record_t *rec,
+                                               const config_t *cfg) {
+    return sync_master_auto_assign_slot_locked_impl(state, rec, cfg, -1);
 }
 
 static void sync_master_apply_slot_assignment_locked(sync_master_state_t *state,

@@ -657,21 +657,6 @@ static int format_http_date(time_t when, char *buf, size_t buf_sz) {
 }
 
 /* ----------------------- HTTP Handlers ----------------------- */
-typedef struct {
-    config_t cfg;
-    config_t base_cfg;
-    struct mg_context *ctx;
-    pthread_mutex_t cfg_lock;
-    JSON_Value *active_overrides;
-    int active_override_generation;
-    sync_master_state_t master;
-    sync_slave_state_t slave;
-} app_t;
-
-
-
-
-
 void app_rebuild_config_locked(app_t *app) {
     if (!app) return;
     config_t merged = app->base_cfg;
