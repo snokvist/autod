@@ -33,6 +33,7 @@ AUTOD_HTTP_PORT="${AUTOD_HTTP_PORT:-55667}"
 AUTOD_HTTP_HOST="${AUTOD_HTTP_HOST:-127.0.0.1}"
 AUTOD_HTTP_BASE="${AUTOD_HTTP_BASE:-http://${AUTOD_HTTP_HOST}:${AUTOD_HTTP_PORT}}"
 PIXELPILOT_MINI_RK_GAMMA_BIN="${PIXELPILOT_MINI_RK_GAMMA_BIN:-/usr/bin/gamma}"
+PIXELPILOT_MINI_RK_GAMMA_PRESETS="${PIXELPILOT_MINI_RK_GAMMA_PRESETS:-/etc/presets.ini}"
 case "$AUTOD_HTTP_BASE" in
   */) AUTOD_HTTP_BASE="${AUTOD_HTTP_BASE%/}" ;;
 esac
@@ -757,7 +758,7 @@ pixelpilot_mini_rk_gamma(){
     echo "gamma utility unavailable at $PIXELPILOT_MINI_RK_GAMMA_BIN" 1>&2
     return 4
   fi
-  "$PIXELPILOT_MINI_RK_GAMMA_BIN" "$@"
+  "$PIXELPILOT_MINI_RK_GAMMA_BIN" --presets "$PIXELPILOT_MINI_RK_GAMMA_PRESETS" "$@"
 }
 
 # legacy aliases that keep older endpoints working; prefer /sys/reboot and /sys/shutdown
