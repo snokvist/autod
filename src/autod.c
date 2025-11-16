@@ -853,14 +853,6 @@ static void app_config_snapshot(app_t *app, config_t *out) {
     pthread_mutex_unlock(&app->cfg_lock);
 }
 
-static void app_update_base_config(app_t *app, void (*mutator)(config_t *cfg)) {
-    if (!app || !mutator) return;
-    pthread_mutex_lock(&app->cfg_lock);
-    mutator(&app->base_cfg);
-    app_rebuild_config_locked(app);
-    pthread_mutex_unlock(&app->cfg_lock);
-}
-
 static void sync_slave_init_state(sync_slave_state_t *state) {
     if (!state) return;
     pthread_mutex_init(&state->lock, NULL);
