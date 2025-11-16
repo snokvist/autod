@@ -114,6 +114,12 @@ def enforce_preferred_assignment(assignments: dict[int, str],
     return dict(sorted(planned.items()))
 
 
+def delete_assignments(assignments: dict[int, str],
+                       delete_ids: list[str]) -> dict[int, str]:
+    doomed = set(delete_ids)
+    return {slot: sid for slot, sid in assignments.items() if sid not in doomed}
+
+
 class SyncFlowTest(unittest.TestCase):
     def test_slave_request_splits_caps(self) -> None:
         req = build_slave_request("sync,exec, nodes ", "node-1", 7)
@@ -207,6 +213,16 @@ class SyncFlowTest(unittest.TestCase):
         planned = enforce_preferred_assignment(assignments, preferences, "alpha",
                                                max_slots=1)
         self.assertEqual(planned, {1: "alpha"})
+
+    def test_delete_assignments_removes_ids(self) -> None:
+        assignments = {1: "alpha", 2: "bravo", 3: "charlie"}
+        remaining = delete_assignments(assignments, ["bravo"])
+        self.assertEqual(remaining, {1: "alpha", 3: "charlie"})
+
+    def test_delete_assignments_ignores_unknown_ids(self) -> None:
+        assignments = {1: "alpha"}
+        remaining = delete_assignments(assignments, ["ghost"])
+        self.assertEqual(remaining, assignments)
 
 
 if __name__ == "__main__":

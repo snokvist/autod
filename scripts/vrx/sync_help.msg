@@ -11,6 +11,9 @@
     {"name":"replay","description":"Force slots or specific slave IDs to rerun their slot command waterfall","args":[
       {"key":"slot","type":"int","description":"Slot to replay; repeat for multiple slots","required":false},
       {"key":"slave_id","type":"string","description":"Replay assignments for a given slave id","required":false}
+    ]},
+    {"name":"delete","description":"Flush cached registry entries via delete_ids","args":[
+      {"key":"slave_id","type":"string","description":"ID to remove; repeat for multiple entries","required":true}
     ]}
   ],
   "notes":[

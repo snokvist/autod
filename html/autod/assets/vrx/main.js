@@ -1454,6 +1454,22 @@ function createSyncUI(){
     return select;
   }
 
+  function buildDeleteButton(id){
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'sync-delete-btn';
+    btn.textContent = 'Flush ID';
+    btn.disabled = busy;
+    btn.addEventListener('click', ()=>{
+      if (!id) return;
+      if (typeof window !== 'undefined' && window.confirm){
+        if (!window.confirm(`Remove cached state for ${id}?`)) return;
+      }
+      void deleteSlave(id);
+    });
+    return btn;
+  }
+
   function handleSelection(id, value){
     if (value === '__cancel__'){
       pendingMoves.delete(id);
@@ -1533,6 +1549,7 @@ function createSyncUI(){
       const actions = document.createElement('div');
       actions.className = 'sync-slot-actions';
       actions.append(buildMoveSelect(rec.id));
+      actions.append(buildDeleteButton(rec.id));
       item.append(actions);
       frag.append(item);
     });
@@ -1586,6 +1603,7 @@ function createSyncUI(){
       const actions = document.createElement('div');
       actions.className = 'sync-slot-actions';
       actions.append(buildMoveSelect(rec.id));
+      actions.append(buildDeleteButton(rec.id));
       const replayBtn = document.createElement('button');
       replayBtn.type = 'button';
       replayBtn.className = 'sync-slot-replay';
@@ -1691,6 +1709,31 @@ function createSyncUI(){
       await refresh();
     }catch(e){
       statusEl.textContent = e.message || 'Failed to apply moves';
+    }finally{
+      setBusy(false);
+      updatePendingSummary();
+    }
+  }
+
+  async function deleteSlave(id){
+    if (!enabled || !id) return;
+    setBusy(true);
+    statusEl.textContent = `Deleting ${id}…`;
+    try{
+      const res = await fetch('/sync/push',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({delete_ids:[id]})
+      });
+      if (!res.ok){
+        let detail = '';
+        try { detail = await res.text(); } catch {}
+        throw new Error(`Failed to delete ${id} (${res.status} ${res.statusText} ${detail.trim()})`.trim());
+      }
+      statusEl.textContent = `Deleted ${id}`;
+      await refresh();
+    }catch(e){
+      statusEl.textContent = e.message || `Failed to delete ${id}`;
     }finally{
       setBusy(false);
       updatePendingSummary();

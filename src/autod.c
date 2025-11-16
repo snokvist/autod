@@ -972,6 +972,9 @@ static sync_slave_record_t *sync_master_find_record(sync_master_state_t *state,
                                                     const char *id, int create);
 static int sync_master_mark_slot_generation(sync_master_state_t *state,
                                             int slot_index);
+static int sync_master_slot_matches(const sync_master_state_t *state,
+                                    int slot_index,
+                                    const char *id);
 
 static void sync_master_release_slot_locked(sync_master_state_t *state,
                                             int slot_index) {
@@ -985,6 +988,19 @@ static void sync_master_release_slot_locked(sync_master_state_t *state,
     }
     state->slot_assignees[slot_index][0] = '\0';
     sync_master_mark_slot_generation(state, slot_index);
+}
+
+static int sync_master_delete_record_locked(sync_master_state_t *state,
+                                            const char *id) {
+    if (!state || !id || !*id) return 0;
+    sync_slave_record_t *rec = sync_master_find_record(state, id, 0);
+    if (!rec || !rec->in_use) return 0;
+    if (rec->slot_index >= 0 && rec->slot_index < SYNC_MAX_SLOTS &&
+        sync_master_slot_matches(state, rec->slot_index, rec->id)) {
+        sync_master_release_slot_locked(state, rec->slot_index);
+    }
+    memset(rec, 0, sizeof(*rec));
+    return 1;
 }
 
 static void sync_master_prune_locked(sync_master_state_t *state,
@@ -1102,7 +1118,7 @@ static int sync_master_assign_slot_locked(sync_master_state_t *state,
     if (state->slot_assignees[slot_index][0]) {
         sync_slave_record_t *prev =
             sync_master_find_record(state, state->slot_assignees[slot_index], 0);
-        if (prev) {
+        if (prev && prev->slot_index == slot_index) {
             prev->slot_index = -1;
             prev->last_ack_generation = 0;
         }
@@ -2871,10 +2887,17 @@ static int h_sync_push(struct mg_connection *c, void *ud) {
         char id[64];
     } replay_id_request_t;
 
+    typedef struct {
+        char id[64];
+    } delete_request_t;
+
     replay_slot_request_t replay_slot_requests[SYNC_MAX_SLOTS];
     int replay_slot_count = 0;
     replay_id_request_t replay_id_requests[SYNC_MAX_SLOTS];
     int replay_id_count = 0;
+    delete_request_t delete_requests[SYNC_MAX_SLAVES];
+    int delete_count = 0;
+    memset(delete_requests, 0, sizeof(delete_requests));
 
     JSON_Value *replay_slots_v = json_object_get_value(obj, "replay_slots");
     if (replay_slots_v) {
@@ -2928,9 +2951,46 @@ static int h_sync_push(struct mg_connection *c, void *ud) {
         }
     }
 
+    JSON_Value *delete_ids_v = json_object_get_value(obj, "delete_ids");
+    if (delete_ids_v) {
+        JSON_Value_Type t = json_value_get_type(delete_ids_v);
+        if (t == JSONArray) {
+            JSON_Array *arr = json_value_get_array(delete_ids_v);
+            size_t cnt = json_array_get_count(arr);
+            for (size_t i = 0; i < cnt && delete_count < SYNC_MAX_SLAVES; i++) {
+                const char *sid = json_array_get_string(arr, i);
+                if (!sid || !*sid) continue;
+                strncpy(delete_requests[delete_count].id, sid,
+                        sizeof(delete_requests[delete_count].id) - 1);
+                delete_requests[delete_count]
+                    .id[sizeof(delete_requests[delete_count].id) - 1] = '\0';
+                delete_count++;
+            }
+        } else if (t == JSONString && delete_count < SYNC_MAX_SLAVES) {
+            const char *sid = json_value_get_string(delete_ids_v);
+            if (sid && *sid) {
+                strncpy(delete_requests[delete_count].id, sid,
+                        sizeof(delete_requests[delete_count].id) - 1);
+                delete_requests[delete_count]
+                    .id[sizeof(delete_requests[delete_count].id) - 1] = '\0';
+                delete_count++;
+            }
+        }
+    }
+    if (delete_count < SYNC_MAX_SLAVES) {
+        const char *single_delete = json_object_get_string(obj, "delete_id");
+        if (single_delete && *single_delete) {
+            strncpy(delete_requests[delete_count].id, single_delete,
+                    sizeof(delete_requests[delete_count].id) - 1);
+            delete_requests[delete_count]
+                .id[sizeof(delete_requests[delete_count].id) - 1] = '\0';
+            delete_count++;
+        }
+    }
+
     int has_replay_requests = (replay_slot_count > 0 || replay_id_count > 0);
 
-    if (move_count == 0 && !has_replay_requests) {
+    if (move_count == 0 && !has_replay_requests && delete_count == 0) {
         JSON_Value *v = json_value_init_object();
         JSON_Object *o = json_object(v);
         json_object_set_string(o, "error", "no_moves_provided");
@@ -2958,6 +3018,29 @@ static int h_sync_push(struct mg_connection *c, void *ud) {
 
     pthread_mutex_lock(&app->master.lock);
     sync_master_prune_locked(&app->master, &cfg);
+
+    char deleted_ids[SYNC_MAX_SLAVES][64];
+    int deleted_count = 0;
+    memset(deleted_ids, 0, sizeof(deleted_ids));
+    for (int i = 0; i < delete_count; i++) {
+        if (!delete_requests[i].id[0]) continue;
+        int already_listed = 0;
+        for (int j = 0; j < deleted_count; j++) {
+            if (strcmp(deleted_ids[j], delete_requests[i].id) == 0) {
+                already_listed = 1;
+                break;
+            }
+        }
+        if (already_listed) continue;
+        if (sync_master_delete_record_locked(&app->master,
+                                             delete_requests[i].id)) {
+            strncpy(deleted_ids[deleted_count], delete_requests[i].id,
+                    sizeof(deleted_ids[deleted_count]) - 1);
+            deleted_ids[deleted_count]
+                [sizeof(deleted_ids[deleted_count]) - 1] = '\0';
+            deleted_count++;
+        }
+    }
 
     char planned[SYNC_MAX_SLOTS][64];
     for (int i = 0; i < SYNC_MAX_SLOTS; i++) {
@@ -3081,6 +3164,16 @@ static int h_sync_push(struct mg_connection *c, void *ud) {
     json_object_set_string(ro, "status", "updated");
     json_object_set_number(ro, "moves", move_count);
     json_object_set_number(ro, "replayed_slots", replayed_slots);
+    json_object_set_number(ro, "deleted", deleted_count);
+
+    if (deleted_count > 0) {
+        JSON_Value *deleted_v = json_value_init_array();
+        JSON_Array *deleted_arr = json_array(deleted_v);
+        for (int i = 0; i < deleted_count; i++) {
+            json_array_append_string(deleted_arr, deleted_ids[i]);
+        }
+        json_object_set_value(ro, "deleted_ids", deleted_v);
+    }
 
     JSON_Value *assign_v = json_value_init_array();
     JSON_Array *assignments = json_array(assign_v);

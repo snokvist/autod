@@ -154,6 +154,8 @@
 .sync-slot-prefer[data-status="open"]{color:#93c5fd}
 .sync-move-select{min-width:140px}
 .sync-slot-replay{font-size:12px;padding:4px 8px}
+.sync-delete-btn{font-size:12px;padding:4px 8px;background:#2a1717;color:#fff;border:1px solid rgba(255,107,107,.4);border-radius:6px}
+.sync-delete-btn:disabled{opacity:.6}
 .sync-waiting{display:grid;gap:8px}
 .sync-waiting-entry{border:1px dashed var(--line);border-radius:10px;padding:10px;display:grid;gap:6px}
 .sync-pending{border:1px solid var(--line);border-radius:10px;padding:10px;display:grid;gap:6px}

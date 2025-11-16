@@ -993,6 +993,45 @@ sync_replay_cmd(){
   http_post_local "/sync/push" "$body"
 }
 
+sync_delete_cmd(){
+  if [ $# -eq 0 ]; then
+    echo "usage: sync/delete slave_id=<id> [slave_id=<id> ...]" 1>&2
+    return 2
+  fi
+  id_buf=""
+  id_count=0
+  while [ $# -gt 0 ]; do
+    arg="$1"
+    case "$arg" in
+      slave_id=*|id=*)
+        sid="${arg#*=}"
+        if [ -z "$sid" ]; then
+          echo "missing slave_id value" 1>&2
+          return 2
+        fi
+        escaped="$(json_escape "$sid")"
+        if [ -n "$id_buf" ]; then
+          id_buf="$id_buf,\"$escaped\""
+        else
+          id_buf="\"$escaped\""
+        fi
+        id_count=$((id_count+1))
+        ;;
+      *)
+        echo "unknown arg: $arg" 1>&2
+        return 2
+        ;;
+    esac
+    shift
+  done
+  if [ $id_count -le 0 ]; then
+    echo "no slave_id entries provided" 1>&2
+    return 2
+  fi
+  body="{\"delete_ids\":[${id_buf}]}"
+  http_post_local "/sync/push" "$body"
+}
+
 # ======================= DISPATCH =======================
 case "$1" in
   # general
@@ -1049,6 +1088,7 @@ case "$1" in
   /sys/sync/status)         shift; sync_status_cmd "$@" ;;
   /sys/sync/move)           shift; sync_move_cmd "$@" ;;
   /sys/sync/replay)         shift; sync_replay_cmd "$@" ;;
+  /sys/sync/delete)         shift; sync_delete_cmd "$@" ;;
 
   # utility
   /sys/ping)               shift; ping -c 1 -W 1 "$1" 2>&1 ;;
