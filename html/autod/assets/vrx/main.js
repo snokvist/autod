@@ -1012,6 +1012,99 @@ async function runMiniRkCommand(command, btnEl){
   }
 }
 
+function parseMiniRkGammaPresets(stdout){
+  const out = [];
+  const seen = new Set();
+  const lines = String(stdout || '').split(/\r?\n/);
+  for (const rawLine of lines){
+    const line = rawLine.trim();
+    if (!line) continue;
+    if (/^available presets/i.test(line)) continue;
+    if (seen.has(line)) continue;
+    seen.add(line);
+    out.push(line);
+  }
+  return out;
+}
+
+function renderMiniRkGammaPresets(presets){
+  const select = document.getElementById('pixelpilotMiniRkGammaSelect');
+  const applyBtn = document.getElementById('pixelpilotMiniRkApplyGammaBtn');
+  if (!select || !applyBtn) return;
+  const finalPresets = Array.isArray(presets) ? presets : [];
+  select.innerHTML = '';
+  const placeholder = document.createElement('option');
+  placeholder.value = '';
+  placeholder.disabled = true;
+  placeholder.selected = true;
+  placeholder.textContent = finalPresets.length ? 'Select preset…' : 'No presets available';
+  select.appendChild(placeholder);
+  for (const preset of finalPresets){
+    const option = document.createElement('option');
+    option.value = preset;
+    option.textContent = preset;
+    select.appendChild(option);
+  }
+  select.disabled = finalPresets.length === 0;
+  applyBtn.disabled = true;
+}
+
+async function loadMiniRkGammaPresets(){
+  const select = document.getElementById('pixelpilotMiniRkGammaSelect');
+  const applyBtn = document.getElementById('pixelpilotMiniRkApplyGammaBtn');
+  const reloadBtn = document.getElementById('pixelpilotMiniRkReloadGammaBtn');
+  const noticeEl = document.getElementById('pixelpilotMiniRkGammaNotice');
+  if (!select || !applyBtn) return;
+  if (pixelpilotMiniRkUI.gamma.loading) return;
+  pixelpilotMiniRkUI.gamma.loading = true;
+  select.disabled = true;
+  applyBtn.disabled = true;
+  if (reloadBtn) reloadBtn.disabled = true;
+  if (noticeEl) noticeEl.textContent = 'Loading presets…';
+  try{
+    const res = await postExec({ path:'/sys/pixelpilot_mini_rk/gamma', args:['--list'] }, CMD_TIMEOUT_MS, 'pixelpilotMiniRk');
+    const presets = parseMiniRkGammaPresets(res?.stdout || '');
+    pixelpilotMiniRkUI.gamma.presets = presets;
+    renderMiniRkGammaPresets(presets);
+    if (noticeEl){
+      if (presets.length){
+        const plural = presets.length === 1 ? '' : 's';
+        noticeEl.textContent = `Loaded ${presets.length} preset${plural}`;
+      } else {
+        noticeEl.textContent = 'No presets reported';
+      }
+    }
+  }catch(e){
+    pixelpilotMiniRkUI.gamma.presets = [];
+    renderMiniRkGammaPresets([]);
+    if (noticeEl) noticeEl.textContent = e?.message || 'Failed to load presets';
+  }finally{
+    if (reloadBtn) reloadBtn.disabled = false;
+    pixelpilotMiniRkUI.gamma.loading = false;
+  }
+}
+
+function initMiniRkGammaControls(){
+  const select = document.getElementById('pixelpilotMiniRkGammaSelect');
+  const applyBtn = document.getElementById('pixelpilotMiniRkApplyGammaBtn');
+  const reloadBtn = document.getElementById('pixelpilotMiniRkReloadGammaBtn');
+  if (!select || !applyBtn) return;
+  select.addEventListener('change', () => {
+    applyBtn.disabled = !select.value;
+  });
+  applyBtn.addEventListener('click', () => {
+    const preset = select.value.trim();
+    if (!preset) return;
+    runMiniRkCommand({ path:'/sys/pixelpilot_mini_rk/gamma', args:[preset] }, applyBtn);
+  });
+  if (reloadBtn){
+    reloadBtn.addEventListener('click', () => {
+      loadMiniRkGammaPresets();
+    });
+  }
+  loadMiniRkGammaPresets();
+}
+
 const CAP_GET_STAGGER_MS = 100;
 const CAP_GET_TIMEOUT_MS = 150;
 const CAP_SET_DEBOUNCE_MS = 500;
@@ -2995,7 +3088,7 @@ const linkUI = { help:null };
 const syncUI = createSyncUI();
 const nodesUI = { enabled:false, expanded:new Set(), entries:new Map() };
 
-const pixelpilotMiniRkUI = { initialized:false };
+const pixelpilotMiniRkUI = { initialized:false, gamma:{ presets:[], loading:false } };
 
 const dvrUI = { initialized:false, hasExec:false, entries:[] };
 
@@ -3016,6 +3109,7 @@ function ensurePixelpilotMiniRkUI(){
     if (!btnEl) continue;
     btnEl.addEventListener('click', ()=> runMiniRkCommand(command, btnEl));
   }
+  initMiniRkGammaControls();
   pixelpilotMiniRkUI.initialized = true;
 }
 

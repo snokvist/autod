@@ -122,6 +122,15 @@
           <button id="pixelpilotMiniRkStopServiceBtn">Stop pixelpilot_mini_rk</button>
           <button id="pixelpilotMiniRkStartServiceBtn">Start pixelpilot_mini_rk</button>
         </div>
+        <div class="row mini-rk-gamma-row">
+          <label for="pixelpilotMiniRkGammaSelect">Gamma preset</label>
+          <select id="pixelpilotMiniRkGammaSelect" disabled>
+            <option>Loading presets…</option>
+          </select>
+          <button id="pixelpilotMiniRkApplyGammaBtn" type="button" disabled>Apply preset</button>
+          <button id="pixelpilotMiniRkReloadGammaBtn" type="button">Reload presets</button>
+          <div class="mut" id="pixelpilotMiniRkGammaNotice">Loading presets…</div>
+        </div>
         <div class="spacer"></div>
         <div class="mini-status">
           <div class="status-indicator" id="pixelpilotMiniRkStatus" aria-live="polite">Idle</div>
