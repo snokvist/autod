@@ -186,6 +186,7 @@ void sync_master_state_init(sync_master_state_t *state) {
     memset(state->records, 0, sizeof(state->records));
     memset(state->slot_generation, 0, sizeof(state->slot_generation));
     memset(state->slot_assignees, 0, sizeof(state->slot_assignees));
+    memset(state->slot_manual_overrides, 0, sizeof(state->slot_manual_overrides));
 }
 
 void sync_slave_reset_tracking(sync_slave_state_t *state) {
@@ -308,6 +309,7 @@ static void sync_master_release_slot_locked(sync_master_state_t *state,
         rec->last_ack_generation = 0;
     }
     state->slot_assignees[slot_index][0] = '\0';
+    state->slot_manual_overrides[slot_index] = 0;
     sync_master_mark_slot_generation(state, slot_index);
 }
 
@@ -411,6 +413,7 @@ static int sync_master_assign_slot_locked(sync_master_state_t *state,
     strncpy(state->slot_assignees[slot_index], rec->id,
             sizeof(state->slot_assignees[slot_index]) - 1);
     state->slot_assignees[slot_index][sizeof(state->slot_assignees[slot_index]) - 1] = '\0';
+    state->slot_manual_overrides[slot_index] = 0;
     rec->slot_index = slot_index;
     rec->last_ack_generation = 0;
     return sync_master_mark_slot_generation(state, slot_index);
@@ -437,6 +440,14 @@ static int sync_master_auto_assign_slot_locked_impl(sync_master_state_t *state,
     }
 
     int preferred_slot = sync_preferred_slot_for_id(cfg, rec->id);
+    if (preferred_slot >= 0 && preferred_slot < SYNC_MAX_SLOTS &&
+        preferred_slot != forbid_slot) {
+        if (state->slot_manual_overrides[preferred_slot] &&
+            state->slot_assignees[preferred_slot][0] &&
+            strcmp(state->slot_assignees[preferred_slot], rec->id) != 0) {
+            preferred_slot = -1;
+        }
+    }
     if (preferred_slot >= 0 && preferred_slot < SYNC_MAX_SLOTS &&
         preferred_slot != forbid_slot) {
         char displaced_id[64];
@@ -484,6 +495,7 @@ static int sync_master_auto_assign_slot_locked(sync_master_state_t *state,
 }
 
 static void sync_master_apply_slot_assignment_locked(sync_master_state_t *state,
+                                                     const config_t *cfg,
                                                      int slot_index,
                                                      const char *new_id) {
     if (!state || slot_index < 0 || slot_index >= SYNC_MAX_SLOTS) return;
@@ -523,6 +535,14 @@ static void sync_master_apply_slot_assignment_locked(sync_master_state_t *state,
         state->slot_assignees[slot_index][sizeof(state->slot_assignees[slot_index]) - 1] = '\0';
     } else {
         state->slot_assignees[slot_index][0] = '\0';
+    }
+
+    state->slot_manual_overrides[slot_index] = 0;
+    if (new_has && cfg && cfg->sync_slots[slot_index].prefer_id[0]) {
+        if (strncmp(cfg->sync_slots[slot_index].prefer_id, new_id,
+                    sizeof(cfg->sync_slots[slot_index].prefer_id)) != 0) {
+            state->slot_manual_overrides[slot_index] = 1;
+        }
     }
 
     sync_master_mark_slot_generation(state, slot_index);
@@ -1724,7 +1744,8 @@ static int h_sync_push(struct mg_connection *c, void *ud) {
     if (!error_code) {
         for (int slot = 0; slot < SYNC_MAX_SLOTS; slot++) {
             const char *new_id = planned[slot][0] ? planned[slot] : NULL;
-            sync_master_apply_slot_assignment_locked(&app->master, slot, new_id);
+            sync_master_apply_slot_assignment_locked(&app->master, &cfg, slot,
+                                                     new_id);
         }
 
         for (int slot = 0; slot < SYNC_MAX_SLOTS; slot++) {

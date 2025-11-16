@@ -1,5 +1,5 @@
 import unittest
-from typing import Optional
+from typing import Optional, Set
 
 
 def build_slave_request(config_caps: str, node_id: str, ack_generation: int) -> dict:
@@ -97,10 +97,17 @@ def preferred_slot_for_id(preferences: dict[int, str], node_id: str) -> int:
 def enforce_preferred_assignment(assignments: dict[int, str],
                                  preferences: dict[int, str],
                                  node_id: str,
-                                 max_slots: int = 10) -> dict[int, str]:
+                                 max_slots: int = 10,
+                                 manual_overrides: Optional[Set[int]] = None
+                                 ) -> dict[int, str]:
     planned: dict[int, str] = dict(assignments)
     preferred_slot = preferred_slot_for_id(preferences, node_id)
     if preferred_slot <= 0:
+        return dict(sorted(planned.items()))
+    overrides = manual_overrides or set()
+    current_occupant = planned.get(preferred_slot)
+    if (preferred_slot in overrides and current_occupant and
+            current_occupant != node_id):
         return dict(sorted(planned.items()))
     planned = {slot: sid for slot, sid in planned.items() if sid != node_id}
     displaced = planned.pop(preferred_slot, None)
@@ -261,6 +268,13 @@ class SyncFlowTest(unittest.TestCase):
         planned = enforce_preferred_assignment(assignments, preferences, "alpha",
                                                max_slots=1)
         self.assertEqual(planned, {1: "alpha"})
+
+    def test_enforce_preferred_assignment_respects_manual_override(self) -> None:
+        assignments = {1: "bravo", 2: "alpha"}
+        preferences = {1: "alpha", 2: "bravo"}
+        planned = enforce_preferred_assignment(assignments, preferences, "bravo",
+                                               manual_overrides={2})
+        self.assertEqual(planned, assignments)
 
     def test_delete_assignments_removes_ids(self) -> None:
         assignments = {1: "alpha", 2: "bravo", 3: "charlie"}

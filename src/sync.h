@@ -36,6 +36,7 @@ typedef struct {
     sync_slave_record_t records[SYNC_MAX_SLAVES];
     int slot_generation[SYNC_MAX_SLOTS];
     char slot_assignees[SYNC_MAX_SLOTS][64];
+    unsigned char slot_manual_overrides[SYNC_MAX_SLOTS];
 } sync_master_state_t;
 
 typedef struct {
