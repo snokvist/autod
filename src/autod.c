@@ -441,7 +441,6 @@ typedef struct {
 typedef struct {
     pthread_mutex_t lock;
     sync_slave_record_t records[SYNC_MAX_SLAVES];
-    int next_generation;
     int slot_generation[SYNC_MAX_SLOTS];
     char slot_assignees[SYNC_MAX_SLOTS][64];
 } sync_master_state_t;
@@ -871,7 +870,6 @@ static void sync_master_init_state(sync_master_state_t *state) {
     memset(state->records, 0, sizeof(state->records));
     memset(state->slot_generation, 0, sizeof(state->slot_generation));
     memset(state->slot_assignees, 0, sizeof(state->slot_assignees));
-    state->next_generation = 1;
 }
 
 static void sync_slave_set_applied_generation(app_t *app, int generation) {
@@ -970,17 +968,10 @@ static sync_slave_record_t *sync_master_find_record(sync_master_state_t *state, 
     return slot;
 }
 
-static int sync_master_next_generation_locked(sync_master_state_t *state) {
-    if (!state) return 1;
-    int gen = state->next_generation++;
-    if (state->next_generation < 1) state->next_generation = 1;
-    if (gen < 1) gen = 1;
-    return gen;
-}
-
 static int sync_master_mark_slot_generation(sync_master_state_t *state, int slot_index) {
     if (!state || slot_index < 0 || slot_index >= SYNC_MAX_SLOTS) return 0;
-    int gen = sync_master_next_generation_locked(state);
+    int gen = state->slot_generation[slot_index] + 1;
+    if (gen < 1) gen = 1;
     state->slot_generation[slot_index] = gen;
     return gen;
 }
@@ -997,7 +988,7 @@ static int sync_master_assign_slot_locked(sync_master_state_t *state,
         rec->slot_index = slot_index;
         rec->last_ack_generation = 0;
         if (state->slot_generation[slot_index] <= 0) {
-            state->slot_generation[slot_index] = sync_master_next_generation_locked(state);
+            state->slot_generation[slot_index] = 1;
         }
         return state->slot_generation[slot_index];
     }
@@ -1038,10 +1029,17 @@ static int sync_master_auto_assign_slot_locked(sync_master_state_t *state,
             strcmp(state->slot_assignees[rec->slot_index], rec->id) != 0) {
             (void)sync_master_assign_slot_locked(state, rec, rec->slot_index);
         } else if (state->slot_generation[rec->slot_index] <= 0) {
-            state->slot_generation[rec->slot_index] =
-                sync_master_next_generation_locked(state);
+            state->slot_generation[rec->slot_index] = 1;
         }
         return rec->slot_index;
+    }
+
+    for (int i = 0; i < SYNC_MAX_SLOTS; i++) {
+        if (state->slot_assignees[i][0] &&
+            strcmp(state->slot_assignees[i], rec->id) == 0) {
+            (void)sync_master_assign_slot_locked(state, rec, i);
+            return i;
+        }
     }
 
     for (int i = 0; i < SYNC_MAX_SLOTS; i++) {
@@ -1065,8 +1063,7 @@ static void sync_master_apply_slot_assignment_locked(sync_master_state_t *state,
         sync_slave_record_t *rec = sync_master_find_record(state, new_id, 0);
         if (rec) rec->slot_index = slot_index;
         if (state->slot_generation[slot_index] <= 0) {
-            state->slot_generation[slot_index] =
-                sync_master_next_generation_locked(state);
+            state->slot_generation[slot_index] = 1;
         }
         return;
     }
@@ -1122,14 +1119,6 @@ static JSON_Value *sync_master_build_slot_commands(const config_t *cfg,
     }
 
     return arr_v;
-}
-
-static int sync_master_peek_generation(sync_master_state_t *state) {
-    if (!state) return 0;
-    pthread_mutex_lock(&state->lock);
-    int g = state->next_generation;
-    pthread_mutex_unlock(&state->lock);
-    return g;
 }
 
 static int parse_http_url(const char *url, http_url_t *out) {
@@ -2121,8 +2110,6 @@ static int h_caps(struct mg_connection *c, void *ud){
                     json_object_set_string(so, "slot_label", slot_label_buf);
                 }
             }
-        } else if (strcasecmp(cfg.sync_role, "master") == 0) {
-            json_object_set_number(so, "next_generation", sync_master_peek_generation(&app->master));
         }
         json_object_set_value(o, "sync", sync_v);
     }
@@ -2573,7 +2560,6 @@ static int h_sync_slaves(struct mg_connection *c, void *ud) {
     pthread_mutex_unlock(&app->master.lock);
 
     json_object_set_value(ro, "slaves", arr_v);
-    json_object_set_number(ro, "next_generation", sync_master_peek_generation(&app->master));
     send_json(c, resp, 200, 1);
     json_value_free(resp);
     return 1;
@@ -2815,8 +2801,6 @@ static int h_sync_push(struct mg_connection *c, void *ud) {
         json_array_append_value(assignments, item);
     }
     json_object_set_value(ro, "assignments", assign_v);
-    json_object_set_number(ro, "next_generation",
-                           sync_master_peek_generation(&app->master));
 
     send_json(c, resp, 200, 1);
     json_value_free(resp);
