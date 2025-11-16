@@ -22,6 +22,8 @@ typedef struct {
     unsigned seen_scan; // internal: last scan sequence this node was seen in
     unsigned misses;    // consecutive scans not seen
     unsigned is_self;   // 1 if local interface; never pruned
+    char    sync_role[16];
+    char    sync_id[64];
 } scan_node_t;
 
 typedef struct {
@@ -47,6 +49,8 @@ typedef struct {
     char role[64];
     char device[64];
     char version[32];
+    char sync_role[16];
+    char sync_id[64];
     scan_extra_subnet_t extra_subnets[SCAN_MAX_EXTRA_SUBNETS];
     unsigned            extra_subnet_count;
 } scan_config_t;

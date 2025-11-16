@@ -28,6 +28,13 @@ STATE_DIR="${VRX_STATE_DIR:-/tmp/vrx}"
 LINK_STATE_FILE="$STATE_DIR/link.env"
 DVR_MEDIA_DIR="${DVR_MEDIA_DIR:-/media}"
 JOYSTICK2CRFS_CONF="${JOYSTICK2CRFS_CONF:-/etc/joystick2crfs.conf}"
+SYNC_MAX_SLOTS=10
+AUTOD_HTTP_PORT="${AUTOD_HTTP_PORT:-55667}"
+AUTOD_HTTP_HOST="${AUTOD_HTTP_HOST:-127.0.0.1}"
+AUTOD_HTTP_BASE="${AUTOD_HTTP_BASE:-http://${AUTOD_HTTP_HOST}:${AUTOD_HTTP_PORT}}"
+case "$AUTOD_HTTP_BASE" in
+  */) AUTOD_HTTP_BASE="${AUTOD_HTTP_BASE%/}" ;;
+esac
 
 if [ "$(id -u)" -ne 0 ]; then
   echo "exec-handler.sh requires root privileges; ensure autod.service runs as root" 1>&2
@@ -109,6 +116,57 @@ config_set(){
   kv_file_set "$key" "$value" "$file"
   echo "ok"
   return 0
+}
+
+http_url_for_path(){
+  path="$1"
+  [ -n "$path" ] || path="/"
+  case "$path" in
+    http://*|https://*) printf '%s' "$path"; return 0 ;;
+  esac
+  case "$path" in
+    /*) printf '%s%s' "$AUTOD_HTTP_BASE" "$path" ;;
+    *) printf '%s/%s' "$AUTOD_HTTP_BASE" "$path" ;;
+  esac
+}
+
+http_get_local(){
+  path="$1"
+  url="$(http_url_for_path "$path")" || return 2
+  if have curl; then
+    curl -fsS "$url"
+    return $?
+  fi
+  if have wget; then
+    wget -q -O - "$url"
+    return $?
+  fi
+  echo "sync commands require curl or wget" 1>&2
+  return 4
+}
+
+http_post_local(){
+  path="$1"; body="$2"
+  url="$(http_url_for_path "$path")" || return 2
+  if have curl; then
+    printf '%s' "$body" | curl -fsS -H 'Content-Type: application/json' --data-binary @- "$url"
+    return $?
+  fi
+  if have wget; then
+    tmp="$(mktemp /tmp/vrx-sync.XXXXXX 2>/dev/null)"
+    if [ -z "$tmp" ]; then tmp="/tmp/vrx-sync.$$"; fi
+    printf '%s' "$body" > "$tmp" || { rm -f "$tmp"; echo "failed to write sync payload" 1>&2; return 4; }
+    wget -q -O - --header='Content-Type: application/json' --post-file="$tmp" "$url"
+    rc=$?
+    rm -f "$tmp"
+    return $rc
+  fi
+  echo "sync commands require curl or wget" 1>&2
+  return 4
+}
+
+json_escape(){
+  printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
 }
 
 # ======================= General =======================
@@ -765,6 +823,215 @@ pixelpilot_mini_rk_restart(){
   return 3
 }
 
+# ======================= Sync slots =======================
+sync_status_cmd(){
+  if [ $# -ne 0 ]; then
+    echo "usage: sync/status" 1>&2
+    return 2
+  fi
+  http_get_local "/sync/slaves"
+}
+
+sync_move_append(){
+  sid="$1"; slot_value="$2"
+  if [ -z "$sid" ]; then
+    echo "missing slave_id" 1>&2
+    return 2
+  fi
+  escaped="$(json_escape "$sid")"
+  entry="{\"slave_id\":\"$escaped\",\"slot\":"
+  if [ "$slot_value" = "null" ]; then
+    entry="${entry}null}"
+  else
+    entry="${entry}${slot_value}}"
+  fi
+  if [ -n "$sync_moves_buf" ]; then
+    sync_moves_buf="$sync_moves_buf,$entry"
+  else
+    sync_moves_buf="$entry"
+  fi
+  return 0
+}
+
+sync_move_cmd(){
+  if [ $# -lt 2 ]; then
+    echo "usage: sync/move slave_id=<id> slot=<n|null> [slave_id=<id> slot=<n|null>]..." 1>&2
+    return 2
+  fi
+  sync_moves_buf=""
+  move_count=0
+  current_id=""
+  current_slot=""
+  current_has_slot=0
+  while [ $# -gt 0 ]; do
+    arg="$1"
+    case "$arg" in
+      slave_id=*|id=*)
+        if [ -n "$current_id" ]; then
+          if [ $current_has_slot -eq 0 ]; then
+            echo "slot missing for slave_id $current_id" 1>&2
+            return 2
+          fi
+          sync_move_append "$current_id" "$current_slot" || return $?
+          move_count=$((move_count+1))
+          current_slot=""
+          current_has_slot=0
+        fi
+        current_id="${arg#*=}"
+        ;;
+      slot=*)
+        if [ -z "$current_id" ]; then
+          echo "slot specified before slave_id" 1>&2
+          return 2
+        fi
+        slot_raw="${arg#*=}"
+        if [ -z "$slot_raw" ] || [ "$slot_raw" = "null" ] || [ "$slot_raw" = "none" ] || [ "$slot_raw" = "clear" ]; then
+          current_slot="null"
+          current_has_slot=1
+        else
+          if ! printf '%s' "$slot_raw" | grep -Eq '^[0-9]+$'; then
+            echo "invalid slot: $slot_raw" 1>&2
+            return 2
+          fi
+          slot_int="$slot_raw"
+          if [ "$slot_int" -le 0 ] || [ "$slot_int" -gt "$SYNC_MAX_SLOTS" ]; then
+            echo "slot must be between 1 and $SYNC_MAX_SLOTS" 1>&2
+            return 2
+          fi
+          current_slot="$slot_int"
+          current_has_slot=1
+        fi
+        ;;
+      *)
+        echo "unknown arg: $arg" 1>&2
+        return 2
+        ;;
+    esac
+    shift
+  done
+  if [ -n "$current_id" ]; then
+    if [ $current_has_slot -eq 0 ]; then
+      echo "slot missing for slave_id $current_id" 1>&2
+      return 2
+    fi
+    sync_move_append "$current_id" "$current_slot" || return $?
+    move_count=$((move_count+1))
+  fi
+  if [ "$move_count" -le 0 ]; then
+    echo "no moves specified" 1>&2
+    return 2
+  fi
+  body="{\"moves\":[${sync_moves_buf}]}"
+  http_post_local "/sync/push" "$body"
+}
+
+sync_replay_cmd(){
+  if [ $# -eq 0 ]; then
+    echo "usage: sync/replay slot=<n> [slot=<n> ...] [slave_id=<id> ...]" 1>&2
+    return 2
+  fi
+  slot_buf=""
+  slot_count=0
+  id_buf=""
+  id_count=0
+  while [ $# -gt 0 ]; do
+    arg="$1"
+    case "$arg" in
+      slot=*)
+        slot_raw="${arg#*=}"
+        if ! printf '%s' "$slot_raw" | grep -Eq '^[0-9]+$'; then
+          echo "invalid slot: $slot_raw" 1>&2
+          return 2
+        fi
+        slot_int="$slot_raw"
+        if [ "$slot_int" -le 0 ] || [ "$slot_int" -gt "$SYNC_MAX_SLOTS" ]; then
+          echo "slot must be between 1 and $SYNC_MAX_SLOTS" 1>&2
+          return 2
+        fi
+        if [ -n "$slot_buf" ]; then
+          slot_buf="$slot_buf,$slot_int"
+        else
+          slot_buf="$slot_int"
+        fi
+        slot_count=$((slot_count+1))
+        ;;
+      slave_id=*|id=*)
+        sid="${arg#*=}"
+        if [ -z "$sid" ]; then
+          echo "missing slave_id value" 1>&2
+          return 2
+        fi
+        escaped="$(json_escape "$sid")"
+        if [ -n "$id_buf" ]; then
+          id_buf="$id_buf,\"$escaped\""
+        else
+          id_buf="\"$escaped\""
+        fi
+        id_count=$((id_count+1))
+        ;;
+      *)
+        echo "unknown arg: $arg" 1>&2
+        return 2
+        ;;
+    esac
+    shift
+  done
+  if [ $slot_count -le 0 ] && [ $id_count -le 0 ]; then
+    echo "no replay targets supplied" 1>&2
+    return 2
+  fi
+  body="{"
+  sep=""
+  if [ $slot_count -gt 0 ]; then
+    body="${body}\"replay_slots\":[${slot_buf}]"
+    sep="," 
+  fi
+  if [ $id_count -gt 0 ]; then
+    body="${body}${sep}\"replay_ids\":[${id_buf}]"
+  fi
+  body="${body}}"
+  http_post_local "/sync/push" "$body"
+}
+
+sync_delete_cmd(){
+  if [ $# -eq 0 ]; then
+    echo "usage: sync/delete slave_id=<id> [slave_id=<id> ...]" 1>&2
+    return 2
+  fi
+  id_buf=""
+  id_count=0
+  while [ $# -gt 0 ]; do
+    arg="$1"
+    case "$arg" in
+      slave_id=*|id=*)
+        sid="${arg#*=}"
+        if [ -z "$sid" ]; then
+          echo "missing slave_id value" 1>&2
+          return 2
+        fi
+        escaped="$(json_escape "$sid")"
+        if [ -n "$id_buf" ]; then
+          id_buf="$id_buf,\"$escaped\""
+        else
+          id_buf="\"$escaped\""
+        fi
+        id_count=$((id_count+1))
+        ;;
+      *)
+        echo "unknown arg: $arg" 1>&2
+        return 2
+        ;;
+    esac
+    shift
+  done
+  if [ $id_count -le 0 ]; then
+    echo "no slave_id entries provided" 1>&2
+    return 2
+  fi
+  body="{\"delete_ids\":[${id_buf}]}"
+  http_post_local "/sync/push" "$body"
+}
+
 # ======================= DISPATCH =======================
 case "$1" in
   # general
@@ -815,6 +1082,13 @@ case "$1" in
   /sys/pixelpilot_mini_rk/start)            shift; pixelpilot_mini_rk_start "$@" ;;
   /sys/pixelpilot_mini_rk/stop)             shift; pixelpilot_mini_rk_stop "$@" ;;
   /sys/pixelpilot_mini_rk/restart)          shift; pixelpilot_mini_rk_restart "$@" ;;
+
+  # sync slots
+  /sys/sync/help)           print_help_msg "sync_help.msg" ;;
+  /sys/sync/status)         shift; sync_status_cmd "$@" ;;
+  /sys/sync/move)           shift; sync_move_cmd "$@" ;;
+  /sys/sync/replay)         shift; sync_replay_cmd "$@" ;;
+  /sys/sync/delete)         shift; sync_delete_cmd "$@" ;;
 
   # utility
   /sys/ping)               shift; ping -c 1 -W 1 "$1" 2>&1 ;;

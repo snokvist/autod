@@ -198,6 +198,8 @@ void scan_seed_self_nodes(const scan_config_t *cfg) {
         if (cfg->role[0])    strncpy(self.role,    cfg->role,    sizeof(self.role)-1);
         if (cfg->device[0])  strncpy(self.device,  cfg->device,  sizeof(self.device)-1);
         if (cfg->version[0]) strncpy(self.version, cfg->version, sizeof(self.version)-1);
+        if (cfg->sync_role[0]) strncpy(self.sync_role, cfg->sync_role, sizeof(self.sync_role) - 1);
+        if (cfg->sync_id[0])   strncpy(self.sync_id,   cfg->sync_id,   sizeof(self.sync_id) - 1);
         self.last_seen = now_s();
         self.is_self   = 1;
         self.seen_scan = g_scan_seq; // mark as current
@@ -353,6 +355,13 @@ static void probe_and_maybe_add(uint32_t a, int port) {
                 if (role)   strncpy(ni.role,    role,   sizeof(ni.role)-1);
                 if (device) strncpy(ni.device,  device, sizeof(ni.device)-1);
                 if (ver)    strncpy(ni.version, ver,    sizeof(ni.version)-1);
+                JSON_Object *sync = json_object_get_object(o, "sync");
+                if (sync) {
+                    const char *sync_role = json_object_get_string(sync, "role");
+                    const char *sync_id = json_object_get_string(sync, "id");
+                    if (sync_role) strncpy(ni.sync_role, sync_role, sizeof(ni.sync_role) - 1);
+                    if (sync_id)   strncpy(ni.sync_id,   sync_id,   sizeof(ni.sync_id) - 1);
+                }
                 ni.last_seen = now_s();
                 ni.seen_scan = g_scan_seq;
                 // keep is_self=0 by default
