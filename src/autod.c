@@ -67,7 +67,7 @@ static inline void arr_append_num2(JSON_Array *a, double x) {
 
 typedef struct {
     char name[64];
-    char prefer_name[64];
+    char prefer_id[64];
     int command_count;
     struct { char json[512]; } commands[SYNC_SLOT_MAX_COMMANDS];
 } sync_slot_config_t;
@@ -283,9 +283,9 @@ static int parse_ini(const char *path, config_t *cfg) {
             if (!strcmp(k, "name")) {
                 strncpy(slot->name, v, sizeof(slot->name) - 1);
                 slot->name[sizeof(slot->name) - 1] = '\0';
-            } else if (!strcmp(k, "prefer_name")) {
-                strncpy(slot->prefer_name, v, sizeof(slot->prefer_name) - 1);
-                slot->prefer_name[sizeof(slot->prefer_name) - 1] = '\0';
+            } else if (!strcmp(k, "prefer_id")) {
+                strncpy(slot->prefer_id, v, sizeof(slot->prefer_id) - 1);
+                slot->prefer_id[sizeof(slot->prefer_id) - 1] = '\0';
             } else if ((!strcmp(k, "exec") || !strcmp(k, "command"))) {
                 if (slot->command_count >= SYNC_SLOT_MAX_COMMANDS) {
                     fprintf(stderr,
@@ -334,9 +334,9 @@ static void fill_scan_config(const config_t *cfg, scan_config_t *scfg) {
 static int sync_preferred_slot_for_id(const config_t *cfg, const char *id) {
     if (!cfg || !id || !*id) return -1;
     for (int i = 0; i < SYNC_MAX_SLOTS; i++) {
-        if (!cfg->sync_slots[i].prefer_name[0]) continue;
-        if (strncmp(cfg->sync_slots[i].prefer_name, id,
-                    sizeof(cfg->sync_slots[i].prefer_name)) == 0) {
+        if (!cfg->sync_slots[i].prefer_id[0]) continue;
+        if (strncmp(cfg->sync_slots[i].prefer_id, id,
+                    sizeof(cfg->sync_slots[i].prefer_id)) == 0) {
             return i;
         }
     }
@@ -2722,9 +2722,9 @@ static int h_sync_slaves(struct mg_connection *c, void *ud) {
         if (cfg.sync_slots[slot].name[0]) {
             json_object_set_string(so, "label", cfg.sync_slots[slot].name);
         }
-        if (cfg.sync_slots[slot].prefer_name[0]) {
-            json_object_set_string(so, "prefer_name",
-                                   cfg.sync_slots[slot].prefer_name);
+        if (cfg.sync_slots[slot].prefer_id[0]) {
+            json_object_set_string(so, "prefer_id",
+                                   cfg.sync_slots[slot].prefer_id);
         }
         if (app->master.slot_assignees[slot][0]) {
             json_object_set_string(so, "assigned_id",

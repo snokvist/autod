@@ -1600,19 +1600,19 @@ function createSyncUI(){
       empty.textContent = 'Empty';
       body.append(empty);
     }
-    const preferName = meta && meta.prefer_name ? meta.prefer_name : '';
-    if (preferName){
+    const preferId = meta && meta.prefer_id ? meta.prefer_id : '';
+    if (preferId){
       const prefer = document.createElement('div');
       prefer.className = 'sync-slot-prefer';
-      if (rec && rec.id === preferName){
+      if (rec && rec.id === preferId){
         prefer.dataset.status = 'matched';
-        prefer.textContent = `Preferred id: ${preferName} (assigned)`;
+        prefer.textContent = `Preferred id: ${preferId} (assigned)`;
       } else if (rec){
         prefer.dataset.status = 'waiting';
-        prefer.textContent = `Preferred id: ${preferName} (awaiting)`;
+        prefer.textContent = `Preferred id: ${preferId} (awaiting)`;
       } else {
         prefer.dataset.status = 'open';
-        prefer.textContent = `Preferred id: ${preferName}`;
+        prefer.textContent = `Preferred id: ${preferId}`;
       }
       body.append(prefer);
     }

@@ -17,6 +17,6 @@
     "Commands proxy the daemon's /sync endpoints via http://127.0.0.1:55667 by default.",
     "Override AUTOD_HTTP_BASE (or AUTOD_HTTP_HOST/AUTOD_HTTP_PORT) to point at a different listener before launching autod.",
     "Provide multiple slave_id/slot pairs to swap assignments atomically in a single request.",
-    "GET /sync/slaves now includes per-slot metadata (labels plus prefer_name reservations) so you can spot reserved IDs even when placeholders occupy those slots."
+    "GET /sync/slaves now includes per-slot metadata (labels plus prefer_id reservations) so you can spot reserved IDs even when placeholders occupy those slots."
   ]
 }
