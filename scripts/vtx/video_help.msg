@@ -17,7 +17,7 @@
     {"key":"bitrate","type":"int","required":false,"default":12544,"description":"Target bitrate (kbps)","control":{"kind":"range","min":2048,"max":20480,"step":512,"unit":"kbps"}},
     {"key":"rcMode","type":"enum","required":false,"default":"cbr","description":"Rate control mode","control":{"kind":"select","options":["cbr","vbr","avbr"],"multi":false}},
     {"key":"gopSize","type":"float","required":false,"default":10,"description":"GOP size (seconds)","control":{"kind":"range","min":0.5,"max":10,"step":0.5,"unit":"s"}},
-    {"key":"size","type":"enum","required":false,"default":"1280x720","description":"Frame size","control":{"kind":"select","options":["960x540","1280x720","1920x1080"],"multi":false}},
+    {"key":"size","type":"enum","required":false,"default":"1280x720","description":"Frame size","control":{"kind":"select","options":["1920x1080","1600x900","1280x720","960x720","960x540","720x540","640x480","480x360"],"multi":false}},
     {"key":"exposure","type":"int","required":false,"default":7,"description":"ISP exposure","control":{"kind":"range","min":5,"max":32,"step":1}},
     {"key":"mirror","type":"bool","required":false,"default":false,"description":"Horizontal mirror","control":{"kind":"toggle"}},
     {"key":"flip","type":"bool","required":false,"default":false,"description":"Vertical flip","control":{"kind":"toggle"}},
