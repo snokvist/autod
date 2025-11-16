@@ -61,6 +61,31 @@ def parse_sync_reference(value: str) -> tuple[str, str]:
     return sync_id, path
 
 
+def should_release_slot(last_seen_ms: int, retention_s: int, now_ms: int) -> bool:
+    if retention_s <= 0:
+        return False
+    if last_seen_ms <= 0:
+        return False
+    return now_ms - last_seen_ms > retention_s * 1000
+
+
+def resolve_replay_targets(assignments: dict[int, str],
+                           replay_slots: list[int],
+                           replay_ids: list[str]) -> set[int]:
+    result: set[int] = set()
+    for slot in replay_slots:
+        if slot not in assignments:
+            raise ValueError(f"slot {slot} unassigned")
+        result.add(slot)
+    for slave_id in replay_ids:
+        match = next((slot for slot, sid in assignments.items()
+                      if sid == slave_id), 0)
+        if not match:
+            raise KeyError(slave_id)
+        result.add(match)
+    return result
+
+
 class SyncFlowTest(unittest.TestCase):
     def test_slave_request_splits_caps(self) -> None:
         req = build_slave_request("sync,exec, nodes ", "node-1", 7)
@@ -108,6 +133,31 @@ class SyncFlowTest(unittest.TestCase):
     def test_parse_sync_reference_rejects_http(self) -> None:
         with self.assertRaises(ValueError):
             parse_sync_reference("http://example.com")
+
+    def test_should_release_slot_respects_disabled_retention(self) -> None:
+        now_ms = 50000
+        self.assertFalse(should_release_slot(now_ms - 10000, 0, now_ms))
+        self.assertFalse(should_release_slot(0, 60, now_ms))
+
+    def test_should_release_slot_after_window(self) -> None:
+        now_ms = 100000
+        self.assertFalse(should_release_slot(now_ms - 2000, 5, now_ms))
+        self.assertTrue(should_release_slot(now_ms - 10000, 5, now_ms))
+
+    def test_resolve_replay_targets_combines_sources(self) -> None:
+        assignments = {1: "alpha", 2: "bravo"}
+        targets = resolve_replay_targets(assignments, [2], ["alpha"])
+        self.assertEqual(targets, {1, 2})
+
+    def test_resolve_replay_targets_rejects_empty_slot(self) -> None:
+        assignments = {1: "alpha"}
+        with self.assertRaises(ValueError):
+            resolve_replay_targets(assignments, [3], [])
+
+    def test_resolve_replay_targets_rejects_missing_id(self) -> None:
+        assignments = {1: "alpha"}
+        with self.assertRaises(KeyError):
+            resolve_replay_targets(assignments, [], ["ghost"])
 
 
 if __name__ == "__main__":

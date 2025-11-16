@@ -83,6 +83,7 @@ typedef struct {
     char sync_id[64];
     int  sync_register_interval_s;
     int  sync_allow_bind;
+    int  sync_slot_retention_s;
 
     sync_slot_config_t sync_slots[SYNC_MAX_SLOTS];
 
@@ -132,6 +133,7 @@ static void cfg_defaults(config_t *c) {
     c->enable_scan = 0;
     c->sync_register_interval_s = 30;
     c->sync_allow_bind = 1;
+    c->sync_slot_retention_s = 0;
     c->extra_subnet_count = 0;
 
     strncpy(c->interpreter, "/usr/bin/exec-handler.sh", sizeof(c->interpreter)-1);
@@ -267,6 +269,7 @@ static int parse_ini(const char *path, config_t *cfg) {
             else if (!strcmp(k,"id")) strncpy(cfg->sync_id, v, sizeof(cfg->sync_id) - 1);
             else if (!strcmp(k,"register_interval_s")) cfg->sync_register_interval_s = atoi(v);
             else if (!strcmp(k,"allow_bind")) cfg->sync_allow_bind = atoi(v);
+            else if (!strcmp(k,"slot_retention_s")) cfg->sync_slot_retention_s = atoi(v);
         } else if (strncmp(sect, "sync.slot", 9) == 0) {
             int slot_index = atoi(sect + 9);
             if (slot_index <= 0 || slot_index > SYNC_MAX_SLOTS) {
@@ -949,6 +952,71 @@ static void sync_slave_reset_tracking(app_t *app) {
     pthread_mutex_unlock(&app->cfg_lock);
 }
 
+static void sync_master_release_slot_locked(sync_master_state_t *state,
+                                            int slot_index) {
+    if (!state || slot_index < 0 || slot_index >= SYNC_MAX_SLOTS) return;
+    if (!state->slot_assignees[slot_index][0]) return;
+    sync_slave_record_t *rec =
+        sync_master_find_record(state, state->slot_assignees[slot_index], 0);
+    if (rec) {
+        rec->slot_index = -1;
+        rec->last_ack_generation = 0;
+    }
+    state->slot_assignees[slot_index][0] = '\0';
+    sync_master_mark_slot_generation(state, slot_index);
+}
+
+static void sync_master_prune_locked(sync_master_state_t *state,
+                                     const config_t *cfg) {
+    if (!state) return;
+    long long retention_ms = 0;
+    if (cfg && cfg->sync_slot_retention_s > 0) {
+        retention_ms = (long long)cfg->sync_slot_retention_s * 1000LL;
+    }
+    long long now = retention_ms > 0 ? now_ms() : 0;
+    long long cutoff = retention_ms > 0 ? now - retention_ms : 0;
+
+    for (int slot = 0; slot < SYNC_MAX_SLOTS; slot++) {
+        if (!state->slot_assignees[slot][0]) continue;
+        int release = 0;
+        sync_slave_record_t *rec =
+            sync_master_find_record(state, state->slot_assignees[slot], 0);
+        if (!rec || !rec->in_use) {
+            release = 1;
+        } else if (retention_ms > 0 && rec->last_seen_ms > 0 &&
+                   rec->last_seen_ms < cutoff) {
+            release = 1;
+        }
+        if (release) {
+            sync_master_release_slot_locked(state, slot);
+        }
+    }
+
+    if (retention_ms <= 0) return;
+
+    for (int i = 0; i < SYNC_MAX_SLAVES; i++) {
+        sync_slave_record_t *rec = &state->records[i];
+        if (!rec->in_use) continue;
+        if (rec->slot_index >= 0) continue;
+        if (rec->last_seen_ms <= 0) continue;
+        if (rec->last_seen_ms < cutoff) {
+            memset(rec, 0, sizeof(*rec));
+        }
+    }
+}
+
+static void sync_master_force_slot_replay_locked(sync_master_state_t *state,
+                                                 int slot_index) {
+    if (!state || slot_index < 0 || slot_index >= SYNC_MAX_SLOTS) return;
+    if (!state->slot_assignees[slot_index][0]) return;
+    sync_slave_record_t *rec =
+        sync_master_find_record(state, state->slot_assignees[slot_index], 0);
+    if (rec) {
+        rec->last_ack_generation = 0;
+    }
+    sync_master_mark_slot_generation(state, slot_index);
+}
+
 static sync_slave_record_t *sync_master_find_record(sync_master_state_t *state, const char *id, int create) {
     if (!state || !id || !*id) return NULL;
     sync_slave_record_t *slot = NULL;
@@ -1511,6 +1579,7 @@ static void *sync_slave_thread_main(void *arg) {
     char last_resolve_error[256] = "";
     int last_slot_reported = 0;
     char last_slot_label[64] = "";
+    int last_waiting_notice = 0;
     while (!app->slave.stop && !g_stop) {
         config_t cfg; app_config_snapshot(app, &cfg);
         if (strcasecmp(cfg.sync_role, "slave") != 0) {
@@ -1612,6 +1681,16 @@ static void *sync_slave_thread_main(void *arg) {
         JSON_Value *gen_v = json_object_get_value(ro, "generation");
         if (gen_v && json_value_get_type(gen_v) == JSONNumber) {
             generation = (int)json_value_get_number(gen_v);
+        }
+        const char *status = json_object_get_string(ro, "status");
+        int waiting_status = (status && strcasecmp(status, "waiting") == 0);
+        if (waiting_status) {
+            if (!last_waiting_notice) {
+                fprintf(stderr, "sync slave: waiting for master slot\n");
+                last_waiting_notice = 1;
+            }
+        } else if (last_waiting_notice) {
+            last_waiting_notice = 0;
         }
         int slot_number = 0;
         JSON_Value *slot_v = json_object_get_value(ro, "slot");
@@ -2425,6 +2504,7 @@ static int h_sync_register(struct mg_connection *c, void *ud) {
     char slot_label[64]; slot_label[0] = '\0';
 
     pthread_mutex_lock(&app->master.lock);
+    sync_master_prune_locked(&app->master, &cfg);
     sync_slave_record_t *rec = sync_master_find_record(&app->master, id, 1);
     if (!rec) {
         pthread_mutex_unlock(&app->master.lock);
@@ -2481,11 +2561,16 @@ static int h_sync_register(struct mg_connection *c, void *ud) {
     pthread_mutex_unlock(&app->master.lock);
 
     if (assigned_slot < 0) {
-        JSON_Value *v = json_value_init_object();
-        JSON_Object *o = json_object(v);
-        json_object_set_string(o, "error", "no_slots_available");
-        send_json(c, v, 503, 1);
-        json_value_free(v);
+        JSON_Value *resp = json_value_init_object();
+        JSON_Object *ro = json_object(resp);
+        json_object_set_string(ro, "status", "waiting");
+        json_object_set_string(ro, "id", id);
+        json_object_set_number(ro, "interval_s", cfg.sync_register_interval_s);
+        json_object_set_string(ro, "reason", "no_slots_available");
+        json_object_set_number(ro, "max_slots", SYNC_MAX_SLOTS);
+        json_object_set_null(ro, "slot");
+        send_json(c, resp, 200, 1);
+        json_value_free(resp);
         json_value_free(root);
         return 1;
     }
@@ -2534,6 +2619,7 @@ static int h_sync_slaves(struct mg_connection *c, void *ud) {
     JSON_Array *arr = json_array(arr_v);
 
     pthread_mutex_lock(&app->master.lock);
+    sync_master_prune_locked(&app->master, &cfg);
     for (int i = 0; i < SYNC_MAX_SLAVES; i++) {
         sync_slave_record_t *rec = &app->master.records[i];
         if (!rec->in_use) continue;
@@ -2689,7 +2775,74 @@ static int h_sync_push(struct mg_connection *c, void *ud) {
         }
     }
 
-    if (move_count == 0) {
+    typedef struct {
+        int slot_index;
+    } replay_slot_request_t;
+
+    typedef struct {
+        char id[64];
+    } replay_id_request_t;
+
+    replay_slot_request_t replay_slot_requests[SYNC_MAX_SLOTS];
+    int replay_slot_count = 0;
+    replay_id_request_t replay_id_requests[SYNC_MAX_SLOTS];
+    int replay_id_count = 0;
+
+    JSON_Value *replay_slots_v = json_object_get_value(obj, "replay_slots");
+    if (replay_slots_v) {
+        JSON_Value_Type t = json_value_get_type(replay_slots_v);
+        if (t == JSONArray) {
+            JSON_Array *arr = json_value_get_array(replay_slots_v);
+            size_t cnt = json_array_get_count(arr);
+            for (size_t i = 0; i < cnt && replay_slot_count < SYNC_MAX_SLOTS; i++) {
+                JSON_Value *slot_v = json_array_get_value(arr, i);
+                if (!slot_v || json_value_get_type(slot_v) != JSONNumber) continue;
+                double slot_num = json_value_get_number(slot_v);
+                int slot_int = (int)slot_num;
+                if ((double)slot_int != slot_num) continue;
+                if (slot_int <= 0 || slot_int > SYNC_MAX_SLOTS) continue;
+                replay_slot_requests[replay_slot_count++].slot_index = slot_int - 1;
+            }
+        } else if (t == JSONNumber && replay_slot_count < SYNC_MAX_SLOTS) {
+            double slot_num = json_value_get_number(replay_slots_v);
+            int slot_int = (int)slot_num;
+            if ((double)slot_int == slot_num &&
+                slot_int > 0 && slot_int <= SYNC_MAX_SLOTS) {
+                replay_slot_requests[replay_slot_count++].slot_index = slot_int - 1;
+            }
+        }
+    }
+
+    JSON_Value *replay_ids_v = json_object_get_value(obj, "replay_ids");
+    if (replay_ids_v) {
+        JSON_Value_Type t = json_value_get_type(replay_ids_v);
+        if (t == JSONArray) {
+            JSON_Array *arr = json_value_get_array(replay_ids_v);
+            size_t cnt = json_array_get_count(arr);
+            for (size_t i = 0; i < cnt && replay_id_count < SYNC_MAX_SLOTS; i++) {
+                const char *sid = json_array_get_string(arr, i);
+                if (!sid || !*sid) continue;
+                strncpy(replay_id_requests[replay_id_count].id, sid,
+                        sizeof(replay_id_requests[replay_id_count].id) - 1);
+                replay_id_requests[replay_id_count]
+                    .id[sizeof(replay_id_requests[replay_id_count].id) - 1] = '\0';
+                replay_id_count++;
+            }
+        } else if (t == JSONString && replay_id_count < SYNC_MAX_SLOTS) {
+            const char *sid = json_value_get_string(replay_ids_v);
+            if (sid && *sid) {
+                strncpy(replay_id_requests[replay_id_count].id, sid,
+                        sizeof(replay_id_requests[replay_id_count].id) - 1);
+                replay_id_requests[replay_id_count]
+                    .id[sizeof(replay_id_requests[replay_id_count].id) - 1] = '\0';
+                replay_id_count++;
+            }
+        }
+    }
+
+    int has_replay_requests = (replay_slot_count > 0 || replay_id_count > 0);
+
+    if (move_count == 0 && !has_replay_requests) {
         JSON_Value *v = json_value_init_object();
         JSON_Object *o = json_object(v);
         json_object_set_string(o, "error", "no_moves_provided");
@@ -2708,9 +2861,15 @@ static int h_sync_push(struct mg_connection *c, void *ud) {
     slot_snapshot_t snapshot[SYNC_MAX_SLOTS];
     int snapshot_count = 0;
     int error_code = 0;
-    char error_detail[64]; error_detail[0] = '\0';
+    char error_reason[64]; error_reason[0] = '\0';
+    char error_id[64]; error_id[0] = '\0';
+    int error_slot = 0;
+    int replay_mask[SYNC_MAX_SLOTS];
+    memset(replay_mask, 0, sizeof(replay_mask));
+    int replayed_slots = 0;
 
     pthread_mutex_lock(&app->master.lock);
+    sync_master_prune_locked(&app->master, &cfg);
 
     char planned[SYNC_MAX_SLOTS][64];
     for (int i = 0; i < SYNC_MAX_SLOTS; i++) {
@@ -2722,15 +2881,19 @@ static int h_sync_push(struct mg_connection *c, void *ud) {
         if (!moves[i].has_slot) continue;
         if (moves[i].slot_index >= SYNC_MAX_SLOTS) {
             error_code = 400;
-            snprintf(error_detail, sizeof(error_detail), "slot_out_of_range");
+            strncpy(error_reason, "slot_out_of_range", sizeof(error_reason) - 1);
+            error_reason[sizeof(error_reason) - 1] = '\0';
+            error_slot = moves[i].slot_index + 1;
             break;
         }
         sync_slave_record_t *rec =
             sync_master_find_record(&app->master, moves[i].id, 0);
         if (!rec) {
             error_code = 404;
-            strncpy(error_detail, moves[i].id, sizeof(error_detail) - 1);
-            error_detail[sizeof(error_detail) - 1] = '\0';
+            strncpy(error_reason, "slave_not_found", sizeof(error_reason) - 1);
+            error_reason[sizeof(error_reason) - 1] = '\0';
+            strncpy(error_id, moves[i].id, sizeof(error_id) - 1);
+            error_id[sizeof(error_id) - 1] = '\0';
             break;
         }
         for (int s = 0; s < SYNC_MAX_SLOTS; s++) {
@@ -2746,9 +2909,55 @@ static int h_sync_push(struct mg_connection *c, void *ud) {
     }
 
     if (!error_code) {
+        for (int i = 0; i < replay_slot_count; i++) {
+            int slot_index = replay_slot_requests[i].slot_index;
+            if (slot_index < 0 || slot_index >= SYNC_MAX_SLOTS) continue;
+            if (!planned[slot_index][0]) {
+                error_code = 409;
+                strncpy(error_reason, "slot_unassigned", sizeof(error_reason) - 1);
+                error_reason[sizeof(error_reason) - 1] = '\0';
+                error_slot = slot_index + 1;
+                break;
+            }
+            replay_mask[slot_index] = 1;
+        }
+    }
+
+    if (!error_code) {
+        for (int i = 0; i < replay_id_count; i++) {
+            int found_slot = -1;
+            for (int s = 0; s < SYNC_MAX_SLOTS; s++) {
+                if (planned[s][0] &&
+                    strcmp(planned[s], replay_id_requests[i].id) == 0) {
+                    found_slot = s;
+                    break;
+                }
+            }
+            if (found_slot < 0) {
+                error_code = 404;
+                strncpy(error_reason, "replay_slave_not_found",
+                        sizeof(error_reason) - 1);
+                error_reason[sizeof(error_reason) - 1] = '\0';
+                strncpy(error_id, replay_id_requests[i].id,
+                        sizeof(error_id) - 1);
+                error_id[sizeof(error_id) - 1] = '\0';
+                break;
+            }
+            replay_mask[found_slot] = 1;
+        }
+    }
+
+    if (!error_code) {
         for (int slot = 0; slot < SYNC_MAX_SLOTS; slot++) {
             const char *new_id = planned[slot][0] ? planned[slot] : NULL;
             sync_master_apply_slot_assignment_locked(&app->master, slot, new_id);
+        }
+
+        for (int slot = 0; slot < SYNC_MAX_SLOTS; slot++) {
+            if (!replay_mask[slot]) continue;
+            if (!app->master.slot_assignees[slot][0]) continue;
+            sync_master_force_slot_replay_locked(&app->master, slot);
+            replayed_slots++;
         }
 
         for (int slot = 0; slot < SYNC_MAX_SLOTS; slot++) {
@@ -2769,13 +2978,10 @@ static int h_sync_push(struct mg_connection *c, void *ud) {
     if (error_code) {
         JSON_Value *v = json_value_init_object();
         JSON_Object *o = json_object(v);
-        if (error_code == 404) {
-            json_object_set_string(o, "error", "slave_not_found");
-            if (error_detail[0]) json_object_set_string(o, "id", error_detail);
-        } else {
-            json_object_set_string(o, "error", error_detail[0] ? error_detail
-                                                                  : "invalid_request");
-        }
+        const char *reason = error_reason[0] ? error_reason : "invalid_request";
+        json_object_set_string(o, "error", reason);
+        if (error_id[0]) json_object_set_string(o, "id", error_id);
+        if (error_slot > 0) json_object_set_number(o, "slot", error_slot);
         send_json(c, v, error_code, 1);
         json_value_free(v);
         json_value_free(root);
@@ -2786,6 +2992,7 @@ static int h_sync_push(struct mg_connection *c, void *ud) {
     JSON_Object *ro = json_object(resp);
     json_object_set_string(ro, "status", "updated");
     json_object_set_number(ro, "moves", move_count);
+    json_object_set_number(ro, "replayed_slots", replayed_slots);
 
     JSON_Value *assign_v = json_value_init_array();
     JSON_Array *assignments = json_array(assign_v);

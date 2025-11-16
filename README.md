@@ -167,6 +167,7 @@ role = master
 register_interval_s = 30
 allow_bind = 1        ; let POST /sync/bind re-point the slave at runtime
 # id = custom-node-id ; defaults to the system hostname
+# slot_retention_s = 0 ; seconds to keep an idle slot reserved (0 = forever)
 ```
 
 Masters can advertise up to ten sync slots via `[sync.slotN]` sections. Each slot lists `/exec` payloads (JSON bodies) that run sequentially on the assigned slave whenever a new sync generation is issued:
@@ -181,7 +182,12 @@ exec = {"path": "/usr/local/bin/slot1-finalise", "args": ["--ok"]}
 - **Masters** advertise a `sync-master` capability in `/caps`, accept slave registrations at `POST /sync/register`, list known peers via `GET /sync/slaves`, and assign slots with `POST /sync/push`. The handler accepts bodies such as `{"moves": [{"slave_id": "alpha", "slot": 2}]}` to shuffle live assignments. During each heartbeat the master responds with the next slot command sequence (identified by generation) which the slave executes locally via the configured interpreter.
 - **Slaves** (advertising `sync-slave`) maintain a background thread that posts to the configured `master_url` every `register_interval_s` seconds. When the value uses the `sync://` scheme the daemon resolves the identifier through the LAN discovery cache before contacting the master. The response includes the assigned slot, optional slot label, and any commands queued for the next generation; the slave runs each command in order and acknowledges completion on subsequent heartbeats. Slaves also expose `POST /sync/bind` so an operator or master can redirect a running node to a new controller without editing disk config—send either `{ "master_id": "sync-master-id" }` or a `master_url` that already uses the `sync://` format so the daemon persists the identifier.
 
-POST `/sync/push` now accepts slot move requests (`{"moves": [...]}`) rather than configuration objects; the master increments the slot generation whenever an assignment changes so slaves replay their command list before acknowledging the new generation.
+Slot lifecycle highlights:
+
+- Masters keep each slot assignment and registry record pinned to the registering slave ID until the optional `slot_retention_s` timer elapses. The default of `0` means "retain forever" so a slave that reboots or drops offline can reclaim its previous slot as soon as it reconnects. Set a positive retention window if you want the master to free unused slots and purge idle records automatically.
+- When more than ten slaves register concurrently the extras receive a `status: "waiting"` response from `POST /sync/register`. They keep heartbeating (and logging the waiting status) until a slot frees up or you manually move another slave away. No `/exec` payloads are issued while a node is waiting.
+- `POST /sync/push` accepts slot move requests (`{"moves": [...]}`) to reshuffle assignments. The master increments the affected slot generation whenever an assignment changes, guaranteeing that the slave replays its slot command waterfall the next time it checks in. Moves are processed atomically so swapping or rotating slots across multiple slaves is handled gracefully without race conditions.
+- The same handler can now trigger a forced replay without changing assignments by sending `{"replay_slots": [2, 4]}` to bump specific slots or `{"replay_ids": ["alpha"]}` to target a slave ID. Each replay increments the slot generation and resets the slave's acknowledgement so the command stack runs again the moment it reports back. Requests referencing empty slots or unknown IDs are rejected so you immediately know when nothing was replayed.
 
 See the master ([`configs/autod.conf`](configs/autod.conf)) and slave ([`configs/slave/autod.conf`](configs/slave/autod.conf)) samples for full examples and the sync handlers in [`src/autod.c`](src/autod.c) for the request/response schema.
 
