@@ -1517,8 +1517,11 @@ function createSyncUI(){
       item.append(meta);
       const status = document.createElement('div');
       status.className = 'sync-slot-last';
+      const preferredSlot = Number(rec.preferred_slot);
       if (rec.slot && rec.slot > 0){
         status.textContent = `Reserved slot ${rec.slot}`;
+      } else if (Number.isFinite(preferredSlot) && preferredSlot > 0){
+        status.textContent = `Prefers slot ${preferredSlot}`;
       } else {
         status.textContent = 'Waiting for assignment';
       }
@@ -1536,7 +1539,7 @@ function createSyncUI(){
     waitingEl.append(frag);
   }
 
-  function buildSlotCard(slotNumber, rec, maxSeen){
+  function buildSlotCard(slotNumber, rec, maxSeen, meta){
     const slot = document.createElement('div');
     slot.className = 'sync-slot';
     const head = document.createElement('div');
@@ -1545,10 +1548,11 @@ function createSyncUI(){
     title.className = 'sync-slot-title';
     title.textContent = `Slot ${slotNumber}`;
     head.append(title);
-    if (rec && rec.slot_label){
+    const slotLabel = (rec && rec.slot_label) ? rec.slot_label : (meta && meta.label ? meta.label : '');
+    if (slotLabel){
       const label = document.createElement('div');
       label.className = 'sync-slot-label';
-      label.textContent = rec.slot_label;
+      label.textContent = slotLabel;
       head.append(label);
     }
     const gen = document.createElement('div');
@@ -1596,6 +1600,22 @@ function createSyncUI(){
       empty.textContent = 'Empty';
       body.append(empty);
     }
+    const preferName = meta && meta.prefer_name ? meta.prefer_name : '';
+    if (preferName){
+      const prefer = document.createElement('div');
+      prefer.className = 'sync-slot-prefer';
+      if (rec && rec.id === preferName){
+        prefer.dataset.status = 'matched';
+        prefer.textContent = `Preferred id: ${preferName} (assigned)`;
+      } else if (rec){
+        prefer.dataset.status = 'waiting';
+        prefer.textContent = `Preferred id: ${preferName} (awaiting)`;
+      } else {
+        prefer.dataset.status = 'open';
+        prefer.textContent = `Preferred id: ${preferName}`;
+      }
+      body.append(prefer);
+    }
     slot.append(body);
     return slot;
   }
@@ -1611,6 +1631,14 @@ function createSyncUI(){
       }
       const data = await res.json().catch(()=> ({}));
       const slaves = Array.isArray(data.slaves) ? data.slaves : [];
+      const slotMetaEntries = Array.isArray(data.slots) ? data.slots : [];
+      const slotMeta = new Map();
+      slotMetaEntries.forEach(entry => {
+        if (!entry || typeof entry !== 'object') return;
+        const slotNum = Number(entry.slot);
+        if (!Number.isFinite(slotNum) || slotNum <= 0 || slotNum > MAX_SLOTS) return;
+        slotMeta.set(slotNum, entry);
+      });
       const slots = Array.from({length:MAX_SLOTS}, ()=>null);
       const waiting = [];
       let maxSeen = 0;
@@ -1627,7 +1655,10 @@ function createSyncUI(){
       });
       gridEl.innerHTML = '';
       const frag = document.createDocumentFragment();
-      slots.forEach((rec, idx)=>{ frag.append(buildSlotCard(idx + 1, rec, maxSeen)); });
+      slots.forEach((rec, idx)=>{
+        const meta = slotMeta.get(idx + 1) || null;
+        frag.append(buildSlotCard(idx + 1, rec, maxSeen, meta));
+      });
       gridEl.append(frag);
       renderWaiting(waiting, maxSeen);
       statusEl.textContent = `Updated ${new Date().toLocaleTimeString()} • ${slaves.length} known`;

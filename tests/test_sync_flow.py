@@ -86,6 +86,34 @@ def resolve_replay_targets(assignments: dict[int, str],
     return result
 
 
+def preferred_slot_for_id(preferences: dict[int, str], node_id: str) -> int:
+    for slot in sorted(preferences):
+        if preferences[slot] == node_id:
+            return slot
+    return 0
+
+
+def enforce_preferred_assignment(assignments: dict[int, str],
+                                 preferences: dict[int, str],
+                                 node_id: str,
+                                 max_slots: int = 10) -> dict[int, str]:
+    planned: dict[int, str] = dict(assignments)
+    preferred_slot = preferred_slot_for_id(preferences, node_id)
+    if preferred_slot <= 0:
+        return dict(sorted(planned.items()))
+    planned = {slot: sid for slot, sid in planned.items() if sid != node_id}
+    displaced = planned.pop(preferred_slot, None)
+    planned[preferred_slot] = node_id
+    if displaced:
+        for slot in range(1, max_slots + 1):
+            if slot == preferred_slot:
+                continue
+            if slot not in planned:
+                planned[slot] = displaced
+                break
+    return dict(sorted(planned.items()))
+
+
 class SyncFlowTest(unittest.TestCase):
     def test_slave_request_splits_caps(self) -> None:
         req = build_slave_request("sync,exec, nodes ", "node-1", 7)
@@ -158,6 +186,27 @@ class SyncFlowTest(unittest.TestCase):
         assignments = {1: "alpha"}
         with self.assertRaises(KeyError):
             resolve_replay_targets(assignments, [], ["ghost"])
+
+    def test_preferred_slot_for_id_matches_mapping(self) -> None:
+        preferences = {1: "alpha", 3: "bravo"}
+        self.assertEqual(preferred_slot_for_id(preferences, "alpha"), 1)
+        self.assertEqual(preferred_slot_for_id(preferences, "bravo"), 3)
+        self.assertEqual(preferred_slot_for_id(preferences, "ghost"), 0)
+
+    def test_enforce_preferred_assignment_displaces_placeholder(self) -> None:
+        assignments = {1: "bravo", 2: "charlie"}
+        preferences = {1: "alpha"}
+        planned = enforce_preferred_assignment(assignments, preferences, "alpha")
+        self.assertEqual(planned[1], "alpha")
+        self.assertEqual(planned[2], "charlie")
+        self.assertEqual(planned[3], "bravo")
+
+    def test_enforce_preferred_assignment_waits_when_full(self) -> None:
+        assignments = {1: "bravo"}
+        preferences = {1: "alpha"}
+        planned = enforce_preferred_assignment(assignments, preferences, "alpha",
+                                               max_slots=1)
+        self.assertEqual(planned, {1: "alpha"})
 
 
 if __name__ == "__main__":

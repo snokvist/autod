@@ -148,6 +148,10 @@
 .sync-slot-last{font-size:12px;color:var(--mut)}
 .sync-slot-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
 .sync-slot-empty{color:var(--mut);font-size:12px}
+.sync-slot-prefer{font-size:12px;color:var(--mut);margin-top:4px}
+.sync-slot-prefer[data-status="matched"]{color:#34d399}
+.sync-slot-prefer[data-status="waiting"]{color:#f97316}
+.sync-slot-prefer[data-status="open"]{color:#93c5fd}
 .sync-move-select{min-width:140px}
 .sync-slot-replay{font-size:12px;padding:4px 8px}
 .sync-waiting{display:grid;gap:8px}
