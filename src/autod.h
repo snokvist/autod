@@ -18,7 +18,7 @@ typedef struct {
 
 #define STARTUP_MAX_EXEC 16
 
-typedef struct {
+typedef struct config {
     int  port;
     char bind_addr[64];
     int  enable_scan;

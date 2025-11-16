@@ -231,18 +231,6 @@ void fill_scan_config(const config_t *cfg, scan_config_t *scfg) {
     }
 }
 
-static int sync_preferred_slot_for_id(const config_t *cfg, const char *id) {
-    if (!cfg || !id || !*id) return -1;
-    for (int i = 0; i < SYNC_MAX_SLOTS; i++) {
-        if (!cfg->sync_slots[i].prefer_id[0]) continue;
-        if (strncmp(cfg->sync_slots[i].prefer_id, id,
-                    sizeof(cfg->sync_slots[i].prefer_id)) == 0) {
-            return i;
-        }
-    }
-    return -1;
-}
-
 static int log_civet_message(const struct mg_connection *conn, const char *message) {
     (void)conn;
     if (message && *message) {
@@ -575,6 +563,12 @@ static void add_cors_options(struct mg_connection *c) {
       "Connection: close\r\n\r\n");
 }
 
+static int h_options_all(struct mg_connection *c, void *ud) {
+    (void)ud;
+    add_cors_options(c);
+    return 1;
+}
+
 static const char *guess_mime_type(const char *path) {
     if (!path) return "application/octet-stream";
     const char *dot = strrchr(path, '.');
@@ -692,49 +686,67 @@ void app_config_snapshot(app_t *app, config_t *out) {
     pthread_mutex_unlock(&app->cfg_lock);
 }
 
+static void run_startup_exec_sequence(app_t *app) {
+    if (!app) return;
 
+    config_t cfg;
+    app_config_snapshot(app, &cfg);
+    if (cfg.startup_exec_count <= 0) return;
 
+    fprintf(stderr, "running %d startup exec command(s)\n",
+            cfg.startup_exec_count);
 
+    for (int i = 0; i < cfg.startup_exec_count; i++) {
+        const char *raw = cfg.startup_exec[i].json;
+        if (!raw[0]) continue;
 
+        JSON_Value *cmd = json_parse_string(raw);
+        if (!cmd || json_value_get_type(cmd) != JSONObject) {
+            fprintf(stderr,
+                    "startup exec[%d]: ignored malformed payload '%s'\n",
+                    i + 1, raw);
+            if (cmd) json_value_free(cmd);
+            continue;
+        }
 
+        JSON_Object *obj = json_object(cmd);
+        const char *path = json_object_get_string(obj, "path");
+        JSON_Array *args = json_object_get_array(obj, "args");
+        if (!path || !*path) {
+            fprintf(stderr,
+                    "startup exec[%d]: missing path in payload '%s'\n",
+                    i + 1, raw);
+            json_value_free(cmd);
+            continue;
+        }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-             i + 1, path);
+        char *out = NULL;
+        char *err = NULL;
+        int rc = 0;
+        long long elapsed = 0;
+        int r = run_exec(&cfg, path, args, cfg.exec_timeout_ms,
+                         cfg.max_output_bytes, &rc, &elapsed, &out, &err);
+        if (r == 0) {
+            fprintf(stderr,
+                    "startup exec[%d]: %s rc=%d elapsed=%lldms\n",
+                    i + 1, path, rc, elapsed);
+            if (out && *out) {
+                fprintf(stderr, "  stdout: %s\n", out);
+            }
+            if (err && *err) {
+                fprintf(stderr, "  stderr: %s\n", err);
+            }
+        } else {
+            fprintf(stderr,
+                    "startup exec[%d]: failed to run %s\n",
+                    i + 1, path);
         }
         if (out) free(out);
         if (err) free(err);
         json_value_free(cmd);
     }
 }
+
 
 static int h_health(struct mg_connection *c, void *ud){
     (void)ud;
