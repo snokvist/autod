@@ -8,7 +8,7 @@
 #   /sys/reboot                                 (schedule reboot)
 #   /sys/shutdown                               (schedule shutdown)
 #   /sys/pixelpilot/help|start|stop|toggle_record
-#   /sys/pixelpilot_mini_rk/help|toggle_osd|toggle_recording|start|stop|restart
+#   /sys/pixelpilot_mini_rk/help|toggle_osd|toggle_recording|gamma|start|stop|restart
 #   /sys/udp_relay/help|start|stop|status
 #   /sys/joystick2crfs/help|get|set|reload|start|stop|restart|status
 #   /sys/link/help|mode|select|start|stop|status
@@ -32,6 +32,8 @@ SYNC_MAX_SLOTS=10
 AUTOD_HTTP_PORT="${AUTOD_HTTP_PORT:-55667}"
 AUTOD_HTTP_HOST="${AUTOD_HTTP_HOST:-127.0.0.1}"
 AUTOD_HTTP_BASE="${AUTOD_HTTP_BASE:-http://${AUTOD_HTTP_HOST}:${AUTOD_HTTP_PORT}}"
+PIXELPILOT_MINI_RK_GAMMA_BIN="${PIXELPILOT_MINI_RK_GAMMA_BIN:-/usr/bin/gamma}"
+PIXELPILOT_MINI_RK_GAMMA_PRESETS="${PIXELPILOT_MINI_RK_GAMMA_PRESETS:-/etc/presets.ini}"
 case "$AUTOD_HTTP_BASE" in
   */) AUTOD_HTTP_BASE="${AUTOD_HTTP_BASE%/}" ;;
 esac
@@ -751,6 +753,14 @@ pixelpilot_mini_rk_signal(){
 pixelpilot_mini_rk_toggle_osd(){ pixelpilot_mini_rk_signal SIGUSR1 "OSD"; }
 pixelpilot_mini_rk_toggle_recording(){ pixelpilot_mini_rk_signal SIGUSR2 "Recording"; }
 
+pixelpilot_mini_rk_gamma(){
+  if [ ! -x "$PIXELPILOT_MINI_RK_GAMMA_BIN" ]; then
+    echo "gamma utility unavailable at $PIXELPILOT_MINI_RK_GAMMA_BIN" 1>&2
+    return 4
+  fi
+  "$PIXELPILOT_MINI_RK_GAMMA_BIN" --presets "$PIXELPILOT_MINI_RK_GAMMA_PRESETS" "$@"
+}
+
 # legacy aliases that keep older endpoints working; prefer /sys/reboot and /sys/shutdown
 pixelpilot_mini_rk_reboot(){
   reboot_cmd "$@"
@@ -1077,6 +1087,7 @@ case "$1" in
   /sys/pixelpilot_mini_rk/help)             print_help_msg "pixelpilot_mini_rk_help.msg" ;;
   /sys/pixelpilot_mini_rk/toggle_osd)       shift; pixelpilot_mini_rk_toggle_osd "$@" ;;
   /sys/pixelpilot_mini_rk/toggle_recording) shift; pixelpilot_mini_rk_toggle_recording "$@" ;;
+  /sys/pixelpilot_mini_rk/gamma)            shift; pixelpilot_mini_rk_gamma "$@" ;;
   /sys/pixelpilot_mini_rk/reboot)           shift; pixelpilot_mini_rk_reboot "$@" ;;
   /sys/pixelpilot_mini_rk/shutdown)         shift; pixelpilot_mini_rk_shutdown "$@" ;;
   /sys/pixelpilot_mini_rk/start)            shift; pixelpilot_mini_rk_start "$@" ;;
