@@ -84,7 +84,11 @@ map_cli_key(){
 # normalization
 norm_bool(){
   v=$(echo "$1" | tr 'A-Z' 'a-z')
-  case "$v" in 1|true|on|yes) echo 1;; 0|false|off|no) echo 0;; *) echo "__ERR__";; esac
+  case "$v" in
+    1|true|on|yes)  echo true ;;
+    0|false|off|no) echo false ;;
+    *)             echo "__ERR__" ;;
+  esac
 }
 
 norm_bitrate(){
