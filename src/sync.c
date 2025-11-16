@@ -1252,13 +1252,15 @@ static int h_sync_register(struct mg_connection *c, void *ud) {
     }
     sync_caps_from_json_value(caps_val, rec->caps, sizeof(rec->caps));
 
-    if (ack_generation > 0) {
-        if (ack_generation > rec->last_ack_generation) {
-            rec->last_ack_generation = ack_generation;
-        }
-    }
+    int previous_slot = rec->slot_index;
     assigned_slot = sync_master_auto_assign_slot_locked(&app->master, rec, &cfg);
     if (assigned_slot >= 0) {
+        int slot_changed = (previous_slot != assigned_slot);
+        if (slot_changed) {
+            rec->last_ack_generation = 0;
+        } else if (ack_generation > 0 && ack_generation > rec->last_ack_generation) {
+            rec->last_ack_generation = ack_generation;
+        }
         slot_generation = app->master.slot_generation[assigned_slot];
         if (slot_generation > rec->last_ack_generation) {
             send_generation = slot_generation;
