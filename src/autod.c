@@ -952,6 +952,11 @@ static void sync_slave_reset_tracking(app_t *app) {
     pthread_mutex_unlock(&app->cfg_lock);
 }
 
+static sync_slave_record_t *sync_master_find_record(sync_master_state_t *state,
+                                                    const char *id, int create);
+static int sync_master_mark_slot_generation(sync_master_state_t *state,
+                                            int slot_index);
+
 static void sync_master_release_slot_locked(sync_master_state_t *state,
                                             int slot_index) {
     if (!state || slot_index < 0 || slot_index >= SYNC_MAX_SLOTS) return;
@@ -1660,10 +1665,10 @@ static void *sync_slave_thread_main(void *arg) {
 
         char *resp_body = NULL;
         int timeout_ms = cfg.sync_register_interval_s > 0 ? cfg.sync_register_interval_s * 1000 : 5000;
-        int status = http_post_json_simple(&target, body, &resp_body, NULL, timeout_ms);
+        int http_status = http_post_json_simple(&target, body, &resp_body, NULL, timeout_ms);
         json_free_serialized_string(body);
 
-        if (status != 200 || !resp_body) {
+        if (http_status != 200 || !resp_body) {
             if (resp_body) free(resp_body);
             sleep(5);
             continue;
