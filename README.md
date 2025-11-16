@@ -191,6 +191,11 @@ Slot lifecycle highlights:
 
 See the master ([`configs/autod.conf`](configs/autod.conf)) and slave ([`configs/slave/autod.conf`](configs/slave/autod.conf)) samples for full examples and the sync handlers in [`src/autod.c`](src/autod.c) for the request/response schema.
 
+Operators can manage those assignments without crafting raw HTTP by using the bundled VRX assets:
+
+- The VRX web console exposes a **Sync slots** card (`html/autod/vrx_index.html`) that polls `GET /sync/slaves`, lists the ten slots plus any waiting slaves, and lets you queue multi-move plans. Once you confirm the moves the UI POSTs `{"moves": [...]}` to `/sync/push`, and you can trigger per-slot replays from the same view.
+- The `scripts/vrx/exec-handler.sh` wrapper now implements `/sys/sync/status`, `/sys/sync/move`, and `/sys/sync/replay` commands so you can drive the same control plane over `/exec`. The helper proxies those calls to `http://127.0.0.1:55667` by default; override `AUTOD_HTTP_BASE` (or `AUTOD_HTTP_HOST`/`AUTOD_HTTP_PORT`) before launching the daemon if the control plane listens elsewhere.
+
 ### Startup execution sequence
 
 The optional `[startup]` section lets you queue `/exec` payloads that should run automatically once the HTTP server and background threads come online. Each `exec = ...` line is a JSON blob matching the body of a `POST /exec` request:

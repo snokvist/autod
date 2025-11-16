@@ -7,7 +7,8 @@
     "/sys/udp_relay/help",
     "/sys/joystick2crfs/help",
     "/sys/link/help",
-    "/sys/pixelpilot_mini_rk/help"
+    "/sys/pixelpilot_mini_rk/help",
+    "/sys/sync/help"
   ],
   "commands":[
     {"name":"help","description":"Describe general system commands","args":[]},

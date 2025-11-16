@@ -47,6 +47,28 @@
     </div>
   </section>
 
+  <section class="card" id="syncCard" style="display:none">
+    <h2>Sync slots</h2>
+    <div class="body grid sync-body">
+      <div class="row">
+        <button id="syncRefreshBtn" type="button">Refresh status</button>
+        <button id="syncApplyMovesBtn" type="button" disabled>Apply pending moves</button>
+        <button id="syncClearMovesBtn" type="button" disabled>Clear pending</button>
+        <div class="spacer"></div>
+        <div class="mut" id="syncStatus">cap missing</div>
+      </div>
+      <div class="sync-pending" id="syncPendingWrap" style="display:none">
+        <div class="mut">Pending moves</div>
+        <ul id="syncPendingList"></ul>
+      </div>
+      <div class="sync-grid" id="syncSlotsGrid"></div>
+      <div>
+        <div class="mut">Waiting / unassigned slaves</div>
+        <div id="syncWaitingList" class="sync-waiting">—</div>
+      </div>
+    </div>
+  </section>
+
   <section class="card" id="pixelpilotCard" style="display:none">
     <h2>Pixelpilot</h2>
     <div class="body grid">

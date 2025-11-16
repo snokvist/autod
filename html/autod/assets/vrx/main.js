@@ -1322,6 +1322,387 @@ async function triggerNodesScan(){
   finally{ fetchNodes(); }
 }
 
+function createSyncUI(){
+  const card = document.getElementById('syncCard');
+  const gridEl = document.getElementById('syncSlotsGrid');
+  const waitingEl = document.getElementById('syncWaitingList');
+  const statusEl = document.getElementById('syncStatus');
+  const pendingWrap = document.getElementById('syncPendingWrap');
+  const pendingList = document.getElementById('syncPendingList');
+  const refreshBtn = document.getElementById('syncRefreshBtn');
+  const applyBtn = document.getElementById('syncApplyMovesBtn');
+  const clearBtn = document.getElementById('syncClearMovesBtn');
+  if (!card || !gridEl || !waitingEl || !statusEl || !pendingList){
+    return { setEnabled(){}, refresh(){}, submitMoves(){}, clearPending(){}, requestReplay(){} };
+  }
+
+  const MAX_SLOTS = 10;
+  const pendingMoves = new Map();
+  let enabled = false;
+  let busy = false;
+
+  pendingList.addEventListener('click', ev => {
+    const btn = ev.target.closest('[data-remove-id]');
+    if (!btn) return;
+    const id = btn.dataset.removeId;
+    if (!id) return;
+    pendingMoves.delete(id);
+    updatePendingSummary();
+  });
+
+  function setEnabled(flag){
+    enabled = !!flag;
+    card.style.display = flag ? '' : 'none';
+    if (!flag){
+      statusEl.textContent = 'cap missing';
+      gridEl.innerHTML = '';
+      waitingEl.textContent = '—';
+      pendingMoves.clear();
+      updatePendingSummary();
+      setBusy(false);
+      return;
+    }
+    statusEl.textContent = 'Loading…';
+    void refresh();
+  }
+
+  function setBusy(flag){
+    busy = !!flag;
+    if (refreshBtn) refreshBtn.disabled = busy;
+    if (applyBtn) applyBtn.disabled = busy || pendingMoves.size === 0;
+    if (clearBtn) clearBtn.disabled = busy || pendingMoves.size === 0;
+    card.querySelectorAll('.sync-move-select').forEach(sel => { sel.disabled = busy; });
+    card.querySelectorAll('.sync-slot-replay').forEach(btn => { btn.disabled = busy; });
+  }
+
+  function formatLastSeen(value, refValue){
+    const ms = Number(value);
+    const ref = Number(refValue);
+    if (!Number.isFinite(ms)) return '—';
+    if (!Number.isFinite(ref) || ref <= 0) return `${Math.round(ms)} ms`;
+    const delta = Math.max(0, ref - ms);
+    if (delta < 1500) return 'just now';
+    const secs = Math.round(delta / 1000);
+    if (secs < 60) return `${secs}s ago`;
+    const mins = Math.round(secs / 60);
+    if (mins < 60) return `${mins}m ago`;
+    const hours = Math.round(mins / 60);
+    if (hours < 48) return `${hours}h ago`;
+    const days = Math.round(hours / 24);
+    return `${days}d ago`;
+  }
+
+  function formatMeta(rec){
+    const parts = [];
+    if (rec.device) parts.push(rec.device);
+    if (rec.role) parts.push(rec.role);
+    if (rec.version) parts.push(`v${rec.version}`);
+    if (rec.remote_ip) parts.push(rec.remote_ip);
+    if (rec.address && rec.address !== rec.remote_ip) parts.push(rec.address);
+    return parts.join(' • ') || '—';
+  }
+
+  function applyPendingHint(select){
+    const placeholder = select.querySelector('option[value=""]');
+    if (!placeholder) return;
+    const id = select.dataset.slaveId;
+    const pending = pendingMoves.get(id);
+    if (pending === undefined){
+      placeholder.textContent = 'Move…';
+    } else if (pending === null){
+      placeholder.textContent = 'Pending → unassign';
+    } else {
+      placeholder.textContent = `Pending → slot ${pending}`;
+    }
+  }
+
+  function refreshPendingHints(){
+    card.querySelectorAll('.sync-move-select').forEach(sel => applyPendingHint(sel));
+  }
+
+  function buildMoveSelect(id){
+    const select = document.createElement('select');
+    select.className = 'sync-move-select';
+    select.dataset.slaveId = id;
+    select.disabled = busy;
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    select.append(placeholder);
+    applyPendingHint(select);
+    const clearOpt = document.createElement('option');
+    clearOpt.value = '__clear__';
+    clearOpt.textContent = 'Unassign slot';
+    select.append(clearOpt);
+    for (let i = 1; i <= MAX_SLOTS; i++){
+      const opt = document.createElement('option');
+      opt.value = String(i);
+      opt.textContent = `Slot ${i}`;
+      select.append(opt);
+    }
+    const cancelOpt = document.createElement('option');
+    cancelOpt.value = '__cancel__';
+    cancelOpt.textContent = 'Cancel pending move';
+    if (!pendingMoves.has(id)) cancelOpt.disabled = true;
+    select.append(cancelOpt);
+    select.addEventListener('change', ev => {
+      const value = ev.target.value;
+      if (!value) return;
+      handleSelection(id, value);
+      ev.target.value = '';
+      applyPendingHint(ev.target);
+    });
+    return select;
+  }
+
+  function handleSelection(id, value){
+    if (value === '__cancel__'){
+      pendingMoves.delete(id);
+    } else if (value === '__clear__'){
+      pendingMoves.set(id, null);
+    } else {
+      const slotNum = Number(value);
+      if (!Number.isFinite(slotNum) || slotNum <= 0) return;
+      pendingMoves.set(id, slotNum);
+    }
+    updatePendingSummary();
+  }
+
+  function updatePendingSummary(){
+    const hasPending = pendingMoves.size > 0;
+    if (pendingWrap) pendingWrap.style.display = hasPending ? 'block' : 'none';
+    if (applyBtn) applyBtn.disabled = busy || !hasPending;
+    if (clearBtn) clearBtn.disabled = busy || !hasPending;
+    pendingList.innerHTML = '';
+    if (!hasPending){
+      const li = document.createElement('li');
+      li.textContent = 'No pending moves';
+      pendingList.append(li);
+    } else {
+      const frag = document.createDocumentFragment();
+      for (const [id, slotVal] of pendingMoves.entries()){
+        const li = document.createElement('li');
+        const text = document.createElement('span');
+        text.textContent = `${id} → ${slotVal === null ? 'unassign' : `slot ${slotVal}`}`;
+        li.append(text);
+        const removeBtn = document.createElement('button');
+        removeBtn.type = 'button';
+        removeBtn.className = 'sync-remove-pending';
+        removeBtn.dataset.removeId = id;
+        removeBtn.textContent = 'Remove';
+        li.append(removeBtn);
+        frag.append(li);
+      }
+      pendingList.append(frag);
+    }
+    refreshPendingHints();
+  }
+
+  function renderWaiting(entries, maxSeen){
+    waitingEl.innerHTML = '';
+    if (!entries.length){
+      waitingEl.textContent = 'No waiting slaves';
+      return;
+    }
+    const frag = document.createDocumentFragment();
+    entries.forEach(rec => {
+      const item = document.createElement('div');
+      item.className = 'sync-waiting-entry';
+      const idEl = document.createElement('div');
+      idEl.className = 'sync-slot-id';
+      idEl.textContent = rec.id || '(unknown id)';
+      item.append(idEl);
+      const meta = document.createElement('div');
+      meta.className = 'sync-slot-meta';
+      meta.textContent = formatMeta(rec);
+      item.append(meta);
+      const status = document.createElement('div');
+      status.className = 'sync-slot-last';
+      if (rec.slot && rec.slot > 0){
+        status.textContent = `Reserved slot ${rec.slot}`;
+      } else {
+        status.textContent = 'Waiting for assignment';
+      }
+      item.append(status);
+      const last = document.createElement('div');
+      last.className = 'sync-slot-last';
+      last.textContent = `Last seen ${formatLastSeen(rec.last_seen_ms, maxSeen)}`;
+      item.append(last);
+      const actions = document.createElement('div');
+      actions.className = 'sync-slot-actions';
+      actions.append(buildMoveSelect(rec.id));
+      item.append(actions);
+      frag.append(item);
+    });
+    waitingEl.append(frag);
+  }
+
+  function buildSlotCard(slotNumber, rec, maxSeen){
+    const slot = document.createElement('div');
+    slot.className = 'sync-slot';
+    const head = document.createElement('div');
+    head.className = 'sync-slot-head';
+    const title = document.createElement('div');
+    title.className = 'sync-slot-title';
+    title.textContent = `Slot ${slotNumber}`;
+    head.append(title);
+    if (rec && rec.slot_label){
+      const label = document.createElement('div');
+      label.className = 'sync-slot-label';
+      label.textContent = rec.slot_label;
+      head.append(label);
+    }
+    const gen = document.createElement('div');
+    gen.className = 'sync-slot-gen';
+    if (rec && Number.isFinite(Number(rec.slot_generation))){
+      gen.textContent = `Generation ${rec.slot_generation}`;
+    } else {
+      gen.textContent = 'Generation —';
+    }
+    head.append(gen);
+    slot.append(head);
+    const body = document.createElement('div');
+    body.className = 'sync-slot-body';
+    if (rec){
+      const idEl = document.createElement('div');
+      idEl.className = 'sync-slot-id';
+      idEl.textContent = rec.id || '(unknown id)';
+      body.append(idEl);
+      const meta = document.createElement('div');
+      meta.className = 'sync-slot-meta';
+      meta.textContent = formatMeta(rec);
+      body.append(meta);
+      const last = document.createElement('div');
+      last.className = 'sync-slot-last';
+      last.textContent = `Last seen ${formatLastSeen(rec.last_seen_ms, maxSeen)}`;
+      body.append(last);
+      const ack = document.createElement('div');
+      ack.className = 'sync-slot-last';
+      ack.textContent = `Ack generation ${Number.isFinite(Number(rec.last_ack_generation)) ? rec.last_ack_generation : '—'}`;
+      body.append(ack);
+      const actions = document.createElement('div');
+      actions.className = 'sync-slot-actions';
+      actions.append(buildMoveSelect(rec.id));
+      const replayBtn = document.createElement('button');
+      replayBtn.type = 'button';
+      replayBtn.className = 'sync-slot-replay';
+      replayBtn.textContent = 'Replay commands';
+      replayBtn.disabled = busy;
+      replayBtn.addEventListener('click', ()=>{ void replaySlot(slotNumber); });
+      actions.append(replayBtn);
+      body.append(actions);
+    } else {
+      const empty = document.createElement('div');
+      empty.className = 'sync-slot-empty';
+      empty.textContent = 'Empty';
+      body.append(empty);
+    }
+    slot.append(body);
+    return slot;
+  }
+
+  async function refresh(){
+    if (!enabled) return;
+    try{
+      const res = await fetch('/sync/slaves',{cache:'no-store'});
+      if (!res.ok){
+        let detail = '';
+        try { detail = await res.text(); } catch {}
+        throw new Error(`Failed to load /sync/slaves (${res.status} ${res.statusText} ${detail.trim()})`.trim());
+      }
+      const data = await res.json().catch(()=> ({}));
+      const slaves = Array.isArray(data.slaves) ? data.slaves : [];
+      const slots = Array.from({length:MAX_SLOTS}, ()=>null);
+      const waiting = [];
+      let maxSeen = 0;
+      slaves.forEach(rec => {
+        if (!rec || typeof rec !== 'object') return;
+        const last = Number(rec.last_seen_ms);
+        if (Number.isFinite(last) && last > maxSeen) maxSeen = last;
+        const slotNum = Number(rec.slot);
+        if (Number.isFinite(slotNum) && slotNum > 0 && slotNum <= MAX_SLOTS){
+          slots[slotNum - 1] = rec;
+        } else {
+          waiting.push(rec);
+        }
+      });
+      gridEl.innerHTML = '';
+      const frag = document.createDocumentFragment();
+      slots.forEach((rec, idx)=>{ frag.append(buildSlotCard(idx + 1, rec, maxSeen)); });
+      gridEl.append(frag);
+      renderWaiting(waiting, maxSeen);
+      statusEl.textContent = `Updated ${new Date().toLocaleTimeString()} • ${slaves.length} known`;
+      refreshPendingHints();
+    }catch(e){
+      gridEl.innerHTML = '';
+      waitingEl.textContent = '—';
+      statusEl.textContent = e.message || 'Failed to load /sync/slaves';
+    }
+  }
+
+  async function submitMoves(){
+    if (!enabled || !pendingMoves.size) return;
+    setBusy(true);
+    statusEl.textContent = 'Applying pending moves…';
+    try{
+      const moves = Array.from(pendingMoves.entries()).map(([id, slotVal])=>({ slave_id:id, slot: slotVal === null ? null : slotVal }));
+      const res = await fetch('/sync/push',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({moves})
+      });
+      if (!res.ok){
+        let detail = '';
+        try { detail = await res.text(); } catch {}
+        throw new Error(`Failed to apply moves (${res.status} ${res.statusText} ${detail.trim()})`.trim());
+      }
+      pendingMoves.clear();
+      statusEl.textContent = `Moves applied ${new Date().toLocaleTimeString()}`;
+      await refresh();
+    }catch(e){
+      statusEl.textContent = e.message || 'Failed to apply moves';
+    }finally{
+      setBusy(false);
+      updatePendingSummary();
+    }
+  }
+
+  async function replaySlot(slotNumber){
+    const slotInt = Number(slotNumber);
+    if (!enabled || !Number.isFinite(slotInt) || slotInt <= 0) return;
+    setBusy(true);
+    statusEl.textContent = `Requesting replay for slot ${slotInt}…`;
+    try{
+      const res = await fetch('/sync/push',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({replay_slots:[slotInt]})
+      });
+      if (!res.ok){
+        let detail = '';
+        try { detail = await res.text(); } catch {}
+        throw new Error(`Replay failed (${res.status} ${res.statusText} ${detail.trim()})`.trim());
+      }
+      statusEl.textContent = `Replay requested for slot ${slotInt}`;
+      await refresh();
+    }catch(e){
+      statusEl.textContent = e.message || `Replay failed for slot ${slotInt}`;
+    }finally{
+      setBusy(false);
+      updatePendingSummary();
+    }
+  }
+
+  function clearPending(){
+    if (!pendingMoves.size) return;
+    pendingMoves.clear();
+    updatePendingSummary();
+  }
+
+  updatePendingSummary();
+
+  return { setEnabled, refresh, submitMoves, clearPending, requestReplay: replaySlot };
+}
+
 function sortSettings(settings){
   const sliders=[], selects=[], text=[], toggles=[], rest=[];
   for (const s of settings){
@@ -2537,6 +2918,7 @@ function ensureUdpSenderUI(){
 
 const linkUI = { help:null };
 
+const syncUI = createSyncUI();
 const nodesUI = { enabled:false, expanded:new Set(), entries:new Map() };
 
 const pixelpilotMiniRkUI = { initialized:false };
@@ -2979,6 +3361,9 @@ async function loadCaps(){
       }
     }
 
+    const hasSyncMaster = capList.includes('sync-master');
+    syncUI.setEnabled(hasSyncMaster);
+
     if (capList.includes('pixelpilot')){
       $('#pixelpilotCard').style.display = '';
       await pixelpilotManager.ensureUI();
@@ -3086,6 +3471,12 @@ $('#pixelpilotRefreshBtn').addEventListener('click', ()=> pixelpilotManager.refr
 $('#joystickRefreshBtn').addEventListener('click', ()=> joystickManager.refreshValues());
 $('#udpRelayRefreshBtn').addEventListener('click', ()=> udpRelayManager.refreshValues());
 $('#udpRelayReloadEmbedBtn').addEventListener('click', reloadUdpRelayEmbed);
+const syncRefreshBtn = $('#syncRefreshBtn');
+if (syncRefreshBtn){ syncRefreshBtn.addEventListener('click', ()=> syncUI.refresh()); }
+const syncApplyBtn = $('#syncApplyMovesBtn');
+if (syncApplyBtn){ syncApplyBtn.addEventListener('click', ()=> syncUI.submitMoves()); }
+const syncClearBtn = $('#syncClearMovesBtn');
+if (syncClearBtn){ syncClearBtn.addEventListener('click', ()=> syncUI.clearPending()); }
 
 const remoteExecTargetInput = $('#remoteExec_targetInput');
 if (remoteExecTargetInput){
