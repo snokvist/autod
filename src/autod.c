@@ -1025,8 +1025,10 @@ static int sync_master_auto_assign_slot_locked(sync_master_state_t *state,
     if (!state || !rec) return -1;
 
     if (rec->slot_index >= 0 && rec->slot_index < SYNC_MAX_SLOTS) {
-        if (!state->slot_assignees[rec->slot_index][0] ||
-            strcmp(state->slot_assignees[rec->slot_index], rec->id) != 0) {
+        int has_assignment = state->slot_assignees[rec->slot_index][0] != '\0';
+        if (!has_assignment) {
+            (void)sync_master_assign_slot_locked(state, rec, rec->slot_index);
+        } else if (strcmp(state->slot_assignees[rec->slot_index], rec->id) != 0) {
             (void)sync_master_assign_slot_locked(state, rec, rec->slot_index);
         } else if (state->slot_generation[rec->slot_index] <= 0) {
             state->slot_generation[rec->slot_index] = 1;
