@@ -20,7 +20,7 @@ JOYSTICK2CRFS_CONF ?= $(SYSCONFDIR)/joystick2crfs.conf
 SRC_DIR      := src
 
 # Sources (filenames only; rules add SRC_DIR/)
-SRC_CORE     := autod.c scan.c parson.c civetweb.c
+SRC_CORE     := autod.c sync.c scan.c parson.c civetweb.c
 
 # Tool defaults (can be overridden from env)
 CC_NATIVE    ?= gcc
