@@ -20,7 +20,7 @@ JOYSTICK2CRFS_CONF ?= $(SYSCONFDIR)/joystick2crfs.conf
 SRC_DIR      := src
 
 # Sources (filenames only; rules add SRC_DIR/)
-SRC_CORE     := autod.c scan.c parson.c civetweb.c
+SRC_CORE     := autod.c sync.c scan.c parson.c civetweb.c
 
 # Tool defaults (can be overridden from env)
 CC_NATIVE    ?= gcc
@@ -46,6 +46,12 @@ CFLAGS_TOOL_O2_C11   := -O2 -std=c11  -Wall -Wextra -MMD -MP
 CFLAGS_TOOL_O2_GNU11 := -O2 -std=gnu11 -Wall -Wextra -MMD -MP
 
 # SDL-only helpers (used by joystick2crfs)
+SDL_GOALS    := joystick2crfs tools install
+
+ifeq ($(filter $(SDL_GOALS),$(MAKECMDGOALS)),)
+SDL2_CFLAGS  :=
+SDL2_LDLIBS  :=
+else
 SDL2_CFLAGS  = $(shell $(PKGCONFIG) --cflags sdl2 2>/dev/null)
 SDL2_LDLIBS  = $(shell $(PKGCONFIG) --libs   sdl2 2>/dev/null)
 
@@ -56,6 +62,7 @@ endif
 
 ifeq ($(strip $(SDL2_CFLAGS)$(SDL2_LDLIBS)),)
 $(error SDL2 development files not found. Install libsdl2-dev (or equivalent) to build joystick2crfs.)
+endif
 endif
 
 # ===== Helper macro to define a build "flavor" =====

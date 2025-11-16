@@ -1,4 +1,5 @@
 import unittest
+from typing import Optional, Set
 
 
 def build_slave_request(config_caps: str, node_id: str, ack_generation: int) -> dict:
@@ -96,10 +97,17 @@ def preferred_slot_for_id(preferences: dict[int, str], node_id: str) -> int:
 def enforce_preferred_assignment(assignments: dict[int, str],
                                  preferences: dict[int, str],
                                  node_id: str,
-                                 max_slots: int = 10) -> dict[int, str]:
+                                 max_slots: int = 10,
+                                 manual_overrides: Optional[Set[int]] = None
+                                 ) -> dict[int, str]:
     planned: dict[int, str] = dict(assignments)
     preferred_slot = preferred_slot_for_id(preferences, node_id)
     if preferred_slot <= 0:
+        return dict(sorted(planned.items()))
+    overrides = manual_overrides or set()
+    current_occupant = planned.get(preferred_slot)
+    if (preferred_slot in overrides and current_occupant and
+            current_occupant != node_id):
         return dict(sorted(planned.items()))
     planned = {slot: sid for slot, sid in planned.items() if sid != node_id}
     displaced = planned.pop(preferred_slot, None)
@@ -122,11 +130,11 @@ def delete_assignments(assignments: dict[int, str],
 
 def apply_slot_plan(current_assignments: dict[int, str],
                     record_slots: dict[str, int],
-                    plan_overrides: dict[int, str | None],
+                    plan_overrides: dict[int, Optional[str]],
                     max_slots: int = 10) -> tuple[dict[int, str], dict[str, int]]:
     """Mirror sync_master_apply_slot_assignment_locked planning semantics."""
 
-    planned: dict[int, str | None] = {
+    planned: dict[int, Optional[str]] = {
         slot: current_assignments.get(slot)
         for slot in range(1, max_slots + 1)
     }
@@ -260,6 +268,28 @@ class SyncFlowTest(unittest.TestCase):
         planned = enforce_preferred_assignment(assignments, preferences, "alpha",
                                                max_slots=1)
         self.assertEqual(planned, {1: "alpha"})
+
+    def test_enforce_preferred_assignment_respects_manual_override(self) -> None:
+        assignments = {1: "bravo", 2: "alpha"}
+        preferences = {1: "alpha", 2: "bravo"}
+        planned = enforce_preferred_assignment(assignments, preferences, "bravo",
+                                               manual_overrides={2})
+        self.assertEqual(planned, assignments)
+
+    def test_enforce_preferred_assignment_keeps_pinned_slot(self) -> None:
+        assignments = {1: "beta", 2: "alpha"}
+        preferences = {1: "alpha", 2: "beta"}
+        overrides = {1}
+
+        planned = enforce_preferred_assignment(assignments, preferences, "alpha",
+                                               manual_overrides=overrides)
+        self.assertEqual(planned, assignments)
+
+        # A second enforcement pass (as when a slave re-registers) should not
+        # discard the manual override or shuffle the pinned node back.
+        replayed = enforce_preferred_assignment(planned, preferences, "alpha",
+                                               manual_overrides=overrides)
+        self.assertEqual(replayed, assignments)
 
     def test_delete_assignments_removes_ids(self) -> None:
         assignments = {1: "alpha", 2: "bravo", 3: "charlie"}
