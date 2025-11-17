@@ -6,7 +6,7 @@
 
 #include "parson.h"
 
-#define SYNC_MAX_SLOTS 10
+#define SYNC_MAX_SLOTS 4
 #define SYNC_SLOT_MAX_COMMANDS 16
 #define SYNC_MAX_SLAVES 64
 
