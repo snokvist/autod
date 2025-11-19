@@ -1,0 +1,1475 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>autod — ESP32 console</title>
+<link rel="stylesheet" href="./assets/console-theme.css">
+<link rel="stylesheet" href="./assets/vrx/vrx.css">
+<style>
+  body { margin: 0; }
+  header { padding: 1.5rem; display: flex; justify-content: space-between; align-items: center; }
+  header h1 { margin: 0; }
+  .header-actions { justify-content: flex-end; gap: 0.5rem; flex-wrap: wrap; }
+  .header-actions button { min-width: 150px; }
+  main { padding: 1.5rem; }
+  .tabs { display: flex; gap: 0.5rem; padding: 0 1.5rem; flex-wrap: wrap; }
+  .tabs button { border: none; background: rgba(255,255,255,0.1); color: inherit; padding: 0.5rem 1rem; border-radius: 999px; cursor: pointer; }
+  .tabs button.active { background: #fff; color: #000; }
+  .status-row { padding: 0 1.5rem 1rem; display: flex; gap: 1rem; flex-wrap: wrap; }
+  .status-pill { background: rgba(255,255,255,0.08); border-radius: 999px; padding: 0.35rem 0.75rem; font-size: 0.9rem; }
+  .tab-panel { display: none; flex-direction: column; gap: 1.5rem; }
+  .tab-panel.active { display: flex; }
+  .card h2, .card h3 { margin: 0 0 0.25rem; }
+  .slot-layout { display: grid; gap: 1.5rem; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
+  .slot-card .body { display: flex; flex-direction: column; gap: 0.75rem; }
+  .slot-summary-block { display: flex; flex-direction: column; gap: 0.35rem; }
+  .slot-line strong { font-size: 1.1rem; }
+  .slot-actions, .slot-waiting { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center; padding: 0.35rem 0; }
+  .slot-actions label, .slot-waiting label { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.95rem; min-width: 220px; }
+  .slot-actions select, .slot-waiting select { min-width: 200px; }
+  .slot-actions button, .slot-waiting button { height: 38px; }
+  .slot-node-card .body { padding: 1rem; display: flex; flex-direction: column; gap: 0.75rem; }
+  .node-controls { gap: 1rem; }
+  .node-relay { border-top: 1px solid rgba(255,255,255,0.08); padding-top: 0.75rem; display: flex; flex-direction: column; gap: 0.75rem; }
+  .node-relay textarea { width: 100%; min-height: 140px; }
+  .node-relay .row { gap: 0.75rem; flex-wrap: wrap; align-items: flex-end; }
+  .node-relay label { font-size: 0.95rem; display: flex; flex-direction: column; gap: 0.25rem; }
+  .node-relay input[type="text"],
+  .node-relay input[type="number"],
+  .node-relay select { min-width: 160px; }
+  textarea { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
+
+  @media (max-width: 960px){
+    header { flex-direction: column; align-items: flex-start; gap: 0.75rem; }
+    .header-actions { width: 100%; justify-content: flex-start; }
+    .tabs { padding: 0 1rem; }
+    .tabs button { flex: 1 1 calc(50% - 0.5rem); text-align: center; }
+    .status-row { flex-direction: column; align-items: stretch; }
+    .slot-actions, .slot-waiting { flex-direction: column; align-items: stretch; }
+    .slot-actions button, .slot-waiting button, .slot-actions select, .slot-waiting select { width: 100%; }
+    .slot-actions label, .slot-waiting label { width: 100%; }
+    .node-relay .row { flex-direction: column; align-items: stretch; }
+    .node-relay input[type="text"], .node-relay input[type="number"], .node-relay select { width: 100%; }
+    header { padding-bottom: 0.5rem; }
+  }
+</style>
+
+<header>
+  <div>
+    <div class="title">autod — ESP32 console</div>
+    <div class="sub" id="subtitle">nodes + sync overview</div>
+  </div>
+  <div class="row header-actions">
+    <button id="refreshNodesBtn">Refresh /nodes</button>
+    <button id="nodesScanBtn">POST /nodes (scan)</button>
+    <button id="syncRefreshBtn">Refresh /sync/slaves</button>
+  </div>
+</header>
+
+<nav class="tabs" role="tablist">
+  <button class="active" data-tab="groundstation" aria-controls="panel-groundstation">Groundstation</button>
+  <button data-tab="slot1" aria-controls="panel-slot1">Slot 1</button>
+  <button data-tab="slot2" aria-controls="panel-slot2">Slot 2</button>
+  <button data-tab="slot3" aria-controls="panel-slot3">Slot 3</button>
+</nav>
+
+<div class="status-row">
+  <div class="status-pill" id="nodesSummary">Nodes: waiting…</div>
+  <div class="status-pill" id="syncSummary">Sync: waiting…</div>
+</div>
+
+<main>
+  <section class="tab-panel active" data-panel="groundstation" id="panel-groundstation">
+    <section class="card" id="capsCard">
+      <h2>Device & runtime</h2>
+      <div class="body grid">
+        <div class="row" style="gap:0.75rem; flex-wrap:wrap;">
+          <button id="capsRefreshBtn">Refresh /caps</button>
+          <div class="spacer"></div>
+          <div class="mut" id="capsStatus">waiting…</div>
+        </div>
+        <div class="kv"><div class="mut">Device</div><div id="dev_device">—</div></div>
+        <div class="kv"><div class="mut">Role</div><div id="dev_role">—</div></div>
+        <div class="kv"><div class="mut">Version</div><div id="dev_version">—</div></div>
+        <div class="kv"><div class="mut">Interfaces</div><div id="dev_if">—</div></div>
+        <div class="kv"><div class="mut">Uptime</div><div id="dev_uptime">—</div></div>
+        <div class="kv"><div class="mut">Loadavg</div><div id="dev_load">—</div></div>
+        <div class="kv"><div class="mut">Capabilities</div><div class="caps" id="dev_caps">—</div></div>
+        <div class="kv"><div class="mut">SSE</div><div class="sse" id="dev_sse">—</div></div>
+        <div class="row" id="deviceRuntimeActions" style="display:none">
+          <button id="pixelpilotMiniRkRebootBtn">Reboot device</button>
+          <button id="pixelpilotMiniRkShutdownBtn">Shutdown device</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="card" id="pixelpilotMiniRkCard" style="display:none">
+      <h2>Pixelpilot Mini RK</h2>
+      <div class="body grid">
+        <div class="cap-toolbar">
+          <div class="row" id="pixelpilotMiniRkActions">
+            <button id="pixelpilotMiniRkToggleOsdBtn">Toggle OSD</button>
+            <button id="pixelpilotMiniRkToggleRecordingBtn">Toggle Recording</button>
+            <button id="pixelpilotMiniRkRestartServiceBtn">Restart pixelpilot_mini_rk</button>
+            <button id="pixelpilotMiniRkStopServiceBtn">Stop pixelpilot_mini_rk</button>
+            <button id="pixelpilotMiniRkStartServiceBtn">Start pixelpilot_mini_rk</button>
+          </div>
+          <div class="row mini-rk-gamma-row">
+            <label for="pixelpilotMiniRkGammaSelect">Gamma preset</label>
+            <select id="pixelpilotMiniRkGammaSelect" disabled>
+              <option>Loading presets…</option>
+            </select>
+            <button id="pixelpilotMiniRkApplyGammaBtn" type="button" disabled>Apply preset</button>
+            <button id="pixelpilotMiniRkReloadGammaBtn" type="button">Reload presets</button>
+            <div class="mut" id="pixelpilotMiniRkGammaNotice">Loading presets…</div>
+          </div>
+          <div class="spacer"></div>
+          <div class="mini-status">
+            <div class="status-indicator" id="pixelpilotMiniRkStatus" aria-live="polite">Idle</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card" id="dvrCard" style="display:none">
+      <h2>DVR recordings</h2>
+      <div class="body grid dvr-body">
+        <div class="row">
+          <button id="dvrRefreshBtn">Refresh list</button>
+          <button id="dvrDeleteAllBtn">Delete all</button>
+          <div class="spacer"></div>
+          <div class="mut" id="dvrStatus">—</div>
+        </div>
+        <div class="dvr-scroll">
+          <div id="dvrMessage" class="dvr-message" style="display:none"></div>
+          <div id="dvrEmptyState" class="dvr-empty" style="display:none">No recordings found.</div>
+          <div id="dvrList" class="dvr-list"></div>
+        </div>
+      </div>
+    </section>
+  </section>
+
+  <section class="tab-panel" data-panel="slot1" id="panel-slot1">
+    <div class="slot-layout" data-slot="1">
+      <section class="card slot-card">
+        <h2>Slot 1</h2>
+        <div class="body">
+          <div class="slot-summary-block">
+            <div class="slot-line" id="slot1Summary">No slave assigned.</div>
+            <div class="slot-line mut" id="slot1Meta">—</div>
+            <div class="slot-line mut" id="slot1LastSeen">Last seen —</div>
+            <div class="slot-line mut" id="slot1Generation">Generation: —</div>
+            <div class="slot-line mut" id="slot1SlotMeta">Slot config: —</div>
+          </div>
+          <div class="slot-actions">
+            <button type="button" class="slot-replay-btn" data-slot="1">Replay commands</button>
+            <label>Move assignment
+              <select id="slot1MoveSelect" class="slot-move-select"></select>
+            </label>
+            <button type="button" class="slot-move-btn" data-slot="1">Send move</button>
+          </div>
+          <div class="slot-waiting">
+            <label>Assign waiting slave
+              <select id="slot1AssignSelect" class="slot-assign-select"></select>
+            </label>
+            <button type="button" class="slot-assign-btn" data-slot="1">Assign to slot 1</button>
+            <div class="mut" id="slot1WaitingSummary">Waiting: —</div>
+          </div>
+        </div>
+      </section>
+      <section class="card slot-node-card">
+        <h3>Node & relay</h3>
+        <div class="body" id="slot1NodeContainer">
+          <div class="mut">Assign a slave to view node details.</div>
+        </div>
+      </section>
+    </div>
+  </section>
+
+  <section class="tab-panel" data-panel="slot2" id="panel-slot2">
+    <div class="slot-layout" data-slot="2">
+      <section class="card slot-card">
+        <h2>Slot 2</h2>
+        <div class="body">
+          <div class="slot-summary-block">
+            <div class="slot-line" id="slot2Summary">No slave assigned.</div>
+            <div class="slot-line mut" id="slot2Meta">—</div>
+            <div class="slot-line mut" id="slot2LastSeen">Last seen —</div>
+            <div class="slot-line mut" id="slot2Generation">Generation: —</div>
+            <div class="slot-line mut" id="slot2SlotMeta">Slot config: —</div>
+          </div>
+          <div class="slot-actions">
+            <button type="button" class="slot-replay-btn" data-slot="2">Replay commands</button>
+            <label>Move assignment
+              <select id="slot2MoveSelect" class="slot-move-select"></select>
+            </label>
+            <button type="button" class="slot-move-btn" data-slot="2">Send move</button>
+          </div>
+          <div class="slot-waiting">
+            <label>Assign waiting slave
+              <select id="slot2AssignSelect" class="slot-assign-select"></select>
+            </label>
+            <button type="button" class="slot-assign-btn" data-slot="2">Assign to slot 2</button>
+            <div class="mut" id="slot2WaitingSummary">Waiting: —</div>
+          </div>
+        </div>
+      </section>
+      <section class="card slot-node-card">
+        <h3>Node & relay</h3>
+        <div class="body" id="slot2NodeContainer">
+          <div class="mut">Assign a slave to view node details.</div>
+        </div>
+      </section>
+    </div>
+  </section>
+
+  <section class="tab-panel" data-panel="slot3" id="panel-slot3">
+    <div class="slot-layout" data-slot="3">
+      <section class="card slot-card">
+        <h2>Slot 3</h2>
+        <div class="body">
+          <div class="slot-summary-block">
+            <div class="slot-line" id="slot3Summary">No slave assigned.</div>
+            <div class="slot-line mut" id="slot3Meta">—</div>
+            <div class="slot-line mut" id="slot3LastSeen">Last seen —</div>
+            <div class="slot-line mut" id="slot3Generation">Generation: —</div>
+            <div class="slot-line mut" id="slot3SlotMeta">Slot config: —</div>
+          </div>
+          <div class="slot-actions">
+            <button type="button" class="slot-replay-btn" data-slot="3">Replay commands</button>
+            <label>Move assignment
+              <select id="slot3MoveSelect" class="slot-move-select"></select>
+            </label>
+            <button type="button" class="slot-move-btn" data-slot="3">Send move</button>
+          </div>
+          <div class="slot-waiting">
+            <label>Assign waiting slave
+              <select id="slot3AssignSelect" class="slot-assign-select"></select>
+            </label>
+            <button type="button" class="slot-assign-btn" data-slot="3">Assign to slot 3</button>
+            <div class="mut" id="slot3WaitingSummary">Waiting: —</div>
+          </div>
+        </div>
+      </section>
+      <section class="card slot-node-card">
+        <h3>Node & relay</h3>
+        <div class="body" id="slot3NodeContainer">
+          <div class="mut">Assign a slave to view node details.</div>
+        </div>
+      </section>
+    </div>
+  </section>
+</main>
+
+<script type="module">
+const $ = (sel, root = document) => root.querySelector(sel);
+const nodesState = { expanded: new Set(), pollTimer: null, loading: false, list: [], scanning: false };
+const MAX_SYNC_SLOTS = 3;
+const syncState = { slots: Array.from({ length: MAX_SYNC_SLOTS }, () => null), meta: new Map(), waiting: [], refMs: 0 };
+const syncUiState = { busy: false };
+const tabState = { active: 'groundstation' };
+const DEFAULT_CMD_TIMEOUT_MS = 6000;
+const capsState = { capList: new Set(), hasExec: false };
+const dvrState = { initialized: false, hasExec: false, loading: false };
+const miniRkState = { initialized: false, gamma: { presets: [], loading: false } };
+
+function secsToHhMmSs(value){
+  const sec = Number(value);
+  if (!Number.isFinite(sec) || sec < 0) return '—';
+  const hours = Math.floor(sec / 3600);
+  const minutes = Math.floor((sec % 3600) / 60);
+  const seconds = Math.floor(sec % 60);
+  const pad = num => String(num).padStart(2, '0');
+  return `${hours}:${pad(minutes)}:${pad(seconds)}`;
+}
+
+function formatInterfaces(list){
+  if (!Array.isArray(list) || !list.length) return '—';
+  return list.map(entry => `${entry.if || entry.name || 'if'}:${entry.ip || entry.addr || '—'}`).join('  ');
+}
+
+function formatLoadavg(list){
+  if (!Array.isArray(list) || !list.length) return '—';
+  return list.join(' ');
+}
+
+function renderCapsList(list){
+  const el = document.getElementById('dev_caps');
+  if (!el) return;
+  el.innerHTML = '';
+  if (!Array.isArray(list) || !list.length){
+    el.textContent = '—';
+    return;
+  }
+  list.forEach(cap => {
+    const pill = document.createElement('span');
+    pill.className = 'pill';
+    pill.textContent = cap;
+    el.appendChild(pill);
+  });
+}
+
+function renderSseList(entries){
+  const el = document.getElementById('dev_sse');
+  if (!el) return;
+  el.innerHTML = '';
+  if (!Array.isArray(entries) || !entries.length){
+    el.textContent = '—';
+    return;
+  }
+  const frag = document.createDocumentFragment();
+  entries.forEach(item => {
+    if (!item || !item.url) return;
+    const link = document.createElement('a');
+    link.href = item.url;
+    link.target = '_blank';
+    link.rel = 'noreferrer';
+    link.textContent = item.name || item.url;
+    frag.appendChild(link);
+    frag.appendChild(document.createTextNode(' '));
+  });
+  el.appendChild(frag);
+}
+
+function formatBytes(bytes){
+  const value = Number(bytes);
+  if (!Number.isFinite(value) || value < 0) return '—';
+  if (value >= 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+  if (value >= 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${value} B`;
+}
+
+function formatLocalDate(ts){
+  const value = Number(ts);
+  if (!Number.isFinite(value) || value <= 0) return '—';
+  return new Date(value * 1000).toLocaleString();
+}
+
+function formatAgoFromSeconds(ts){
+  if (!ts) return '—';
+  const sec = Number(ts);
+  if (!Number.isFinite(sec)) return '—';
+  const now = Math.floor(Date.now() / 1000);
+  const delta = Math.max(0, now - sec);
+  if (delta < 60) return `${delta}s ago`;
+  if (delta < 3600) return `${Math.floor(delta / 60)}m ago`;
+  if (delta < 86400) return `${Math.floor(delta / 3600)}h ago`;
+  return `${Math.floor(delta / 86400)}d ago`;
+}
+
+function formatAgoMs(ms, refMs){
+  const value = Number(ms);
+  const ref = Number(refMs);
+  if (!Number.isFinite(value)) return '—';
+  let delta = Number.isFinite(ref) ? Math.max(0, ref - value) : 0;
+  if (!Number.isFinite(ref)) delta = Math.max(0, Date.now() - value);
+  const sec = Math.round(delta / 1000);
+  if (sec < 60) return `${sec}s ago`;
+  const min = Math.round(sec / 60);
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.round(min / 60);
+  if (hr < 48) return `${hr}h ago`;
+  return `${Math.round(hr / 24)}d ago`;
+}
+
+function decodeBase64ToUtf8(b64){
+  if (!b64) return '';
+  try {
+    const bin = atob(b64);
+    const bytes = Uint8Array.from(bin, ch => ch.charCodeAt(0));
+    const dec = new TextDecoder('utf-8', { fatal: false });
+    return dec.decode(bytes);
+  } catch (err) {
+    console.warn('Failed to decode relay body', err);
+    try { return atob(b64); } catch { return ''; }
+  }
+}
+
+function initTabs(){
+  const buttons = document.querySelectorAll('.tabs button[data-tab]');
+  const panels = document.querySelectorAll('.tab-panel');
+  const setActive = name => {
+    if (!name) return;
+    tabState.active = name;
+    buttons.forEach(btn => {
+      const match = btn.dataset.tab === name;
+      btn.classList.toggle('active', match);
+      btn.setAttribute('aria-selected', match ? 'true' : 'false');
+    });
+    panels.forEach(panel => {
+      const match = panel.dataset.panel === name;
+      panel.classList.toggle('active', match);
+      panel.setAttribute('aria-hidden', match ? 'false' : 'true');
+    });
+  };
+  buttons.forEach(btn => {
+    btn.setAttribute('role', 'tab');
+    btn.addEventListener('click', () => setActive(btn.dataset.tab));
+  });
+  panels.forEach(panel => panel.setAttribute('role', 'tabpanel'));
+  setActive(tabState.active);
+}
+
+function setSyncSummary(text){
+  const el = document.getElementById('syncSummary');
+  if (el) el.textContent = text;
+}
+
+function setSyncBusy(flag){
+  syncUiState.busy = !!flag;
+  updateSlotPanels();
+}
+
+function formatSlaveMeta(rec){
+  if (!rec) return '—';
+  const parts = [];
+  if (rec.device) parts.push(rec.device);
+  if (rec.role) parts.push(rec.role);
+  if (rec.version) parts.push(`v${rec.version}`);
+  if (rec.remote_ip) parts.push(rec.remote_ip);
+  if (rec.address && rec.address !== rec.remote_ip) parts.push(rec.address);
+  return parts.join(' • ') || '—';
+}
+
+function formatSlotConfig(meta){
+  if (!meta) return '—';
+  const parts = [];
+  if (meta.label) parts.push(meta.label);
+  if (meta.prefer_id) parts.push(`prefer ${meta.prefer_id}`);
+  if (meta.assigned_id) parts.push(`assigned ${meta.assigned_id}`);
+  return parts.join(' • ') || '—';
+}
+
+function findNodeForSlave(rec){
+  if (!rec) return null;
+  const list = Array.isArray(nodesState.list) ? nodesState.list : [];
+  const id = (rec.id || '').trim();
+  const ip = (rec.remote_ip || rec.address || '').trim();
+  const remotePort = Number(rec.remote_port);
+  for (const node of list){
+    if (!node || typeof node !== 'object') continue;
+    if (id && (node.id === id || node.name === id)) return node;
+    const nodeIp = (node.ip || node.host || '').trim();
+    if (ip && nodeIp === ip){
+      if (!Number.isFinite(remotePort)) return node;
+      const nodePort = Number(node.port);
+      if (!Number.isFinite(nodePort) || nodePort === remotePort) return node;
+    }
+  }
+  return null;
+}
+
+function renderSlotNode(slotNumber, rec){
+  const container = document.getElementById(`slot${slotNumber}NodeContainer`);
+  if (!container) return;
+  container.innerHTML = '';
+  if (!rec){
+    const msg = document.createElement('div');
+    msg.className = 'mut';
+    msg.textContent = 'Assign a slave to view node details.';
+    container.append(msg);
+    return;
+  }
+  const node = findNodeForSlave(rec);
+  if (node){
+    container.append(buildNodeCard(node, slotNumber));
+  } else {
+    const msg = document.createElement('div');
+    msg.className = 'mut';
+    const targetIp = rec.remote_ip || rec.address || 'unknown';
+    msg.textContent = `No /nodes entry for ${targetIp}. Refresh nodes to discover relay details.`;
+    container.append(msg);
+  }
+}
+
+function updateSlotSummary(slotNumber, rec){
+  const summaryEl = document.getElementById(`slot${slotNumber}Summary`);
+  const metaEl = document.getElementById(`slot${slotNumber}Meta`);
+  const lastSeenEl = document.getElementById(`slot${slotNumber}LastSeen`);
+  const genEl = document.getElementById(`slot${slotNumber}Generation`);
+  const slotMetaEl = document.getElementById(`slot${slotNumber}SlotMeta`);
+  const slotMeta = syncState.meta.get(slotNumber) || null;
+  if (summaryEl){
+    if (rec){
+      summaryEl.innerHTML = `<strong>${rec.id || rec.remote_ip || 'unnamed'}</strong>`;
+    } else {
+      summaryEl.textContent = 'No slave assigned.';
+    }
+  }
+  if (metaEl){
+    metaEl.textContent = rec ? formatSlaveMeta(rec) : '—';
+  }
+  if (lastSeenEl){
+    lastSeenEl.textContent = rec ? `Last seen ${formatAgoMs(rec.last_seen_ms, syncState.refMs)}` : 'Last seen —';
+  }
+  if (genEl){
+    genEl.textContent = rec
+      ? `Generation ack ${rec.last_ack_generation ?? '—'} / slot ${rec.slot_generation ?? '—'}`
+      : 'Generation: —';
+  }
+  if (slotMetaEl){
+    slotMetaEl.textContent = `Slot config: ${formatSlotConfig(slotMeta)}`;
+  }
+}
+
+function describeWaiting(waiting){
+  if (!waiting.length) return 'Waiting: None';
+  const names = waiting.map(rec => rec?.id || rec?.remote_ip || 'unknown');
+  return `Waiting: ${waiting.length} (${names.join(', ')})`;
+}
+
+function updateSlotWaiting(slotNumber){
+  const waitingEl = document.getElementById(`slot${slotNumber}WaitingSummary`);
+  if (waitingEl) waitingEl.textContent = describeWaiting(syncState.waiting);
+}
+
+function populateWaitingSelect(select){
+  if (!select) return;
+  select.innerHTML = '';
+  const waiting = syncState.waiting.filter(item => item && item.id);
+  if (!waiting.length){
+    const opt = document.createElement('option');
+    opt.value = '';
+    opt.textContent = 'No waiting slaves';
+    select.append(opt);
+    select.disabled = true;
+    return;
+  }
+  const placeholder = document.createElement('option');
+  placeholder.value = '';
+  placeholder.textContent = 'Select slave…';
+  placeholder.selected = true;
+  select.append(placeholder);
+  waiting.forEach(rec => {
+    const opt = document.createElement('option');
+    opt.value = rec.id;
+    const last = formatAgoMs(rec.last_seen_ms, syncState.refMs);
+    opt.textContent = `${rec.id} (${last})`;
+    select.append(opt);
+  });
+  select.disabled = syncUiState.busy;
+}
+
+function updateSlotControls(slotNumber, rec){
+  const moveSelect = document.getElementById(`slot${slotNumber}MoveSelect`);
+  const moveBtn = document.querySelector(`.slot-move-btn[data-slot="${slotNumber}"]`);
+  if (moveSelect){
+    moveSelect.innerHTML = '';
+    if (!rec){
+      const opt = document.createElement('option');
+      opt.value = '';
+      opt.textContent = 'No assigned slave';
+      moveSelect.append(opt);
+      moveSelect.disabled = true;
+    } else {
+      const placeholder = document.createElement('option');
+      placeholder.value = '';
+      placeholder.textContent = 'Select target…';
+      placeholder.selected = true;
+      moveSelect.append(placeholder);
+      for (let i = 1; i <= MAX_SYNC_SLOTS; i += 1){
+        if (i === slotNumber) continue;
+        const opt = document.createElement('option');
+        opt.value = String(i);
+        opt.textContent = `Slot ${i}`;
+        moveSelect.append(opt);
+      }
+      const unassignOpt = document.createElement('option');
+      unassignOpt.value = '__unassign__';
+      unassignOpt.textContent = 'Unassign';
+      moveSelect.append(unassignOpt);
+      moveSelect.disabled = syncUiState.busy;
+    }
+  }
+  if (moveBtn){
+    moveBtn.disabled = syncUiState.busy || !rec;
+  }
+  const assignSelect = document.getElementById(`slot${slotNumber}AssignSelect`);
+  if (assignSelect){
+    populateWaitingSelect(assignSelect);
+  }
+  const assignBtn = document.querySelector(`.slot-assign-btn[data-slot="${slotNumber}"]`);
+  if (assignBtn){
+    assignBtn.disabled = syncUiState.busy || !syncState.waiting.some(rec => rec && rec.id);
+  }
+}
+
+function updateSlotPanels(){
+  for (let slot = 1; slot <= MAX_SYNC_SLOTS; slot += 1){
+    const rec = syncState.slots[slot - 1] || null;
+    updateSlotSummary(slot, rec);
+    renderSlotNode(slot, rec);
+    updateSlotControls(slot, rec);
+    updateSlotWaiting(slot);
+  }
+}
+
+async function postExec(payload, timeoutMs = DEFAULT_CMD_TIMEOUT_MS){
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch('/exec', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal: controller.signal
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok){
+      const message = data?.error || data?.stderr || data?.stdout || `HTTP ${res.status}`;
+      throw new Error(message);
+    }
+    return data || {};
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function setCapsStatus(text){
+  const statusEl = document.getElementById('capsStatus');
+  if (statusEl) statusEl.textContent = text;
+}
+
+function applyCapabilityToggles(capList){
+  const list = Array.isArray(capList) ? capList : [];
+  capsState.capList = new Set(list);
+  capsState.hasExec = capsState.capList.has('exec');
+  const hasMiniRk = capsState.capList.has('pixelpilot_mini_rk');
+  const hasDvr = capsState.capList.has('dvr');
+
+  const deviceActionsRow = document.getElementById('deviceRuntimeActions');
+  if (deviceActionsRow) deviceActionsRow.style.display = hasMiniRk ? '' : 'none';
+
+  const pixelpilotCard = document.getElementById('pixelpilotMiniRkCard');
+  if (pixelpilotCard){
+    pixelpilotCard.style.display = hasMiniRk ? '' : 'none';
+    if (hasMiniRk){
+      ensureMiniRkCard();
+      setMiniRkStatusIdle('Idle');
+    } else {
+      setMiniRkStatusIdle('cap missing');
+    }
+  }
+
+  ensureDvrHandlers();
+  dvrState.hasExec = capsState.hasExec;
+  updateDvrControls();
+  const dvrCard = document.getElementById('dvrCard');
+  if (dvrCard){
+    dvrCard.style.display = hasDvr ? '' : 'none';
+    if (hasDvr){
+      refreshDvrList();
+    } else {
+      clearDvrCard();
+    }
+  }
+}
+
+function renderCaps(caps){
+  document.getElementById('dev_device').textContent = caps?.device || '—';
+  document.getElementById('dev_role').textContent = caps?.role || '—';
+  document.getElementById('dev_version').textContent = caps?.version || '—';
+  document.getElementById('dev_if').textContent = formatInterfaces(caps?.ifaddrs);
+  document.getElementById('dev_uptime').textContent = secsToHhMmSs(caps?.uptime_s);
+  document.getElementById('dev_load').textContent = formatLoadavg(caps?.loadavg);
+  renderCapsList(caps?.caps);
+  renderSseList(caps?.sse);
+  const subtitle = document.getElementById('subtitle');
+  if (subtitle){
+    const label = [caps?.device || 'device', caps?.version ? `v${caps.version}` : ''].filter(Boolean).join(' ');
+    subtitle.textContent = label || 'Device summary';
+  }
+  setCapsStatus(`Updated ${new Date().toLocaleTimeString()}`);
+  applyCapabilityToggles(Array.isArray(caps?.caps) ? caps.caps : []);
+}
+
+async function fetchCaps(){
+  setCapsStatus('Loading /caps…');
+  try {
+    const res = await fetch('/caps', { cache: 'no-store' });
+    if (!res.ok){
+      const txt = await res.text().catch(() => '');
+      throw new Error(`${res.status} ${txt.trim()}`);
+    }
+    const data = await res.json();
+    renderCaps(data);
+  } catch (err) {
+    setCapsStatus(`Failed (${err.message})`);
+  }
+}
+
+function ensureDvrHandlers(){
+  if (dvrState.initialized) return;
+  const refreshBtn = document.getElementById('dvrRefreshBtn');
+  const deleteBtn = document.getElementById('dvrDeleteAllBtn');
+  if (refreshBtn) refreshBtn.addEventListener('click', () => { void refreshDvrList(); });
+  if (deleteBtn) deleteBtn.addEventListener('click', () => { void deleteAllDvrRecordings(); });
+  dvrState.initialized = true;
+}
+
+function updateDvrControls(){
+  const deleteBtn = document.getElementById('dvrDeleteAllBtn');
+  if (deleteBtn){
+    deleteBtn.disabled = !dvrState.hasExec;
+    deleteBtn.title = dvrState.hasExec ? '' : 'Requires exec capability';
+  }
+}
+
+function showDvrMessage(text, type){
+  const msgEl = document.getElementById('dvrMessage');
+  if (!msgEl) return;
+  msgEl.classList.remove('ok', 'err');
+  if (!text){
+    msgEl.style.display = 'none';
+    msgEl.textContent = '';
+    return;
+  }
+  msgEl.textContent = text;
+  if (type) msgEl.classList.add(type);
+  msgEl.style.display = 'block';
+}
+
+function clearDvrCard(){
+  const listEl = document.getElementById('dvrList');
+  const emptyEl = document.getElementById('dvrEmptyState');
+  const statusEl = document.getElementById('dvrStatus');
+  showDvrMessage('', '');
+  if (listEl) listEl.innerHTML = '';
+  if (emptyEl) emptyEl.style.display = 'none';
+  if (statusEl) statusEl.textContent = 'cap missing';
+}
+
+function renderDvrEntries(entries){
+  const listEl = document.getElementById('dvrList');
+  const emptyEl = document.getElementById('dvrEmptyState');
+  if (!listEl || !emptyEl) return;
+  listEl.innerHTML = '';
+  if (!Array.isArray(entries) || !entries.length){
+    emptyEl.style.display = 'block';
+    return;
+  }
+  emptyEl.style.display = 'none';
+  const frag = document.createDocumentFragment();
+  entries.forEach(entry => {
+    if (!entry || typeof entry.name !== 'string') return;
+    const item = document.createElement('div');
+    item.className = 'dvr-item';
+    const link = document.createElement('a');
+    link.href = `/media/${encodeURIComponent(entry.name)}`;
+    link.textContent = entry.name;
+    link.download = entry.name;
+    item.appendChild(link);
+    const meta = document.createElement('div');
+    meta.className = 'dvr-meta';
+    const sizeText = formatBytes(entry.sizeBytes);
+    const timeText = formatLocalDate(entry.mtimeSec);
+    meta.textContent = (sizeText === '—' && timeText === '—') ? '—' : `${sizeText} • ${timeText}`;
+    item.appendChild(meta);
+    frag.appendChild(item);
+  });
+  listEl.appendChild(frag);
+}
+
+function parseDvrListFromHtml(html){
+  if (typeof DOMParser !== 'function') return [];
+  try {
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    return Array.from(doc.querySelectorAll('a')).map(a => a.getAttribute('href') || '')
+      .map(raw => raw.split('#')[0].split('?')[0].replace(/^\/+|\/+$/g, ''))
+      .filter(Boolean)
+      .filter(name => name !== '..' && name.toLowerCase().endsWith('.mp4'));
+  } catch {
+    return [];
+  }
+}
+
+async function refreshDvrList(){
+  const card = document.getElementById('dvrCard');
+  if (!card || card.style.display === 'none') return;
+  if (dvrState.loading) return;
+  const statusEl = document.getElementById('dvrStatus');
+  const listEl = document.getElementById('dvrList');
+  const emptyEl = document.getElementById('dvrEmptyState');
+  if (!statusEl || !listEl || !emptyEl) return;
+  dvrState.loading = true;
+  statusEl.textContent = 'Loading…';
+  listEl.innerHTML = '';
+  emptyEl.style.display = 'none';
+  showDvrMessage('', '');
+  try {
+    let entries = [];
+    if (dvrState.hasExec){
+      const res = await postExec({ path: '/sys/dvr/list', args: [] });
+      const ok = typeof res?.rc === 'number' ? res.rc === 0 : true;
+      const stdout = String(res?.stdout ?? '');
+      if (!ok){
+        const errMsg = (res?.stderr || stdout || 'failed to list recordings').trim();
+        throw new Error(errMsg || 'failed to list recordings');
+      }
+      entries = stdout.split(/\r?\n/).map(line => {
+        const trimmed = line.trim();
+        if (!trimmed) return null;
+        const parts = trimmed.split('\t');
+        const name = parts[0]?.trim();
+        if (!name) return null;
+        const size = parts.length > 1 ? Number(parts[1]) : NaN;
+        const mtime = parts.length > 2 ? Number(parts[2]) : NaN;
+        return {
+          name,
+          sizeBytes: Number.isFinite(size) && size >= 0 ? size : null,
+          mtimeSec: Number.isFinite(mtime) && mtime > 0 ? Math.floor(mtime) : null
+        };
+      }).filter(Boolean);
+    } else {
+      const resp = await fetch('/media/', { cache: 'no-store' });
+      if (!resp.ok){
+        throw new Error(`/media/ responded with ${resp.status}`);
+      }
+      const html = await resp.text();
+      const names = parseDvrListFromHtml(html);
+      entries = names.map(name => ({ name }));
+    }
+    entries.sort((a, b) => {
+      const aTs = Number.isFinite(a?.mtimeSec) ? a.mtimeSec : 0;
+      const bTs = Number.isFinite(b?.mtimeSec) ? b.mtimeSec : 0;
+      if (bTs !== aTs) return bTs - aTs;
+      return (a?.name || '').localeCompare(b?.name || '', 'en', { numeric: true, sensitivity: 'base' });
+    });
+    renderDvrEntries(entries);
+    statusEl.textContent = `${entries.length} recording${entries.length === 1 ? '' : 's'} • ${new Date().toLocaleTimeString()}`;
+  } catch (err) {
+    statusEl.textContent = 'Failed';
+    showDvrMessage(err.message || 'failed to load recordings', 'err');
+  } finally {
+    dvrState.loading = false;
+  }
+}
+
+async function deleteAllDvrRecordings(){
+  if (!dvrState.hasExec) return;
+  if (!confirm('Delete all DVR recordings?')) return;
+  const deleteBtn = document.getElementById('dvrDeleteAllBtn');
+  const statusEl = document.getElementById('dvrStatus');
+  if (deleteBtn) deleteBtn.disabled = true;
+  showDvrMessage('', '');
+  if (statusEl) statusEl.textContent = 'Deleting…';
+  try {
+    const res = await postExec({ path: '/sys/dvr/delete_all', args: [] });
+    const ok = typeof res?.rc === 'number' ? res.rc === 0 : true;
+    const detail = (res?.stderr || res?.stdout || (ok ? 'Deleted recordings' : 'Delete failed')).trim();
+    showDvrMessage(detail || (ok ? 'Deleted recordings' : 'Delete failed'), ok ? 'ok' : 'err');
+  } catch (err) {
+    showDvrMessage(err.message || 'Delete failed', 'err');
+  } finally {
+    if (deleteBtn) deleteBtn.disabled = !dvrState.hasExec;
+    await refreshDvrList();
+  }
+}
+
+function miniRkStatusEl(){
+  return document.getElementById('pixelpilotMiniRkStatus');
+}
+
+function setMiniRkStatusIdle(text = 'Idle'){
+  const el = miniRkStatusEl();
+  if (!el) return;
+  el.classList.remove('running', 'ok', 'err', 'flash');
+  el.textContent = text;
+  el.title = '';
+}
+
+function setMiniRkStatusRunning(){
+  const el = miniRkStatusEl();
+  if (!el) return;
+  el.classList.remove('ok', 'err', 'flash');
+  el.classList.add('running');
+  el.textContent = 'Running…';
+  el.title = '';
+}
+
+function setMiniRkStatusResult(ok, detail = ''){
+  const el = miniRkStatusEl();
+  if (!el) return;
+  el.classList.remove('running', 'ok', 'err', 'flash');
+  el.classList.add(ok ? 'ok' : 'err');
+  el.textContent = `${ok ? 'Success' : 'Error'} • ${new Date().toLocaleTimeString()}`;
+  el.title = detail || '';
+  void el.offsetWidth;
+  el.classList.add('flash');
+}
+
+async function runMiniRkCommand(command, btnEl){
+  const payload = typeof command === 'string'
+    ? { path: command, args: [] }
+    : {
+        path: command?.path || '',
+        args: Array.isArray(command?.args) ? command.args : []
+      };
+  if (!payload.path){
+    setMiniRkStatusResult(false, 'invalid command');
+    return;
+  }
+  setMiniRkStatusRunning();
+  if (btnEl) btnEl.disabled = true;
+  try {
+    const res = await postExec(payload);
+    const ok = typeof res?.rc === 'number' ? res.rc === 0 : true;
+    const stdout = (res?.stdout || '').trim();
+    const stderr = (res?.stderr || '').trim();
+    const detail = ok ? (stdout.split('\n')[0] || '') : (stderr || stdout || 'command failed');
+    setMiniRkStatusResult(ok, detail);
+  } catch (err) {
+    setMiniRkStatusResult(false, err.message || 'command failed');
+  } finally {
+    if (btnEl) btnEl.disabled = false;
+  }
+}
+
+function parseMiniRkGammaPresets(stdout){
+  const out = [];
+  const seen = new Set();
+  String(stdout || '').split(/\r?\n/).forEach(rawLine => {
+    const line = rawLine.trim();
+    if (!line || /^available presets/i.test(line) || seen.has(line)) return;
+    seen.add(line);
+    out.push(line);
+  });
+  return out;
+}
+
+function renderMiniRkGammaPresets(presets){
+  const select = document.getElementById('pixelpilotMiniRkGammaSelect');
+  const applyBtn = document.getElementById('pixelpilotMiniRkApplyGammaBtn');
+  if (!select || !applyBtn) return;
+  select.innerHTML = '';
+  const items = Array.isArray(presets) ? presets : [];
+  const placeholder = document.createElement('option');
+  placeholder.value = '';
+  placeholder.disabled = true;
+  placeholder.selected = true;
+  placeholder.textContent = items.length ? 'Select preset…' : 'No presets available';
+  select.appendChild(placeholder);
+  items.forEach(preset => {
+    const option = document.createElement('option');
+    option.value = preset;
+    option.textContent = preset;
+    select.appendChild(option);
+  });
+  select.disabled = items.length === 0;
+  applyBtn.disabled = true;
+}
+
+async function loadMiniRkGammaPresets(){
+  const select = document.getElementById('pixelpilotMiniRkGammaSelect');
+  const applyBtn = document.getElementById('pixelpilotMiniRkApplyGammaBtn');
+  const reloadBtn = document.getElementById('pixelpilotMiniRkReloadGammaBtn');
+  const noticeEl = document.getElementById('pixelpilotMiniRkGammaNotice');
+  if (!select || !applyBtn) return;
+  if (miniRkState.gamma.loading) return;
+  miniRkState.gamma.loading = true;
+  select.disabled = true;
+  applyBtn.disabled = true;
+  if (reloadBtn) reloadBtn.disabled = true;
+  if (noticeEl) noticeEl.textContent = 'Loading presets…';
+  try {
+    const res = await postExec({ path: '/sys/pixelpilot_mini_rk/gamma', args: ['--list'] });
+    const presets = parseMiniRkGammaPresets(res?.stdout || '');
+    miniRkState.gamma.presets = presets;
+    renderMiniRkGammaPresets(presets);
+    if (noticeEl){
+      noticeEl.textContent = presets.length ? `Loaded ${presets.length} preset${presets.length === 1 ? '' : 's'}` : 'No presets reported';
+    }
+  } catch (err) {
+    miniRkState.gamma.presets = [];
+    renderMiniRkGammaPresets([]);
+    if (noticeEl) noticeEl.textContent = err.message || 'Failed to load presets';
+  } finally {
+    if (reloadBtn) reloadBtn.disabled = false;
+    miniRkState.gamma.loading = false;
+  }
+}
+
+function initMiniRkGammaControls(){
+  const select = document.getElementById('pixelpilotMiniRkGammaSelect');
+  const applyBtn = document.getElementById('pixelpilotMiniRkApplyGammaBtn');
+  const reloadBtn = document.getElementById('pixelpilotMiniRkReloadGammaBtn');
+  if (!select || !applyBtn) return;
+  select.addEventListener('change', () => {
+    applyBtn.disabled = !select.value;
+  });
+  applyBtn.addEventListener('click', () => {
+    const preset = select.value.trim();
+    if (!preset) return;
+    runMiniRkCommand({ path: '/sys/pixelpilot_mini_rk/gamma', args: [preset] }, applyBtn);
+  });
+  if (reloadBtn){
+    reloadBtn.addEventListener('click', () => { void loadMiniRkGammaPresets(); });
+  }
+  void loadMiniRkGammaPresets();
+}
+
+function ensureMiniRkCard(){
+  if (miniRkState.initialized) return;
+  setMiniRkStatusIdle('Idle');
+  const mapping = [
+    { selector: '#pixelpilotMiniRkToggleOsdBtn', command: { path: '/sys/pixelpilot_mini_rk/toggle_osd' } },
+    { selector: '#pixelpilotMiniRkToggleRecordingBtn', command: { path: '/sys/pixelpilot_mini_rk/toggle_recording' } },
+    { selector: '#pixelpilotMiniRkRestartServiceBtn', command: { path: '/sys/pixelpilot_mini_rk/restart' } },
+    { selector: '#pixelpilotMiniRkStopServiceBtn', command: { path: '/sys/pixelpilot_mini_rk/stop' } },
+    { selector: '#pixelpilotMiniRkStartServiceBtn', command: { path: '/sys/pixelpilot_mini_rk/start' } },
+    { selector: '#pixelpilotMiniRkRebootBtn', command: { path: '/sys/reboot' } },
+    { selector: '#pixelpilotMiniRkShutdownBtn', command: { path: '/sys/shutdown' } }
+  ];
+  mapping.forEach(entry => {
+    const btn = document.querySelector(entry.selector);
+    if (btn) btn.addEventListener('click', () => { void runMiniRkCommand(entry.command, btn); });
+  });
+  initMiniRkGammaControls();
+  miniRkState.initialized = true;
+}
+
+function nodeKey(node, idx){
+  const ip = (node?.ip || node?.host || '').trim();
+  const port = node?.port;
+  if (ip && (port || port === 0)) return `${ip}:${port}`;
+  if (ip) return ip;
+  return `node-${idx}`;
+}
+
+function setNodesSummary(text){
+  const summary = document.getElementById('nodesSummary');
+  if (summary) summary.textContent = text;
+}
+
+async function sendRelayRequest(node, elements){
+  const { methodEl, pathEl, bodyEl, timeoutEl, outputEl, buttonEl } = elements;
+  if (!node || !methodEl || !pathEl || !outputEl || !buttonEl) return;
+  const method = (methodEl.value || 'GET').toUpperCase();
+  const path = pathEl.value.trim() || '/';
+  const timeout = Math.max(0, parseInt(timeoutEl?.value || '4000', 10) || 4000);
+  const bodyText = bodyEl?.value.trim();
+  const payload = {
+    node_ip: node.ip || node.host,
+    method,
+    path,
+    timeout_ms: timeout
+  };
+  if (bodyText && method !== 'GET' && method !== 'HEAD'){
+    payload.body = bodyText;
+    payload.headers = { 'Content-Type': 'application/json' };
+  }
+  buttonEl.disabled = true;
+  outputEl.value = 'Sending via /http…';
+  try {
+    const res = await fetch('/http', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok){
+      outputEl.value = data && data.error ? `error: ${data.error}` : `HTTP ${res.status}`;
+      return;
+    }
+    if (!data || data.error){
+      outputEl.value = data && data.error ? `error: ${data.error}` : 'relay_failed';
+      return;
+    }
+    const bodyStr = decodeBase64ToUtf8(data.body_base64);
+    const headerLines = Array.isArray(data.headers)
+      ? data.headers.map(h => `${h.name}: ${h.value}`).join('\n')
+      : '';
+    const summary = [
+      `status ${data.status_code ?? '?'} ${data.reason || ''}`.trim(),
+      `target ${data.target_ip || '?'}:${data.target_port || ''}`.trim(),
+      data.sync_id ? `sync id ${data.sync_id}` : '',
+      headerLines ? '\n-- headers --\n' + headerLines : '',
+      '\n-- body --',
+      bodyStr
+    ].filter(Boolean).join('\n');
+    outputEl.value = summary;
+  } catch (err) {
+    outputEl.value = `relay_error: ${err.message}`;
+  } finally {
+    buttonEl.disabled = false;
+  }
+}
+
+function buildNodeCard(node, idx){
+  const key = nodeKey(node, idx);
+  const expanded = nodesState.expanded.has(key);
+  const nodeDiv = document.createElement('div');
+  nodeDiv.className = 'node' + (expanded ? ' expanded' : '');
+
+  const head = document.createElement('div');
+  head.className = 'node-head';
+  head.tabIndex = 0;
+  head.setAttribute('role', 'button');
+  head.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+
+  const top = document.createElement('div');
+  top.className = 'top';
+  const roleSpan = document.createElement('span');
+  roleSpan.className = 'pill role';
+  roleSpan.textContent = node.role || '—';
+  const ipSpan = document.createElement('span');
+  ipSpan.className = 'ip';
+  ipSpan.textContent = `${node.ip || '—'}:${node.port ?? ''}`;
+  top.append(roleSpan, ipSpan);
+
+  const deviceLine = document.createElement('div');
+  const strong = document.createElement('strong');
+  strong.textContent = node.device || '—';
+  const meta = document.createElement('span');
+  meta.className = 'meta';
+  meta.textContent = node.version ? `v${node.version}` : '';
+  deviceLine.append(strong, document.createTextNode(' '), meta);
+
+  const lastSeen = document.createElement('div');
+  lastSeen.className = 'meta';
+  lastSeen.textContent = `last seen ${formatAgoFromSeconds(node.last_seen)}`;
+
+  head.append(top, deviceLine, lastSeen);
+  nodeDiv.append(head);
+
+  const controls = document.createElement('div');
+  controls.className = 'node-controls';
+  controls.style.display = expanded ? 'grid' : 'none';
+
+  const relay = document.createElement('div');
+  relay.className = 'node-relay';
+  const intro = document.createElement('div');
+  intro.className = 'mut';
+  intro.textContent = 'Relay requests via /http to reach /caps, /exec, or other endpoints on this node.';
+  relay.append(intro);
+
+  const pathRow = document.createElement('div');
+  pathRow.className = 'row';
+  const methodLabel = document.createElement('label');
+  methodLabel.textContent = 'method ';
+  const methodSelect = document.createElement('select');
+  methodSelect.innerHTML = '<option>GET</option><option>POST</option><option>PUT</option><option>DELETE</option>';
+  methodLabel.append(methodSelect);
+  const pathLabel = document.createElement('label');
+  pathLabel.textContent = 'path ';
+  const pathInput = document.createElement('input');
+  pathInput.type = 'text';
+  pathInput.value = '/caps';
+  pathLabel.append(pathInput);
+  const timeoutLabel = document.createElement('label');
+  timeoutLabel.textContent = 'timeout (ms) ';
+  const timeoutInput = document.createElement('input');
+  timeoutInput.type = 'number';
+  timeoutInput.min = '100';
+  timeoutInput.value = '4000';
+  timeoutLabel.append(timeoutInput);
+  pathRow.append(methodLabel, pathLabel, timeoutLabel);
+  relay.append(pathRow);
+
+  const bodyArea = document.createElement('textarea');
+  bodyArea.placeholder = 'Optional JSON body (defaults to /caps)';
+  relay.append(bodyArea);
+
+  const actionRow = document.createElement('div');
+  actionRow.className = 'row';
+  const capsBtn = document.createElement('button');
+  capsBtn.type = 'button';
+  capsBtn.textContent = 'Load /caps';
+  capsBtn.addEventListener('click', ev => {
+    ev.stopPropagation();
+    methodSelect.value = 'GET';
+    pathInput.value = '/caps';
+    bodyArea.value = '';
+  });
+  const execBtn = document.createElement('button');
+  execBtn.type = 'button';
+  execBtn.textContent = 'POST /exec';
+  execBtn.addEventListener('click', ev => {
+    ev.stopPropagation();
+    methodSelect.value = 'POST';
+    pathInput.value = '/exec';
+    bodyArea.value = JSON.stringify({ path: '/sys/help', args: [] }, null, 2);
+  });
+  const spacer = document.createElement('div');
+  spacer.className = 'spacer';
+  const sendBtn = document.createElement('button');
+  sendBtn.type = 'button';
+  sendBtn.textContent = 'Send via /http';
+  sendBtn.addEventListener('click', ev => {
+    ev.stopPropagation();
+    void sendRelayRequest(node, {
+      methodEl: methodSelect,
+      pathEl: pathInput,
+      bodyEl: bodyArea,
+      timeoutEl: timeoutInput,
+      outputEl: relayOutput,
+      buttonEl: sendBtn
+    });
+  });
+  actionRow.append(capsBtn, execBtn, spacer, sendBtn);
+  relay.append(actionRow);
+
+  const relayOutput = document.createElement('textarea');
+  relayOutput.readOnly = true;
+  relayOutput.placeholder = 'Relay response will appear here';
+  relay.append(relayOutput);
+
+  controls.append(relay);
+  nodeDiv.append(controls);
+
+  const toggle = () => {
+    const isOpen = nodesState.expanded.has(key);
+    if (isOpen){
+      nodesState.expanded.delete(key);
+      controls.style.display = 'none';
+      nodeDiv.classList.remove('expanded');
+      head.setAttribute('aria-expanded', 'false');
+    } else {
+      nodesState.expanded.add(key);
+      controls.style.display = 'grid';
+      nodeDiv.classList.add('expanded');
+      head.setAttribute('aria-expanded', 'true');
+    }
+  };
+
+  head.addEventListener('click', toggle);
+  head.addEventListener('keydown', ev => {
+    if (ev.key === 'Enter' || ev.key === ' '){
+      ev.preventDefault();
+      toggle();
+    }
+  });
+
+  return nodeDiv;
+}
+
+function renderNodes(data){
+  const nodes = Array.isArray(data?.nodes) ? data.nodes : [];
+  nodesState.list = nodes;
+  nodesState.scanning = !!data?.scanning;
+  const scanEnabled = data?.scan_feature_enabled !== false;
+  const parts = [];
+  parts.push(`${nodes.length} node${nodes.length === 1 ? '' : 's'}`);
+  if (nodesState.scanning){
+    const pct = typeof data?.progress_pct === 'number'
+      ? Math.max(0, Math.min(100, Math.round(data.progress_pct)))
+      : null;
+    parts.push(pct === null ? 'scanning…' : `scanning ${pct}%`);
+  } else {
+    parts.push(scanEnabled ? 'scan idle' : 'scan disabled');
+  }
+  setNodesSummary(`Nodes: ${parts.filter(Boolean).join(' • ')}`);
+  const scanBtn = document.getElementById('nodesScanBtn');
+  if (scanBtn) scanBtn.disabled = !scanEnabled || !!data?.scanning;
+  scheduleNodesPoll(nodesState.scanning);
+  updateSlotPanels();
+}
+
+async function fetchNodes(){
+  if (nodesState.loading) return;
+  nodesState.loading = true;
+  try {
+    const res = await fetch('/nodes', { cache: 'no-store' });
+    if (!res.ok){
+      const detail = await res.text().catch(() => '');
+      setNodesSummary(`Nodes: Failed (${res.status} ${detail.trim()})`);
+      nodesState.list = [];
+      nodesState.scanning = false;
+      scheduleNodesPoll(false);
+      updateSlotPanels();
+    } else {
+      const data = await res.json();
+      renderNodes(data);
+    }
+  } catch (err) {
+    setNodesSummary(`Nodes: Failed (${err.message})`);
+    nodesState.list = [];
+    nodesState.scanning = false;
+    scheduleNodesPoll(false);
+    updateSlotPanels();
+  } finally {
+    nodesState.loading = false;
+  }
+}
+
+function scheduleNodesPoll(keepPolling){
+  if (nodesState.pollTimer){
+    clearTimeout(nodesState.pollTimer);
+    nodesState.pollTimer = null;
+  }
+  if (keepPolling){
+    nodesState.pollTimer = setTimeout(() => { nodesState.pollTimer = null; fetchNodes(); }, 1000);
+  }
+}
+
+async function triggerNodesScan(){
+  $('#nodesScanBtn').disabled = true;
+  try {
+    await fetch('/nodes', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+  } catch (err) {
+    setNodesSummary(`Nodes: Scan failed (${err.message})`);
+  } finally {
+    fetchNodes();
+  }
+}
+
+function renderSync(data){
+  if (!data){
+    syncState.slots = Array.from({ length: MAX_SYNC_SLOTS }, () => null);
+    syncState.meta = new Map();
+    syncState.waiting = [];
+    syncState.refMs = 0;
+    setSyncSummary('Sync: No data');
+    updateSlotPanels();
+    return;
+  }
+  const slotsMeta = new Map();
+  (Array.isArray(data.slots) ? data.slots : []).forEach(entry => {
+    const slotNum = Number(entry?.slot);
+    if (Number.isFinite(slotNum) && slotNum >= 1 && slotNum <= MAX_SYNC_SLOTS){
+      slotsMeta.set(slotNum, entry);
+    }
+  });
+  const slots = Array.from({ length: MAX_SYNC_SLOTS }, () => null);
+  const waiting = [];
+  let refMs = 0;
+  (Array.isArray(data.slaves) ? data.slaves : []).forEach(rec => {
+    if (!rec || typeof rec !== 'object') return;
+    if (Number.isFinite(rec.last_seen_ms) && rec.last_seen_ms > refMs) refMs = rec.last_seen_ms;
+    const slotNum = Number(rec.slot);
+    if (Number.isFinite(slotNum) && slotNum >= 1 && slotNum <= MAX_SYNC_SLOTS){
+      slots[slotNum - 1] = rec;
+    } else {
+      waiting.push(rec);
+    }
+  });
+  syncState.slots = slots;
+  syncState.meta = slotsMeta;
+  syncState.waiting = waiting;
+  syncState.refMs = refMs;
+  setSyncSummary(`Sync: Updated ${new Date().toLocaleTimeString()} • ${ (data.slaves?.length) || 0 } known`);
+  updateSlotPanels();
+}
+
+async function sendMoveRequest(slaveId, slotTarget){
+  if (!slaveId) return;
+  if (slotTarget !== null && !Number.isFinite(slotTarget)) return;
+  const label = slotTarget === null ? `unassign ${slaveId}` : `move ${slaveId} → slot ${slotTarget}`;
+  setSyncBusy(true);
+  setSyncSummary(`Sync: Requesting ${label}…`);
+  try {
+    const res = await fetch('/sync/push', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ moves: [{ slave_id: slaveId, slot: slotTarget }] })
+    });
+    if (!res.ok){
+      const txt = await res.text().catch(() => '');
+      throw new Error(`${res.status} ${txt.trim()}`.trim());
+    }
+    setSyncSummary(`Sync: Move queued for ${slaveId}`);
+    await fetchSync();
+  } catch (err) {
+    setSyncSummary(`Sync: Move failed (${err.message})`);
+  } finally {
+    setSyncBusy(false);
+  }
+}
+
+async function fetchSync(){
+  setSyncSummary('Sync: Loading /sync/slaves…');
+  try {
+    const res = await fetch('/sync/slaves', { cache: 'no-store' });
+    if (!res.ok){
+      const text = await res.text().catch(() => '');
+      setSyncSummary(`Sync: Failed (${res.status} ${text.trim()})`);
+      syncState.slots = Array.from({ length: MAX_SYNC_SLOTS }, () => null);
+      syncState.meta = new Map();
+      syncState.waiting = [];
+      updateSlotPanels();
+      return;
+    }
+    const data = await res.json();
+    renderSync(data);
+  } catch (err) {
+    setSyncSummary(`Sync: Failed (${err.message})`);
+    syncState.slots = Array.from({ length: MAX_SYNC_SLOTS }, () => null);
+    syncState.meta = new Map();
+    syncState.waiting = [];
+    updateSlotPanels();
+  }
+}
+
+async function requestReplay(slotNumber){
+  if (!Number.isFinite(slotNumber)) return;
+  setSyncBusy(true);
+  setSyncSummary(`Sync: Requesting replay for slot ${slotNumber}…`);
+  try {
+    const res = await fetch('/sync/push', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ replay_slots: [slotNumber] })
+    });
+    if (!res.ok){
+      const txt = await res.text().catch(() => '');
+      throw new Error(`${res.status} ${txt.trim()}`.trim());
+    }
+    setSyncSummary(`Sync: Replay requested for slot ${slotNumber}`);
+    await fetchSync();
+  } catch (err) {
+    setSyncSummary(`Sync: Replay failed (${err.message})`);
+  } finally {
+    setSyncBusy(false);
+  }
+}
+
+function attachSlotHandlers(){
+  document.querySelectorAll('.slot-replay-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const slot = Number(btn.dataset.slot);
+      if (!Number.isFinite(slot)) return;
+      void requestReplay(slot);
+    });
+  });
+  document.querySelectorAll('.slot-move-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const slot = Number(btn.dataset.slot);
+      if (!Number.isFinite(slot)) return;
+      const select = document.getElementById(`slot${slot}MoveSelect`);
+      if (!select) return;
+      const value = select.value;
+      if (!value) return;
+      const rec = syncState.slots[slot - 1];
+      if (!rec || !rec.id) return;
+      let target = null;
+      if (value !== '__unassign__'){
+        target = Number(value);
+        if (!Number.isFinite(target)) return;
+      }
+      select.selectedIndex = 0;
+      void sendMoveRequest(rec.id, target);
+    });
+  });
+  document.querySelectorAll('.slot-assign-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const slot = Number(btn.dataset.slot);
+      if (!Number.isFinite(slot)) return;
+      const select = document.getElementById(`slot${slot}AssignSelect`);
+      if (!select || !select.value) return;
+      const slaveId = select.value;
+      select.selectedIndex = 0;
+      void sendMoveRequest(slaveId, slot);
+    });
+  });
+}
+
+const capsRefreshBtn = document.getElementById('capsRefreshBtn');
+if (capsRefreshBtn) capsRefreshBtn.addEventListener('click', () => { void fetchCaps(); });
+ensureDvrHandlers();
+initTabs();
+attachSlotHandlers();
+$('#refreshNodesBtn').addEventListener('click', fetchNodes);
+$('#nodesScanBtn').addEventListener('click', triggerNodesScan);
+$('#syncRefreshBtn').addEventListener('click', fetchSync);
+void fetchCaps();
+fetchNodes();
+fetchSync();
+</script>

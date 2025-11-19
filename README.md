@@ -150,13 +150,31 @@ curl -X POST http://HOST:PORT/udp \
 
 For binary datagrams, encode the bytes in base64 and place them in `"payload_base64"` instead. The response confirms delivery and echoes the number of bytes written.
 
+### Relaying HTTP requests via the HTTP API
+
+`autod` also exposes a `/http` endpoint for simple HTTP relays. Instead of free-form host/port forwarding, the relay resolves its target from the node cache or sync assignments: provide either a discovered `"node_ip"`, a registered slave `"sync_id"`, or a 1-based sync `"slot"` number (when acting as a master). The handler looks up the node in `/nodes` to obtain the IP and port, then returns the upstream status code, headers, and body encoded as base64.
+
+```bash
+curl -X POST http://HOST:PORT/http \
+  -H 'Content-Type: application/json' \
+  -d '{
+        "sync_id": "slave-1",
+        "path": "/status",
+        "method": "GET",
+        "headers": {"Accept": "application/json"},
+        "timeout_ms": 4000
+      }'
+```
+
+To send a body, include either a UTF-8 string in `"body"` or raw bytes in `"body_base64"`; the fields are mutually exclusive. TLS is not supported by this relay—requests with `"tls": true` return an error (`"ssl_disabled"` when `autod` is built with `NO_SSL`). If you need to point at a specific discovered host, supply `"node_ip"` (optionally with `"port"` to assert the cached port matches) instead of `"sync_id"`/`"slot"`.
+
 ### Optional LAN Scanner
 
 When `[server] enable_scan = 1`, the daemon seeds itself into the scan database and launches background probing via functions in [`src/scan.c`](src/scan.c). Clients can poll `/nodes` for progress and discovered peers. If you also define one or more `extra_subnet = 10.10.10.0/24` lines inside a `[scan]` section, the scanner will include those CIDR blocks alongside any directly detected interfaces. `/32` entries are treated as single hosts.
 
 ### Sync master/slave coordination
 
-`autod` can now coordinate sync slots across a fleet using an HTTP-based control plane. Enable it via the `[sync]` section in `autod.conf`:
+`autod` can now coordinate sync slots across a fleet using an HTTP-based control plane. Enable it via the `[sync]` section in `autod.conf`. When slaves register with a master, the master probes the registering IP on its configured port and refreshes the `/nodes` cache so the HTTP relay and node listings stay current:
 
 ```ini
 [sync]

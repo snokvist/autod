@@ -1252,6 +1252,11 @@ static int h_sync_register(struct mg_connection *c, void *ud) {
     }
     sync_caps_from_json_value(caps_val, rec->caps, sizeof(rec->caps));
 
+    if (ri->remote_addr[0]) {
+        int probe_port = cfg.port > 0 ? cfg.port : 8080;
+        (void)scan_probe_node(ri->remote_addr, probe_port);
+    }
+
     int previous_slot = rec->slot_index;
     assigned_slot = sync_master_auto_assign_slot_locked(&app->master, rec, &cfg);
     if (assigned_slot >= 0) {

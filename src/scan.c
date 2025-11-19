@@ -230,6 +230,47 @@ int scan_get_nodes(scan_node_t *dst, int max) {
     return n;
 }
 
+int scan_probe_node(const char *ip, int port) {
+    if (!ip || !*ip || port <= 0 || port > 65535) return -1;
+
+    char resp[8192];
+    int health = http_get_simple(ip, port, "/health", resp, sizeof(resp),
+                                 g_tun.health_timeout_ms);
+    if (health != 0) return -1;
+
+    int caps = http_get_simple(ip, port, "/caps", resp, sizeof(resp),
+                               g_tun.caps_timeout_ms);
+    if (caps != 0) return -1;
+
+    const char *body = http_body_ptr(resp);
+    if (!body) return -1;
+
+    JSON_Value *v = json_parse_string(body);
+    if (!v) return -1;
+
+    JSON_Object *o = json_object(v);
+    scan_node_t ni; memset(&ni, 0, sizeof(ni));
+    strncpy(ni.ip, ip, sizeof(ni.ip) - 1);
+    ni.port = port;
+    const char *role   = json_object_get_string(o, "role");
+    const char *device = json_object_get_string(o, "device");
+    const char *ver    = json_object_get_string(o, "version");
+    if (role)   strncpy(ni.role,    role,   sizeof(ni.role) - 1);
+    if (device) strncpy(ni.device,  device, sizeof(ni.device) - 1);
+    if (ver)    strncpy(ni.version, ver,    sizeof(ni.version) - 1);
+    JSON_Object *sync = json_object_get_object(o, "sync");
+    if (sync) {
+        const char *sync_role = json_object_get_string(sync, "role");
+        const char *sync_id = json_object_get_string(sync, "id");
+        if (sync_role) strncpy(ni.sync_role, sync_role, sizeof(ni.sync_role) - 1);
+        if (sync_id)   strncpy(ni.sync_id,   sync_id,   sizeof(ni.sync_id) - 1);
+    }
+    ni.last_seen = now_s();
+    nodes_upsert(&ni);
+    json_value_free(v);
+    return 0;
+}
+
 // ================ Target planning helpers ================
 
 typedef struct { uint32_t *ips; unsigned n, cap; } ipvec_t;
