@@ -1328,7 +1328,6 @@ function renderSync(data){
   updateSlotPanels();
 }
 
-async function fetchSync(){
 async function sendMoveRequest(slaveId, slotTarget){
   if (!slaveId) return;
   if (slotTarget !== null && !Number.isFinite(slotTarget)) return;
