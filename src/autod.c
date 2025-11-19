@@ -1326,6 +1326,532 @@ static int h_udp(struct mg_connection *c, void *ud) {
     return 1;
 }
 
+static int resolve_http_target(app_t *app, const config_t *cfg,
+                               const char *sync_id, int slot_index,
+                               const char *node_ip, int port_hint,
+                               char *host_out, size_t host_sz, int *port_out,
+                               char *resolved_sync_id, size_t resolved_sz,
+                               char *err_code, size_t err_sz) {
+    if (!app || !cfg || !host_out || !port_out || !err_code) return -1;
+    host_out[0] = '\0';
+    *port_out = 0;
+    if (resolved_sync_id && resolved_sz > 0) resolved_sync_id[0] = '\0';
+    err_code[0] = '\0';
+
+    char target_sync_id[64];
+    target_sync_id[0] = '\0';
+
+    if (slot_index >= 0) {
+        if (slot_index >= SYNC_MAX_SLOTS) {
+            snprintf(err_code, err_sz, "%s", "invalid_slot");
+            return -1;
+        }
+        pthread_mutex_lock(&app->master.lock);
+        if (app->master.slot_assignees[slot_index][0]) {
+            strncpy(target_sync_id, app->master.slot_assignees[slot_index],
+                    sizeof(target_sync_id) - 1);
+            target_sync_id[sizeof(target_sync_id) - 1] = '\0';
+        }
+        pthread_mutex_unlock(&app->master.lock);
+        if (!target_sync_id[0]) {
+            snprintf(err_code, err_sz, "%s", "slot_unassigned");
+            return -1;
+        }
+    } else if (sync_id && *sync_id) {
+        strncpy(target_sync_id, sync_id, sizeof(target_sync_id) - 1);
+        target_sync_id[sizeof(target_sync_id) - 1] = '\0';
+    }
+
+    scan_node_t nodes[SCAN_MAX_NODES];
+    int node_count = scan_get_nodes(nodes, SCAN_MAX_NODES);
+
+    if (node_ip && *node_ip) {
+        for (int i = 0; i < node_count; i++) {
+            if (strcmp(nodes[i].ip, node_ip) != 0) continue;
+            if (port_hint > 0 && nodes[i].port != port_hint) {
+                snprintf(err_code, err_sz, "%s", "port_mismatch");
+                return -1;
+            }
+            strncpy(host_out, nodes[i].ip, host_sz - 1);
+            host_out[host_sz - 1] = '\0';
+            *port_out = nodes[i].port;
+            if (resolved_sync_id && nodes[i].sync_id[0]) {
+                strncpy(resolved_sync_id, nodes[i].sync_id, resolved_sz - 1);
+                resolved_sync_id[resolved_sz - 1] = '\0';
+            }
+            return 0;
+        }
+        snprintf(err_code, err_sz, "%s", "node_not_found");
+        return -1;
+    }
+
+    if (target_sync_id[0]) {
+        for (int i = 0; i < node_count; i++) {
+            if (!nodes[i].sync_id[0]) continue;
+            if (strcasecmp(nodes[i].sync_id, target_sync_id) != 0) continue;
+            strncpy(host_out, nodes[i].ip, host_sz - 1);
+            host_out[host_sz - 1] = '\0';
+            *port_out = nodes[i].port;
+            if (resolved_sync_id) {
+                strncpy(resolved_sync_id, nodes[i].sync_id, resolved_sz - 1);
+                resolved_sync_id[resolved_sz - 1] = '\0';
+            }
+            return 0;
+        }
+        snprintf(err_code, err_sz, "%s", "id_not_found");
+        return -1;
+    }
+
+    snprintf(err_code, err_sz, "%s", "invalid_target");
+    return -1;
+}
+
+static int h_http(struct mg_connection *c, void *ud) {
+    app_t *app = (app_t *)ud;
+    config_t cfg; app_config_snapshot(app, &cfg);
+    const struct mg_request_info *ri = mg_get_request_info(c);
+    if (!ri || strcmp(ri->request_method, "POST") != 0) {
+        send_plain(c, 405, "method_not_allowed", 1);
+        return 1;
+    }
+
+    upload_t u = {0};
+    int rb = read_body(c, &u);
+    if (rb != 0) {
+        if (u.body) { free(u.body); u.body = NULL; }
+        JSON_Value *v = json_value_init_object();
+        JSON_Object *o = json_object(v);
+        int status = 400;
+        const char *err = "body_read_failed";
+        const char *cl = mg_get_header(c, "Content-Length");
+        if (cl && *cl) {
+            size_t need = (size_t)strtoul(cl, NULL, 10);
+            if (need > (size_t)MAX_BODY_BYTES) {
+                status = 413;
+                err = "body_too_large";
+            }
+        }
+        json_object_set_string(o, "error", err);
+        send_json(c, v, status, 1);
+        json_value_free(v);
+        return 1;
+    }
+
+    JSON_Value *root = json_parse_string(u.body ? u.body : "{}");
+    free(u.body);
+    if (!root) {
+        JSON_Value *v = json_value_init_object();
+        JSON_Object *o = json_object(v);
+        json_object_set_string(o, "error", "bad_json");
+        send_json(c, v, 400, 1);
+        json_value_free(v);
+        return 1;
+    }
+
+    JSON_Object *obj = json_object(root);
+    const JSON_Value *sync_id_v = json_object_get_value(obj, "sync_id");
+    const JSON_Value *slot_v = json_object_get_value(obj, "slot");
+    const JSON_Value *node_ip_v = json_object_get_value(obj, "node_ip");
+    const JSON_Value *port_v = json_object_get_value(obj, "port");
+    const JSON_Value *path_v = json_object_get_value(obj, "path");
+    const JSON_Value *method_v = json_object_get_value(obj, "method");
+    const JSON_Value *headers_v = json_object_get_value(obj, "headers");
+    const JSON_Value *body_v = json_object_get_value(obj, "body");
+    const JSON_Value *body_b64_v = json_object_get_value(obj, "body_base64");
+    const JSON_Value *tls_v = json_object_get_value(obj, "tls");
+    const JSON_Value *timeout_v = json_object_get_value(obj, "timeout_ms");
+
+    const char *sync_id = (sync_id_v && json_value_get_type(sync_id_v) == JSONString)
+                          ? json_value_get_string(sync_id_v)
+                          : NULL;
+    const char *node_ip = (node_ip_v && json_value_get_type(node_ip_v) == JSONString)
+                          ? json_value_get_string(node_ip_v)
+                          : NULL;
+    double slot_d = (slot_v && json_value_get_type(slot_v) == JSONNumber)
+                    ? json_value_get_number(slot_v)
+                    : -1.0;
+    int slot_index = -1;
+    if (slot_d >= 0.0) {
+        slot_index = (int)slot_d - 1;
+        if ((double)(slot_index + 1) != slot_d) slot_index = -2; // invalid sentinel
+    }
+    double port_d = (port_v && json_value_get_type(port_v) == JSONNumber)
+                    ? json_value_get_number(port_v)
+                    : -1.0;
+    int port_hint = (int)port_d;
+    if ((double)port_hint != port_d) port_hint = -1;
+    const char *path = (path_v && json_value_get_type(path_v) == JSONString)
+                       ? json_value_get_string(path_v)
+                       : "/";
+    const char *method = (method_v && json_value_get_type(method_v) == JSONString)
+                         ? json_value_get_string(method_v)
+                         : "GET";
+    int use_tls = (tls_v && json_value_get_type(tls_v) == JSONBoolean)
+                  ? json_value_get_boolean(tls_v)
+                  : 0;
+    double timeout_d = (timeout_v && json_value_get_type(timeout_v) == JSONNumber)
+                       ? json_value_get_number(timeout_v)
+                       : 5000.0;
+    int timeout_ms = (int)timeout_d;
+
+    int has_body = (body_v && json_value_get_type(body_v) == JSONString) ? 1 : 0;
+    int has_body_b64 = (body_b64_v && json_value_get_type(body_b64_v) == JSONString) ? 1 : 0;
+    int headers_obj = (headers_v && json_value_get_type(headers_v) == JSONObject) ? 1 : 0;
+
+    int target_count = 0;
+    if (sync_id && *sync_id) target_count++;
+    if (node_ip && *node_ip) target_count++;
+    if (slot_index >= 0) target_count++;
+
+    if (slot_index == -2 || target_count != 1 ||
+        !path || !*path || !method || !*method ||
+        (has_body && has_body_b64)) {
+        JSON_Value *v = json_value_init_object();
+        JSON_Object *o = json_object(v);
+        json_object_set_string(o, "error", "invalid_request");
+        send_json(c, v, 400, 1);
+        json_value_free(v);
+        json_value_free(root);
+        return 1;
+    }
+
+#ifdef NO_SSL
+    if (use_tls) {
+        JSON_Value *v = json_value_init_object();
+        JSON_Object *o = json_object(v);
+        json_object_set_string(o, "error", "ssl_disabled");
+        send_json(c, v, 400, 1);
+        json_value_free(v);
+        json_value_free(root);
+        return 1;
+    }
+#else
+    if (use_tls) {
+        JSON_Value *v = json_value_init_object();
+        JSON_Object *o = json_object(v);
+        json_object_set_string(o, "error", "tls_not_supported");
+        send_json(c, v, 400, 1);
+        json_value_free(v);
+        json_value_free(root);
+        return 1;
+    }
+#endif
+
+    char target_host[64];
+    int target_port = 0;
+    char resolved_sync_id[64];
+    char target_err[32];
+
+    if (resolve_http_target(app, &cfg, sync_id, slot_index, node_ip, port_hint,
+                             target_host, sizeof(target_host), &target_port,
+                             resolved_sync_id, sizeof(resolved_sync_id),
+                             target_err, sizeof(target_err)) != 0) {
+        JSON_Value *v = json_value_init_object();
+        JSON_Object *o = json_object(v);
+        json_object_set_string(o, "error", target_err[0] ? target_err : "resolve_failed");
+        send_json(c, v, 400, 1);
+        json_value_free(v);
+        json_value_free(root);
+        return 1;
+    }
+
+    unsigned char *body_buf = NULL;
+    const unsigned char *body_data = NULL;
+    size_t body_len = 0;
+
+    if (has_body_b64) {
+        const char *body_b64 = json_value_get_string(body_b64_v);
+        size_t src_len = body_b64 ? strlen(body_b64) : 0;
+        size_t dst_cap = ((src_len / 4) + 1) * 3;
+        if (dst_cap == 0) dst_cap = 1;
+        body_buf = (unsigned char *)malloc(dst_cap);
+        if (!body_buf) {
+            JSON_Value *v = json_value_init_object();
+            JSON_Object *o = json_object(v);
+            json_object_set_string(o, "error", "oom");
+            send_json(c, v, 500, 1);
+            json_value_free(v);
+            json_value_free(root);
+            return 1;
+        }
+        size_t out_len = dst_cap;
+        if (src_len == 0) {
+            out_len = 0;
+        } else {
+            if (mg_base64_decode(body_b64, src_len, body_buf, &out_len) != -1) {
+                free(body_buf);
+                JSON_Value *v = json_value_init_object();
+                JSON_Object *o = json_object(v);
+                json_object_set_string(o, "error", "invalid_base64");
+                send_json(c, v, 400, 1);
+                json_value_free(v);
+                json_value_free(root);
+                return 1;
+            }
+        }
+        body_data = body_buf;
+        body_len = out_len;
+    } else if (has_body) {
+        const char *body = json_value_get_string(body_v);
+        body_data = (const unsigned char *)(body ? body : "");
+        body_len = strlen((const char *)body_data);
+    }
+
+    char portbuf[16];
+    snprintf(portbuf, sizeof(portbuf), "%d", target_port);
+    struct addrinfo hints; memset(&hints, 0, sizeof(hints));
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_protocol = IPPROTO_TCP;
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_flags = AI_NUMERICSERV;
+
+    struct addrinfo *res = NULL;
+    int gai = getaddrinfo(target_host, portbuf, &hints, &res);
+    if (gai != 0) {
+        if (body_buf) free(body_buf);
+        JSON_Value *v = json_value_init_object();
+        JSON_Object *o = json_object(v);
+        json_object_set_string(o, "error", "resolve_failed");
+        const char *detail = gai_strerror(gai);
+        if (detail && *detail) json_object_set_string(o, "detail", detail);
+        send_json(c, v, 502, 1);
+        json_value_free(v);
+        json_value_free(root);
+        return 1;
+    }
+
+    int fd = -1;
+    for (struct addrinfo *ai = res; ai; ai = ai->ai_next) {
+        fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+        if (fd < 0) continue;
+        struct timeval tv;
+        if (timeout_ms < 1) timeout_ms = 1;
+        tv.tv_sec = timeout_ms / 1000;
+        tv.tv_usec = (timeout_ms % 1000) * 1000;
+        (void)setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+        (void)setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+        if (connect(fd, ai->ai_addr, ai->ai_addrlen) == 0) {
+            break;
+        }
+        int saved_errno = errno;
+        close(fd);
+        fd = -1;
+        errno = saved_errno;
+    }
+    freeaddrinfo(res);
+
+    if (fd < 0) {
+        int saved_errno = errno;
+        if (body_buf) free(body_buf);
+        JSON_Value *v = json_value_init_object();
+        JSON_Object *o = json_object(v);
+        json_object_set_string(o, "error", "connect_failed");
+        if (saved_errno) json_object_set_string(o, "detail", strerror(saved_errno));
+        send_json(c, v, 502, 1);
+        json_value_free(v);
+        json_value_free(root);
+        errno = saved_errno;
+        return 1;
+    }
+
+    char method_buf[16];
+    snprintf(method_buf, sizeof(method_buf), "%s", method);
+    for (size_t i = 0; i < strlen(method_buf); i++) {
+        method_buf[i] = (char)toupper((unsigned char)method_buf[i]);
+    }
+
+    int has_content_length = 0;
+    if (headers_obj) {
+        size_t hc = json_object_get_count(json_object(headers_v));
+        for (size_t i = 0; i < hc; i++) {
+            const char *hn = json_object_get_name(json_object(headers_v), i);
+            const char *hv = json_object_get_string(json_object(headers_v), hn);
+            if (!hn || !hv) continue;
+            if (strcasecmp(hn, "Content-Length") == 0) has_content_length = 1;
+        }
+    }
+
+    dprintf(fd, "%s %s HTTP/1.0\r\nHost: %s\r\n", method_buf, path, target_host);
+    if (headers_obj) {
+        size_t hc = json_object_get_count(json_object(headers_v));
+        for (size_t i = 0; i < hc; i++) {
+            const char *hn = json_object_get_name(json_object(headers_v), i);
+            const char *hv = json_object_get_string(json_object(headers_v), hn);
+            if (!hn || !hv) continue;
+            dprintf(fd, "%s: %s\r\n", hn, hv);
+        }
+    }
+    if (body_len > 0 && !has_content_length) {
+        dprintf(fd, "Content-Length: %zu\r\n", body_len);
+    }
+    dprintf(fd, "Connection: close\r\n\r\n");
+    if (body_len > 0) {
+        (void)send(fd, body_data, body_len, 0);
+    }
+
+    size_t bufcap = 4096;
+    size_t buflen = 0;
+    char *resp_buf = (char *)malloc(bufcap + 1);
+    if (!resp_buf) {
+        if (body_buf) free(body_buf);
+        close(fd);
+        JSON_Value *v = json_value_init_object();
+        JSON_Object *o = json_object(v);
+        json_object_set_string(o, "error", "oom");
+        send_json(c, v, 500, 1);
+        json_value_free(v);
+        json_value_free(root);
+        return 1;
+    }
+
+    int recv_err = 0;
+    while (1) {
+        char chunk[2048];
+        ssize_t r = recv(fd, chunk, sizeof(chunk), 0);
+        if (r == 0) break;
+        if (r < 0) { recv_err = errno ? errno : EIO; break; }
+        if (buflen + (size_t)r + 1 > bufcap) {
+            size_t ncap = bufcap * 2;
+            while (buflen + (size_t)r + 1 > ncap) ncap *= 2;
+            char *nb = (char *)realloc(resp_buf, ncap + 1);
+            if (!nb) { recv_err = ENOMEM; break; }
+            resp_buf = nb;
+            bufcap = ncap;
+        }
+        memcpy(resp_buf + buflen, chunk, (size_t)r);
+        buflen += (size_t)r;
+    }
+    close(fd);
+
+    if (recv_err) {
+        if (body_buf) free(body_buf);
+        free(resp_buf);
+        JSON_Value *v = json_value_init_object();
+        JSON_Object *o = json_object(v);
+        json_object_set_string(o, "error", "recv_failed");
+        json_object_set_string(o, "detail", strerror(recv_err));
+        send_json(c, v, 502, 1);
+        json_value_free(v);
+        json_value_free(root);
+        return 1;
+    }
+    resp_buf[buflen] = '\0';
+
+    size_t header_len = 0;
+    size_t body_off = 0;
+    const char *hdr_end = NULL;
+    hdr_end = strstr(resp_buf, "\r\n\r\n");
+    if (!hdr_end) hdr_end = strstr(resp_buf, "\n\n");
+    if (hdr_end) {
+        header_len = (size_t)(hdr_end - resp_buf);
+        body_off = header_len + ((hdr_end[0] == '\r') ? 4 : 2);
+    } else {
+        header_len = buflen;
+        body_off = buflen;
+    }
+
+    char *header_copy = (char *)malloc(header_len + 1);
+    if (!header_copy) {
+        if (body_buf) free(body_buf);
+        free(resp_buf);
+        JSON_Value *v = json_value_init_object();
+        JSON_Object *o = json_object(v);
+        json_object_set_string(o, "error", "oom");
+        send_json(c, v, 500, 1);
+        json_value_free(v);
+        json_value_free(root);
+        return 1;
+    }
+    memcpy(header_copy, resp_buf, header_len);
+    header_copy[header_len] = '\0';
+
+    int status_code = 0;
+    char reason[128]; reason[0] = '\0';
+
+    JSON_Value *headers_out_v = json_value_init_object();
+    JSON_Object *headers_out = json_object(headers_out_v);
+
+    char *saveptr = NULL;
+    char *line = strtok_r(header_copy, "\r\n", &saveptr);
+    if (line) {
+        if (sscanf(line, "HTTP/%*s %d %127[\x20-\x7E]", &status_code, reason) < 1) {
+            status_code = 0;
+        }
+        while ((line = strtok_r(NULL, "\r\n", &saveptr)) != NULL) {
+            char *colon = strchr(line, ':');
+            if (!colon) continue;
+            *colon = '\0';
+            char *val = colon + 1;
+            trim(line);
+            trim(val);
+            if (*line && val) {
+                json_object_set_string(headers_out, line, val);
+            }
+        }
+    }
+
+    const unsigned char *body_ptr = (const unsigned char *)(resp_buf + (body_off > buflen ? buflen : body_off));
+    size_t resp_body_len = (body_off <= buflen) ? (buflen - body_off) : 0;
+
+    size_t b64_cap = ((resp_body_len + 2) / 3) * 4 + 1;
+    char *b64 = (char *)malloc(b64_cap);
+    if (!b64) {
+        if (body_buf) free(body_buf);
+        free(resp_buf);
+        free(header_copy);
+        json_value_free(headers_out_v);
+        JSON_Value *v = json_value_init_object();
+        JSON_Object *o = json_object(v);
+        json_object_set_string(o, "error", "oom");
+        send_json(c, v, 500, 1);
+        json_value_free(v);
+        json_value_free(root);
+        return 1;
+    }
+    size_t b64_len = b64_cap;
+    if (resp_body_len == 0) {
+        b64_len = 0;
+        b64[0] = '\0';
+    } else if (mg_base64_encode(body_ptr, resp_body_len, b64, &b64_len) != -1) {
+        free(b64);
+        if (body_buf) free(body_buf);
+        free(resp_buf);
+        free(header_copy);
+        json_value_free(headers_out_v);
+        JSON_Value *v = json_value_init_object();
+        JSON_Object *o = json_object(v);
+        json_object_set_string(o, "error", "encode_failed");
+        send_json(c, v, 500, 1);
+        json_value_free(v);
+        json_value_free(root);
+        return 1;
+    }
+
+    JSON_Value *resp = json_value_init_object();
+    JSON_Object *or = json_object(resp);
+    json_object_set_string(or, "status", "ok");
+    json_object_set_number(or, "status_code", (double)status_code);
+    json_object_set_string(or, "reason", reason);
+    json_object_set_number(or, "body_length", (double)resp_body_len);
+    json_object_set_string(or, "body_base64", b64);
+    json_object_set_value(or, "headers", headers_out_v);
+    json_object_set_string(or, "target_ip", target_host);
+    json_object_set_number(or, "target_port", (double)target_port);
+    if (resolved_sync_id[0]) {
+        json_object_set_string(or, "sync_id", resolved_sync_id);
+    }
+
+    send_json(c, resp, 200, 1);
+
+    free(b64);
+    if (body_buf) free(body_buf);
+    free(resp_buf);
+    free(header_copy);
+    json_value_free(resp);
+    json_value_free(root);
+    return 1;
+}
+
 
 
 
@@ -1483,6 +2009,7 @@ int main(int argc, char **argv){
     mg_set_request_handler(app.ctx, "/caps",    h_caps,          &app);
     mg_set_request_handler(app.ctx, "/exec",    h_exec,          &app);
     mg_set_request_handler(app.ctx, "/udp",     h_udp,           &app);
+    mg_set_request_handler(app.ctx, "/http",    h_http,          &app);
     mg_set_request_handler(app.ctx, "/nodes",   h_nodes,         &app);
     mg_set_request_handler(app.ctx, "/media",   h_media,         &app);
     sync_register_http_handlers(app.ctx, &app);

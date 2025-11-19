@@ -1,0 +1,588 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>autod — ESP32 console</title>
+<link rel="stylesheet" href="./assets/console-theme.css">
+<link rel="stylesheet" href="./assets/vrx/vrx.css">
+<style>
+  main { padding: 1.5rem; display: flex; flex-direction: column; gap: 1.5rem; }
+  header { padding: 1.5rem; display: flex; justify-content: space-between; align-items: center; }
+  .node-controls { gap: 1rem; }
+  .node-relay { border-top: 1px solid rgba(255,255,255,0.08); padding-top: 0.5rem; display: flex; flex-direction: column; gap: 0.5rem; }
+  .node-relay textarea { width: 100%; min-height: 120px; }
+  .node-relay .row { gap: 0.5rem; flex-wrap: wrap; }
+  .node-relay input[type="text"],
+  .node-relay input[type="number"],
+  .node-relay select { min-width: 120px; }
+  .sync-grid { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+  .sync-slot-actions { display: flex; gap: 0.5rem; align-items: center; }
+  textarea { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
+</style>
+
+<header>
+  <div>
+    <div class="title">autod — ESP32 console</div>
+    <div class="sub" id="subtitle">nodes + sync overview</div>
+  </div>
+  <div class="row" style="justify-content:flex-end; gap:0.5rem; flex-wrap:wrap;">
+    <button id="refreshNodesBtn">Refresh /nodes</button>
+    <button id="refreshSyncBtn">Refresh /sync/slaves</button>
+  </div>
+</header>
+
+<main>
+  <section class="card" id="execCard">
+    <h2>/exec — local runner</h2>
+    <div class="body">
+      <div class="row" style="gap:0.75rem; flex-wrap:wrap;">
+        <label>path <input id="exec_path" value="/sys/help"></label>
+        <label>args (space-separated) <input id="exec_args" placeholder=''></label>
+        <button id="exec_btn">POST /exec</button>
+      </div>
+      <div class="mut">Body preview:</div>
+      <pre class="inline" id="exec_body_preview">{}</pre>
+      <div class="mut">Response:</div>
+      <textarea id="exec_out" readonly></textarea>
+    </div>
+  </section>
+
+  <section class="card" id="nodesCard">
+    <h2>Nodes</h2>
+    <div class="body grid">
+      <div class="nodes-toolbar">
+        <button id="nodesScanBtn">POST /nodes (scan)</button>
+        <div class="spacer"></div>
+        <div class="nodes-stats" id="nodesStats">—</div>
+      </div>
+      <div class="progress" aria-label="Scan progress"><div id="nodesProgress"></div></div>
+      <div id="nodesNotice" class="mut">—</div>
+      <div class="nodes-grid" id="nodesGrid"></div>
+    </div>
+  </section>
+
+  <section class="card" id="syncCard">
+    <h2>Sync slots</h2>
+    <div class="body grid">
+      <div class="row" style="gap:0.75rem; flex-wrap:wrap;">
+        <button id="syncRefreshBtn">Refresh status</button>
+        <div class="spacer"></div>
+        <div class="mut" id="syncStatus">waiting…</div>
+      </div>
+      <div class="sync-grid" id="syncGrid"></div>
+      <div>
+        <div class="mut">Waiting / unassigned slaves</div>
+        <div id="syncWaiting" class="sync-waiting">—</div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<script type="module">
+const $ = (sel, root = document) => root.querySelector(sel);
+const nodesState = { expanded: new Set(), pollTimer: null, loading: false };
+const MAX_SYNC_SLOTS = 3;
+
+function parseArgs(text){
+  const out = [];
+  const re = /"([^\"]*)"|'([^']*)'|(\S+)/g;
+  (text || '').replace(re, (_, dq, sq, bare) => {
+    out.push((dq ?? sq ?? bare) + '');
+    return '';
+  });
+  return out;
+}
+
+function formatAgoFromSeconds(ts){
+  if (!ts) return '—';
+  const sec = Number(ts);
+  if (!Number.isFinite(sec)) return '—';
+  const now = Math.floor(Date.now() / 1000);
+  const delta = Math.max(0, now - sec);
+  if (delta < 60) return `${delta}s ago`;
+  if (delta < 3600) return `${Math.floor(delta / 60)}m ago`;
+  if (delta < 86400) return `${Math.floor(delta / 3600)}h ago`;
+  return `${Math.floor(delta / 86400)}d ago`;
+}
+
+function formatAgoMs(ms, refMs){
+  const value = Number(ms);
+  const ref = Number(refMs);
+  if (!Number.isFinite(value)) return '—';
+  let delta = Number.isFinite(ref) ? Math.max(0, ref - value) : 0;
+  if (!Number.isFinite(ref)) delta = Math.max(0, Date.now() - value);
+  const sec = Math.round(delta / 1000);
+  if (sec < 60) return `${sec}s ago`;
+  const min = Math.round(sec / 60);
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.round(min / 60);
+  if (hr < 48) return `${hr}h ago`;
+  return `${Math.round(hr / 24)}d ago`;
+}
+
+function decodeBase64ToUtf8(b64){
+  if (!b64) return '';
+  try {
+    const bin = atob(b64);
+    const bytes = Uint8Array.from(bin, ch => ch.charCodeAt(0));
+    const dec = new TextDecoder('utf-8', { fatal: false });
+    return dec.decode(bytes);
+  } catch (err) {
+    console.warn('Failed to decode relay body', err);
+    try { return atob(b64); } catch { return ''; }
+  }
+}
+
+function setupExecCard(){
+  const btn = $('#exec_btn');
+  const pathInput = $('#exec_path');
+  const argsInput = $('#exec_args');
+  const previewEl = $('#exec_body_preview');
+  const outEl = $('#exec_out');
+  if (!btn || !pathInput || !argsInput || !previewEl || !outEl) return;
+  btn.addEventListener('click', async () => {
+    const path = pathInput.value.trim();
+    const args = parseArgs(argsInput.value || '');
+    const body = { path, args };
+    previewEl.textContent = JSON.stringify(body);
+    try {
+      const res = await fetch('/exec', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      const txt = await res.text();
+      outEl.value = txt.replace(/\n/g, '\\n');
+    } catch (err) {
+      outEl.value = JSON.stringify({ error: 'request_failed', message: err.message });
+    }
+  });
+}
+
+function nodeKey(node, idx){
+  const ip = (node?.ip || node?.host || '').trim();
+  const port = node?.port;
+  if (ip && (port || port === 0)) return `${ip}:${port}`;
+  if (ip) return ip;
+  return `node-${idx}`;
+}
+
+function setNodesNotice(text){
+  const notice = $('#nodesNotice');
+  if (notice) notice.textContent = text;
+}
+
+async function sendRelayRequest(node, elements){
+  const { methodEl, pathEl, bodyEl, timeoutEl, outputEl, buttonEl } = elements;
+  if (!node || !methodEl || !pathEl || !outputEl || !buttonEl) return;
+  const method = (methodEl.value || 'GET').toUpperCase();
+  const path = pathEl.value.trim() || '/';
+  const timeout = Math.max(0, parseInt(timeoutEl?.value || '4000', 10) || 4000);
+  const bodyText = bodyEl?.value.trim();
+  const payload = {
+    node_ip: node.ip || node.host,
+    method,
+    path,
+    timeout_ms: timeout
+  };
+  if (bodyText && method !== 'GET' && method !== 'HEAD'){
+    payload.body = bodyText;
+    payload.headers = { 'Content-Type': 'application/json' };
+  }
+  buttonEl.disabled = true;
+  outputEl.value = 'Sending via /http…';
+  try {
+    const res = await fetch('/http', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok){
+      outputEl.value = data && data.error ? `error: ${data.error}` : `HTTP ${res.status}`;
+      return;
+    }
+    if (!data || data.error){
+      outputEl.value = data && data.error ? `error: ${data.error}` : 'relay_failed';
+      return;
+    }
+    const bodyStr = decodeBase64ToUtf8(data.body_base64);
+    const headerLines = Array.isArray(data.headers)
+      ? data.headers.map(h => `${h.name}: ${h.value}`).join('\n')
+      : '';
+    const summary = [
+      `status ${data.status_code ?? '?'} ${data.reason || ''}`.trim(),
+      `target ${data.target_ip || '?'}:${data.target_port || ''}`.trim(),
+      data.sync_id ? `sync id ${data.sync_id}` : '',
+      headerLines ? '\n-- headers --\n' + headerLines : '',
+      '\n-- body --',
+      bodyStr
+    ].filter(Boolean).join('\n');
+    outputEl.value = summary;
+  } catch (err) {
+    outputEl.value = `relay_error: ${err.message}`;
+  } finally {
+    buttonEl.disabled = false;
+  }
+}
+
+function buildNodeCard(node, idx){
+  const key = nodeKey(node, idx);
+  const expanded = nodesState.expanded.has(key);
+  const nodeDiv = document.createElement('div');
+  nodeDiv.className = 'node' + (expanded ? ' expanded' : '');
+
+  const head = document.createElement('div');
+  head.className = 'node-head';
+  head.tabIndex = 0;
+  head.setAttribute('role', 'button');
+  head.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+
+  const top = document.createElement('div');
+  top.className = 'top';
+  const roleSpan = document.createElement('span');
+  roleSpan.className = 'pill role';
+  roleSpan.textContent = node.role || '—';
+  const ipSpan = document.createElement('span');
+  ipSpan.className = 'ip';
+  ipSpan.textContent = `${node.ip || '—'}:${node.port ?? ''}`;
+  top.append(roleSpan, ipSpan);
+
+  const deviceLine = document.createElement('div');
+  const strong = document.createElement('strong');
+  strong.textContent = node.device || '—';
+  const meta = document.createElement('span');
+  meta.className = 'meta';
+  meta.textContent = node.version ? `v${node.version}` : '';
+  deviceLine.append(strong, document.createTextNode(' '), meta);
+
+  const lastSeen = document.createElement('div');
+  lastSeen.className = 'meta';
+  lastSeen.textContent = `last seen ${formatAgoFromSeconds(node.last_seen)}`;
+
+  head.append(top, deviceLine, lastSeen);
+  nodeDiv.append(head);
+
+  const controls = document.createElement('div');
+  controls.className = 'node-controls';
+  controls.style.display = expanded ? 'grid' : 'none';
+
+  const relay = document.createElement('div');
+  relay.className = 'node-relay';
+  const intro = document.createElement('div');
+  intro.className = 'mut';
+  intro.textContent = 'Relay requests via /http to reach /caps, /exec, or other endpoints on this node.';
+  relay.append(intro);
+
+  const pathRow = document.createElement('div');
+  pathRow.className = 'row';
+  const methodLabel = document.createElement('label');
+  methodLabel.textContent = 'method ';
+  const methodSelect = document.createElement('select');
+  methodSelect.innerHTML = '<option>GET</option><option>POST</option><option>PUT</option><option>DELETE</option>';
+  methodLabel.append(methodSelect);
+  const pathLabel = document.createElement('label');
+  pathLabel.textContent = 'path ';
+  const pathInput = document.createElement('input');
+  pathInput.type = 'text';
+  pathInput.value = '/caps';
+  pathLabel.append(pathInput);
+  const timeoutLabel = document.createElement('label');
+  timeoutLabel.textContent = 'timeout (ms) ';
+  const timeoutInput = document.createElement('input');
+  timeoutInput.type = 'number';
+  timeoutInput.min = '100';
+  timeoutInput.value = '4000';
+  timeoutLabel.append(timeoutInput);
+  pathRow.append(methodLabel, pathLabel, timeoutLabel);
+  relay.append(pathRow);
+
+  const bodyArea = document.createElement('textarea');
+  bodyArea.placeholder = 'Optional JSON body (defaults to /caps)';
+  relay.append(bodyArea);
+
+  const actionRow = document.createElement('div');
+  actionRow.className = 'row';
+  const capsBtn = document.createElement('button');
+  capsBtn.type = 'button';
+  capsBtn.textContent = 'Load /caps';
+  capsBtn.addEventListener('click', ev => {
+    ev.stopPropagation();
+    methodSelect.value = 'GET';
+    pathInput.value = '/caps';
+    bodyArea.value = '';
+  });
+  const execBtn = document.createElement('button');
+  execBtn.type = 'button';
+  execBtn.textContent = 'POST /exec';
+  execBtn.addEventListener('click', ev => {
+    ev.stopPropagation();
+    methodSelect.value = 'POST';
+    pathInput.value = '/exec';
+    bodyArea.value = JSON.stringify({ path: '/sys/help', args: [] }, null, 2);
+  });
+  const spacer = document.createElement('div');
+  spacer.className = 'spacer';
+  const sendBtn = document.createElement('button');
+  sendBtn.type = 'button';
+  sendBtn.textContent = 'Send via /http';
+  sendBtn.addEventListener('click', ev => {
+    ev.stopPropagation();
+    void sendRelayRequest(node, {
+      methodEl: methodSelect,
+      pathEl: pathInput,
+      bodyEl: bodyArea,
+      timeoutEl: timeoutInput,
+      outputEl: relayOutput,
+      buttonEl: sendBtn
+    });
+  });
+  actionRow.append(capsBtn, execBtn, spacer, sendBtn);
+  relay.append(actionRow);
+
+  const relayOutput = document.createElement('textarea');
+  relayOutput.readOnly = true;
+  relayOutput.placeholder = 'Relay response will appear here';
+  relay.append(relayOutput);
+
+  controls.append(relay);
+  nodeDiv.append(controls);
+
+  const toggle = () => {
+    const isOpen = nodesState.expanded.has(key);
+    if (isOpen){
+      nodesState.expanded.delete(key);
+      controls.style.display = 'none';
+      nodeDiv.classList.remove('expanded');
+      head.setAttribute('aria-expanded', 'false');
+    } else {
+      nodesState.expanded.add(key);
+      controls.style.display = 'grid';
+      nodeDiv.classList.add('expanded');
+      head.setAttribute('aria-expanded', 'true');
+    }
+  };
+
+  head.addEventListener('click', toggle);
+  head.addEventListener('keydown', ev => {
+    if (ev.key === 'Enter' || ev.key === ' '){
+      ev.preventDefault();
+      toggle();
+    }
+  });
+
+  return nodeDiv;
+}
+
+function renderNodes(data){
+  const statsEl = $('#nodesStats');
+  const progressEl = $('#nodesProgress');
+  const nodes = Array.isArray(data?.nodes) ? data.nodes : [];
+  const pct = typeof data?.progress_pct === 'number'
+    ? Math.max(0, Math.min(100, Math.round(data.progress_pct)))
+    : (data?.targets ? Math.round((data.done || 0) / (data.targets || 1) * 100) : 0);
+  if (statsEl){
+    statsEl.textContent = `feature:${data?.scan_feature_enabled ? 'on' : 'off'} • scanning:${data?.scanning ? 'yes' : 'no'} • targets:${data?.targets ?? 0} • done:${data?.done ?? 0}`;
+  }
+  if (progressEl){
+    progressEl.style.width = `${pct}%`;
+  }
+  setNodesNotice(nodes.length ? `${nodes.length} node(s) found` : (data?.scanning ? 'Scanning…' : 'No nodes found'));
+  $('#nodesScanBtn').disabled = !data?.scan_feature_enabled || !!data?.scanning;
+  const grid = $('#nodesGrid');
+  if (grid){
+    grid.innerHTML = '';
+    const frag = document.createDocumentFragment();
+    nodes.forEach((node, idx) => frag.append(buildNodeCard(node, idx)));
+    grid.append(frag);
+  }
+}
+
+async function fetchNodes(){
+  if (nodesState.loading) return;
+  nodesState.loading = true;
+  try {
+    const res = await fetch('/nodes', { cache: 'no-store' });
+    if (!res.ok){
+      const detail = await res.text().catch(() => '');
+      setNodesNotice(`Failed to load /nodes (${res.status} ${detail.trim()})`);
+      renderNodes({ nodes: [] });
+    } else {
+      const data = await res.json();
+      renderNodes(data);
+      scheduleNodesPoll(!!data?.scanning);
+    }
+  } catch (err) {
+    setNodesNotice(`Failed to load /nodes (${err.message})`);
+  } finally {
+    nodesState.loading = false;
+  }
+}
+
+function scheduleNodesPoll(keepPolling){
+  if (nodesState.pollTimer){
+    clearTimeout(nodesState.pollTimer);
+    nodesState.pollTimer = null;
+  }
+  if (keepPolling){
+    nodesState.pollTimer = setTimeout(() => { nodesState.pollTimer = null; fetchNodes(); }, 1000);
+  }
+}
+
+async function triggerNodesScan(){
+  $('#nodesScanBtn').disabled = true;
+  try {
+    await fetch('/nodes', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+  } catch (err) {
+    setNodesNotice(`Failed to start scan: ${err.message}`);
+  } finally {
+    fetchNodes();
+  }
+}
+
+function buildSlotCard(slotNumber, rec, meta, refMs){
+  const slot = document.createElement('div');
+  slot.className = 'sync-slot';
+  const header = document.createElement('div');
+  header.className = 'sync-slot-head';
+  header.textContent = `Slot ${slotNumber}` + (meta?.label ? ` — ${meta.label}` : '');
+  slot.append(header);
+  const body = document.createElement('div');
+  body.className = 'sync-slot-body';
+  if (rec){
+    const title = document.createElement('div');
+    title.innerHTML = `<strong>${rec.id || 'unnamed'}</strong>`;
+    body.append(title);
+    const metaLine = document.createElement('div');
+    metaLine.className = 'mut';
+    const parts = [];
+    if (rec.device) parts.push(rec.device);
+    if (rec.role) parts.push(rec.role);
+    if (rec.version) parts.push(`v${rec.version}`);
+    if (rec.remote_ip) parts.push(rec.remote_ip);
+    metaLine.textContent = parts.join(' • ') || '—';
+    body.append(metaLine);
+    const lastSeen = document.createElement('div');
+    lastSeen.className = 'mut';
+    lastSeen.textContent = `Last seen ${formatAgoMs(rec.last_seen_ms, refMs)}`;
+    body.append(lastSeen);
+    const gen = document.createElement('div');
+    gen.className = 'mut';
+    gen.textContent = `Generation ack ${rec.last_ack_generation ?? '—'} / slot ${rec.slot_generation ?? '—'}`;
+    body.append(gen);
+    const actions = document.createElement('div');
+    actions.className = 'sync-slot-actions';
+    const replayBtn = document.createElement('button');
+    replayBtn.type = 'button';
+    replayBtn.textContent = 'Replay commands';
+    replayBtn.addEventListener('click', () => { requestReplay(slotNumber); });
+    actions.append(replayBtn);
+    body.append(actions);
+  } else {
+    const empty = document.createElement('div');
+    empty.className = 'mut';
+    empty.textContent = 'Empty';
+    body.append(empty);
+  }
+  if (meta?.prefer_id){
+    const prefer = document.createElement('div');
+    prefer.className = 'mut';
+    prefer.textContent = `Preferred id: ${meta.prefer_id}`;
+    body.append(prefer);
+  }
+  slot.append(body);
+  return slot;
+}
+
+function renderSync(data){
+  const statusEl = $('#syncStatus');
+  const grid = $('#syncGrid');
+  const waitingEl = $('#syncWaiting');
+  if (!statusEl || !grid || !waitingEl) return;
+  if (!data){
+    statusEl.textContent = 'No data';
+    grid.innerHTML = '';
+    waitingEl.textContent = '—';
+    return;
+  }
+  const slotsMeta = new Map();
+  (Array.isArray(data.slots) ? data.slots : []).forEach(entry => {
+    const slotNum = Number(entry?.slot);
+    if (Number.isFinite(slotNum) && slotNum >= 1 && slotNum <= MAX_SYNC_SLOTS){
+      slotsMeta.set(slotNum, entry);
+    }
+  });
+  const slots = Array.from({ length: MAX_SYNC_SLOTS }, () => null);
+  const waiting = [];
+  let refMs = 0;
+  (Array.isArray(data.slaves) ? data.slaves : []).forEach(rec => {
+    if (!rec || typeof rec !== 'object') return;
+    if (Number.isFinite(rec.last_seen_ms) && rec.last_seen_ms > refMs) refMs = rec.last_seen_ms;
+    const slotNum = Number(rec.slot);
+    if (Number.isFinite(slotNum) && slotNum >= 1 && slotNum <= MAX_SYNC_SLOTS){
+      slots[slotNum - 1] = rec;
+    } else {
+      waiting.push(rec);
+    }
+  });
+  grid.innerHTML = '';
+  const frag = document.createDocumentFragment();
+  slots.forEach((rec, idx) => {
+    const slotNum = idx + 1;
+    frag.append(buildSlotCard(slotNum, rec, slotsMeta.get(slotNum), refMs));
+  });
+  grid.append(frag);
+  if (waiting.length){
+    waitingEl.textContent = waiting.map(rec => `${rec.id || rec.remote_ip || 'unknown'} (${formatAgoMs(rec.last_seen_ms, refMs)})`).join(', ');
+  } else {
+    waitingEl.textContent = 'None';
+  }
+  statusEl.textContent = `Updated ${new Date().toLocaleTimeString()} • ${ (data.slaves?.length) || 0 } known`;
+}
+
+async function fetchSync(){
+  $('#syncStatus').textContent = 'Loading /sync/slaves…';
+  try {
+    const res = await fetch('/sync/slaves', { cache: 'no-store' });
+    if (!res.ok){
+      const text = await res.text().catch(() => '');
+      $('#syncStatus').textContent = `Failed (${res.status} ${text.trim()})`;
+      $('#syncGrid').innerHTML = '';
+      $('#syncWaiting').textContent = '—';
+      return;
+    }
+    const data = await res.json();
+    renderSync(data);
+  } catch (err) {
+    $('#syncStatus').textContent = `Failed (${err.message})`;
+    $('#syncGrid').innerHTML = '';
+    $('#syncWaiting').textContent = '—';
+  }
+}
+
+async function requestReplay(slotNumber){
+  $('#syncStatus').textContent = `Requesting replay for slot ${slotNumber}…`;
+  try {
+    const res = await fetch('/sync/push', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ replay_slots: [slotNumber] })
+    });
+    if (!res.ok){
+      const txt = await res.text().catch(() => '');
+      $('#syncStatus').textContent = `Replay failed (${res.status} ${txt.trim()})`;
+      return;
+    }
+    $('#syncStatus').textContent = `Replay requested for slot ${slotNumber}`;
+    fetchSync();
+  } catch (err) {
+    $('#syncStatus').textContent = `Replay failed (${err.message})`;
+  }
+}
+
+setupExecCard();
+$('#refreshNodesBtn').addEventListener('click', fetchNodes);
+$('#refreshSyncBtn').addEventListener('click', fetchSync);
+$('#nodesScanBtn').addEventListener('click', triggerNodesScan);
+$('#syncRefreshBtn').addEventListener('click', fetchSync);
+fetchNodes();
+fetchSync();
+</script>

@@ -91,6 +91,10 @@ void scan_get_status(scan_status_t *st);
 // Copy up to max nodes into dst; returns count copied.
 int  scan_get_nodes(scan_node_t *dst, int max);
 
+// Probe a specific host:port once and refresh the node cache if it responds.
+// Returns 0 on success, non-zero on failure.
+int  scan_probe_node(const char *ip, int port);
+
 #ifdef __cplusplus
 }
 #endif
