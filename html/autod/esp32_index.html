@@ -30,6 +30,74 @@
 </header>
 
 <main>
+  <section class="card" id="capsCard">
+    <h2>Device & runtime</h2>
+    <div class="body grid">
+      <div class="row" style="gap:0.75rem; flex-wrap:wrap;">
+        <button id="capsRefreshBtn">Refresh /caps</button>
+        <div class="spacer"></div>
+        <div class="mut" id="capsStatus">waiting…</div>
+      </div>
+      <div class="kv"><div class="mut">Device</div><div id="dev_device">—</div></div>
+      <div class="kv"><div class="mut">Role</div><div id="dev_role">—</div></div>
+      <div class="kv"><div class="mut">Version</div><div id="dev_version">—</div></div>
+      <div class="kv"><div class="mut">Interfaces</div><div id="dev_if">—</div></div>
+      <div class="kv"><div class="mut">Uptime</div><div id="dev_uptime">—</div></div>
+      <div class="kv"><div class="mut">Loadavg</div><div id="dev_load">—</div></div>
+      <div class="kv"><div class="mut">Capabilities</div><div class="caps" id="dev_caps">—</div></div>
+      <div class="kv"><div class="mut">SSE</div><div class="sse" id="dev_sse">—</div></div>
+      <div class="row" id="deviceRuntimeActions" style="display:none">
+        <button id="pixelpilotMiniRkRebootBtn">Reboot device</button>
+        <button id="pixelpilotMiniRkShutdownBtn">Shutdown device</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="card" id="pixelpilotMiniRkCard" style="display:none">
+    <h2>Pixelpilot Mini RK</h2>
+    <div class="body grid">
+      <div class="cap-toolbar">
+        <div class="row" id="pixelpilotMiniRkActions">
+          <button id="pixelpilotMiniRkToggleOsdBtn">Toggle OSD</button>
+          <button id="pixelpilotMiniRkToggleRecordingBtn">Toggle Recording</button>
+          <button id="pixelpilotMiniRkRestartServiceBtn">Restart pixelpilot_mini_rk</button>
+          <button id="pixelpilotMiniRkStopServiceBtn">Stop pixelpilot_mini_rk</button>
+          <button id="pixelpilotMiniRkStartServiceBtn">Start pixelpilot_mini_rk</button>
+        </div>
+        <div class="row mini-rk-gamma-row">
+          <label for="pixelpilotMiniRkGammaSelect">Gamma preset</label>
+          <select id="pixelpilotMiniRkGammaSelect" disabled>
+            <option>Loading presets…</option>
+          </select>
+          <button id="pixelpilotMiniRkApplyGammaBtn" type="button" disabled>Apply preset</button>
+          <button id="pixelpilotMiniRkReloadGammaBtn" type="button">Reload presets</button>
+          <div class="mut" id="pixelpilotMiniRkGammaNotice">Loading presets…</div>
+        </div>
+        <div class="spacer"></div>
+        <div class="mini-status">
+          <div class="status-indicator" id="pixelpilotMiniRkStatus" aria-live="polite">Idle</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="card" id="dvrCard" style="display:none">
+    <h2>DVR recordings</h2>
+    <div class="body grid dvr-body">
+      <div class="row">
+        <button id="dvrRefreshBtn">Refresh list</button>
+        <button id="dvrDeleteAllBtn">Delete all</button>
+        <div class="spacer"></div>
+        <div class="mut" id="dvrStatus">—</div>
+      </div>
+      <div class="dvr-scroll">
+        <div id="dvrMessage" class="dvr-message" style="display:none"></div>
+        <div id="dvrEmptyState" class="dvr-empty" style="display:none">No recordings found.</div>
+        <div id="dvrList" class="dvr-list"></div>
+      </div>
+    </div>
+  </section>
+
   <section class="card" id="execCard">
     <h2>/exec — local runner</h2>
     <div class="body">
@@ -80,6 +148,10 @@
 const $ = (sel, root = document) => root.querySelector(sel);
 const nodesState = { expanded: new Set(), pollTimer: null, loading: false };
 const MAX_SYNC_SLOTS = 3;
+const DEFAULT_CMD_TIMEOUT_MS = 6000;
+const capsState = { capList: new Set(), hasExec: false };
+const dvrState = { initialized: false, hasExec: false, loading: false };
+const miniRkState = { initialized: false, gamma: { presets: [], loading: false } };
 
 function parseArgs(text){
   const out = [];
@@ -89,6 +161,78 @@ function parseArgs(text){
     return '';
   });
   return out;
+}
+
+function secsToHhMmSs(value){
+  const sec = Number(value);
+  if (!Number.isFinite(sec) || sec < 0) return '—';
+  const hours = Math.floor(sec / 3600);
+  const minutes = Math.floor((sec % 3600) / 60);
+  const seconds = Math.floor(sec % 60);
+  const pad = num => String(num).padStart(2, '0');
+  return `${hours}:${pad(minutes)}:${pad(seconds)}`;
+}
+
+function formatInterfaces(list){
+  if (!Array.isArray(list) || !list.length) return '—';
+  return list.map(entry => `${entry.if || entry.name || 'if'}:${entry.ip || entry.addr || '—'}`).join('  ');
+}
+
+function formatLoadavg(list){
+  if (!Array.isArray(list) || !list.length) return '—';
+  return list.join(' ');
+}
+
+function renderCapsList(list){
+  const el = document.getElementById('dev_caps');
+  if (!el) return;
+  el.innerHTML = '';
+  if (!Array.isArray(list) || !list.length){
+    el.textContent = '—';
+    return;
+  }
+  list.forEach(cap => {
+    const pill = document.createElement('span');
+    pill.className = 'pill';
+    pill.textContent = cap;
+    el.appendChild(pill);
+  });
+}
+
+function renderSseList(entries){
+  const el = document.getElementById('dev_sse');
+  if (!el) return;
+  el.innerHTML = '';
+  if (!Array.isArray(entries) || !entries.length){
+    el.textContent = '—';
+    return;
+  }
+  const frag = document.createDocumentFragment();
+  entries.forEach(item => {
+    if (!item || !item.url) return;
+    const link = document.createElement('a');
+    link.href = item.url;
+    link.target = '_blank';
+    link.rel = 'noreferrer';
+    link.textContent = item.name || item.url;
+    frag.appendChild(link);
+    frag.appendChild(document.createTextNode(' '));
+  });
+  el.appendChild(frag);
+}
+
+function formatBytes(bytes){
+  const value = Number(bytes);
+  if (!Number.isFinite(value) || value < 0) return '—';
+  if (value >= 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+  if (value >= 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${value} B`;
+}
+
+function formatLocalDate(ts){
+  const value = Number(ts);
+  if (!Number.isFinite(value) || value <= 0) return '—';
+  return new Date(value * 1000).toLocaleString();
 }
 
 function formatAgoFromSeconds(ts){
@@ -129,6 +273,430 @@ function decodeBase64ToUtf8(b64){
     console.warn('Failed to decode relay body', err);
     try { return atob(b64); } catch { return ''; }
   }
+}
+
+async function postExec(payload, timeoutMs = DEFAULT_CMD_TIMEOUT_MS){
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch('/exec', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal: controller.signal
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok){
+      const message = data?.error || data?.stderr || data?.stdout || `HTTP ${res.status}`;
+      throw new Error(message);
+    }
+    return data || {};
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function setCapsStatus(text){
+  const statusEl = document.getElementById('capsStatus');
+  if (statusEl) statusEl.textContent = text;
+}
+
+function applyCapabilityToggles(capList){
+  const list = Array.isArray(capList) ? capList : [];
+  capsState.capList = new Set(list);
+  capsState.hasExec = capsState.capList.has('exec');
+  const hasMiniRk = capsState.capList.has('pixelpilot_mini_rk');
+  const hasDvr = capsState.capList.has('dvr');
+
+  const deviceActionsRow = document.getElementById('deviceRuntimeActions');
+  if (deviceActionsRow) deviceActionsRow.style.display = hasMiniRk ? '' : 'none';
+
+  const pixelpilotCard = document.getElementById('pixelpilotMiniRkCard');
+  if (pixelpilotCard){
+    pixelpilotCard.style.display = hasMiniRk ? '' : 'none';
+    if (hasMiniRk){
+      ensureMiniRkCard();
+      setMiniRkStatusIdle('Idle');
+    } else {
+      setMiniRkStatusIdle('cap missing');
+    }
+  }
+
+  ensureDvrHandlers();
+  dvrState.hasExec = capsState.hasExec;
+  updateDvrControls();
+  const dvrCard = document.getElementById('dvrCard');
+  if (dvrCard){
+    dvrCard.style.display = hasDvr ? '' : 'none';
+    if (hasDvr){
+      refreshDvrList();
+    } else {
+      clearDvrCard();
+    }
+  }
+}
+
+function renderCaps(caps){
+  document.getElementById('dev_device').textContent = caps?.device || '—';
+  document.getElementById('dev_role').textContent = caps?.role || '—';
+  document.getElementById('dev_version').textContent = caps?.version || '—';
+  document.getElementById('dev_if').textContent = formatInterfaces(caps?.ifaddrs);
+  document.getElementById('dev_uptime').textContent = secsToHhMmSs(caps?.uptime_s);
+  document.getElementById('dev_load').textContent = formatLoadavg(caps?.loadavg);
+  renderCapsList(caps?.caps);
+  renderSseList(caps?.sse);
+  const subtitle = document.getElementById('subtitle');
+  if (subtitle){
+    const label = [caps?.device || 'device', caps?.version ? `v${caps.version}` : ''].filter(Boolean).join(' ');
+    subtitle.textContent = label || 'Device summary';
+  }
+  setCapsStatus(`Updated ${new Date().toLocaleTimeString()}`);
+  applyCapabilityToggles(Array.isArray(caps?.caps) ? caps.caps : []);
+}
+
+async function fetchCaps(){
+  setCapsStatus('Loading /caps…');
+  try {
+    const res = await fetch('/caps', { cache: 'no-store' });
+    if (!res.ok){
+      const txt = await res.text().catch(() => '');
+      throw new Error(`${res.status} ${txt.trim()}`);
+    }
+    const data = await res.json();
+    renderCaps(data);
+  } catch (err) {
+    setCapsStatus(`Failed (${err.message})`);
+  }
+}
+
+function ensureDvrHandlers(){
+  if (dvrState.initialized) return;
+  const refreshBtn = document.getElementById('dvrRefreshBtn');
+  const deleteBtn = document.getElementById('dvrDeleteAllBtn');
+  if (refreshBtn) refreshBtn.addEventListener('click', () => { void refreshDvrList(); });
+  if (deleteBtn) deleteBtn.addEventListener('click', () => { void deleteAllDvrRecordings(); });
+  dvrState.initialized = true;
+}
+
+function updateDvrControls(){
+  const deleteBtn = document.getElementById('dvrDeleteAllBtn');
+  if (deleteBtn){
+    deleteBtn.disabled = !dvrState.hasExec;
+    deleteBtn.title = dvrState.hasExec ? '' : 'Requires exec capability';
+  }
+}
+
+function showDvrMessage(text, type){
+  const msgEl = document.getElementById('dvrMessage');
+  if (!msgEl) return;
+  msgEl.classList.remove('ok', 'err');
+  if (!text){
+    msgEl.style.display = 'none';
+    msgEl.textContent = '';
+    return;
+  }
+  msgEl.textContent = text;
+  if (type) msgEl.classList.add(type);
+  msgEl.style.display = 'block';
+}
+
+function clearDvrCard(){
+  const listEl = document.getElementById('dvrList');
+  const emptyEl = document.getElementById('dvrEmptyState');
+  const statusEl = document.getElementById('dvrStatus');
+  showDvrMessage('', '');
+  if (listEl) listEl.innerHTML = '';
+  if (emptyEl) emptyEl.style.display = 'none';
+  if (statusEl) statusEl.textContent = 'cap missing';
+}
+
+function renderDvrEntries(entries){
+  const listEl = document.getElementById('dvrList');
+  const emptyEl = document.getElementById('dvrEmptyState');
+  if (!listEl || !emptyEl) return;
+  listEl.innerHTML = '';
+  if (!Array.isArray(entries) || !entries.length){
+    emptyEl.style.display = 'block';
+    return;
+  }
+  emptyEl.style.display = 'none';
+  const frag = document.createDocumentFragment();
+  entries.forEach(entry => {
+    if (!entry || typeof entry.name !== 'string') return;
+    const item = document.createElement('div');
+    item.className = 'dvr-item';
+    const link = document.createElement('a');
+    link.href = `/media/${encodeURIComponent(entry.name)}`;
+    link.textContent = entry.name;
+    link.download = entry.name;
+    item.appendChild(link);
+    const meta = document.createElement('div');
+    meta.className = 'dvr-meta';
+    const sizeText = formatBytes(entry.sizeBytes);
+    const timeText = formatLocalDate(entry.mtimeSec);
+    meta.textContent = (sizeText === '—' && timeText === '—') ? '—' : `${sizeText} • ${timeText}`;
+    item.appendChild(meta);
+    frag.appendChild(item);
+  });
+  listEl.appendChild(frag);
+}
+
+function parseDvrListFromHtml(html){
+  if (typeof DOMParser !== 'function') return [];
+  try {
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    return Array.from(doc.querySelectorAll('a')).map(a => a.getAttribute('href') || '')
+      .map(raw => raw.split('#')[0].split('?')[0].replace(/^\/+|\/+$/g, ''))
+      .filter(Boolean)
+      .filter(name => name !== '..' && name.toLowerCase().endsWith('.mp4'));
+  } catch {
+    return [];
+  }
+}
+
+async function refreshDvrList(){
+  const card = document.getElementById('dvrCard');
+  if (!card || card.style.display === 'none') return;
+  if (dvrState.loading) return;
+  const statusEl = document.getElementById('dvrStatus');
+  const listEl = document.getElementById('dvrList');
+  const emptyEl = document.getElementById('dvrEmptyState');
+  if (!statusEl || !listEl || !emptyEl) return;
+  dvrState.loading = true;
+  statusEl.textContent = 'Loading…';
+  listEl.innerHTML = '';
+  emptyEl.style.display = 'none';
+  showDvrMessage('', '');
+  try {
+    let entries = [];
+    if (dvrState.hasExec){
+      const res = await postExec({ path: '/sys/dvr/list', args: [] });
+      const ok = typeof res?.rc === 'number' ? res.rc === 0 : true;
+      const stdout = String(res?.stdout ?? '');
+      if (!ok){
+        const errMsg = (res?.stderr || stdout || 'failed to list recordings').trim();
+        throw new Error(errMsg || 'failed to list recordings');
+      }
+      entries = stdout.split(/\r?\n/).map(line => {
+        const trimmed = line.trim();
+        if (!trimmed) return null;
+        const parts = trimmed.split('\t');
+        const name = parts[0]?.trim();
+        if (!name) return null;
+        const size = parts.length > 1 ? Number(parts[1]) : NaN;
+        const mtime = parts.length > 2 ? Number(parts[2]) : NaN;
+        return {
+          name,
+          sizeBytes: Number.isFinite(size) && size >= 0 ? size : null,
+          mtimeSec: Number.isFinite(mtime) && mtime > 0 ? Math.floor(mtime) : null
+        };
+      }).filter(Boolean);
+    } else {
+      const resp = await fetch('/media/', { cache: 'no-store' });
+      if (!resp.ok){
+        throw new Error(`/media/ responded with ${resp.status}`);
+      }
+      const html = await resp.text();
+      const names = parseDvrListFromHtml(html);
+      entries = names.map(name => ({ name }));
+    }
+    entries.sort((a, b) => {
+      const aTs = Number.isFinite(a?.mtimeSec) ? a.mtimeSec : 0;
+      const bTs = Number.isFinite(b?.mtimeSec) ? b.mtimeSec : 0;
+      if (bTs !== aTs) return bTs - aTs;
+      return (a?.name || '').localeCompare(b?.name || '', 'en', { numeric: true, sensitivity: 'base' });
+    });
+    renderDvrEntries(entries);
+    statusEl.textContent = `${entries.length} recording${entries.length === 1 ? '' : 's'} • ${new Date().toLocaleTimeString()}`;
+  } catch (err) {
+    statusEl.textContent = 'Failed';
+    showDvrMessage(err.message || 'failed to load recordings', 'err');
+  } finally {
+    dvrState.loading = false;
+  }
+}
+
+async function deleteAllDvrRecordings(){
+  if (!dvrState.hasExec) return;
+  if (!confirm('Delete all DVR recordings?')) return;
+  const deleteBtn = document.getElementById('dvrDeleteAllBtn');
+  const statusEl = document.getElementById('dvrStatus');
+  if (deleteBtn) deleteBtn.disabled = true;
+  showDvrMessage('', '');
+  if (statusEl) statusEl.textContent = 'Deleting…';
+  try {
+    const res = await postExec({ path: '/sys/dvr/delete_all', args: [] });
+    const ok = typeof res?.rc === 'number' ? res.rc === 0 : true;
+    const detail = (res?.stderr || res?.stdout || (ok ? 'Deleted recordings' : 'Delete failed')).trim();
+    showDvrMessage(detail || (ok ? 'Deleted recordings' : 'Delete failed'), ok ? 'ok' : 'err');
+  } catch (err) {
+    showDvrMessage(err.message || 'Delete failed', 'err');
+  } finally {
+    if (deleteBtn) deleteBtn.disabled = !dvrState.hasExec;
+    await refreshDvrList();
+  }
+}
+
+function miniRkStatusEl(){
+  return document.getElementById('pixelpilotMiniRkStatus');
+}
+
+function setMiniRkStatusIdle(text = 'Idle'){
+  const el = miniRkStatusEl();
+  if (!el) return;
+  el.classList.remove('running', 'ok', 'err', 'flash');
+  el.textContent = text;
+  el.title = '';
+}
+
+function setMiniRkStatusRunning(){
+  const el = miniRkStatusEl();
+  if (!el) return;
+  el.classList.remove('ok', 'err', 'flash');
+  el.classList.add('running');
+  el.textContent = 'Running…';
+  el.title = '';
+}
+
+function setMiniRkStatusResult(ok, detail = ''){
+  const el = miniRkStatusEl();
+  if (!el) return;
+  el.classList.remove('running', 'ok', 'err', 'flash');
+  el.classList.add(ok ? 'ok' : 'err');
+  el.textContent = `${ok ? 'Success' : 'Error'} • ${new Date().toLocaleTimeString()}`;
+  el.title = detail || '';
+  void el.offsetWidth;
+  el.classList.add('flash');
+}
+
+async function runMiniRkCommand(command, btnEl){
+  const payload = typeof command === 'string'
+    ? { path: command, args: [] }
+    : {
+        path: command?.path || '',
+        args: Array.isArray(command?.args) ? command.args : []
+      };
+  if (!payload.path){
+    setMiniRkStatusResult(false, 'invalid command');
+    return;
+  }
+  setMiniRkStatusRunning();
+  if (btnEl) btnEl.disabled = true;
+  try {
+    const res = await postExec(payload);
+    const ok = typeof res?.rc === 'number' ? res.rc === 0 : true;
+    const stdout = (res?.stdout || '').trim();
+    const stderr = (res?.stderr || '').trim();
+    const detail = ok ? (stdout.split('\n')[0] || '') : (stderr || stdout || 'command failed');
+    setMiniRkStatusResult(ok, detail);
+  } catch (err) {
+    setMiniRkStatusResult(false, err.message || 'command failed');
+  } finally {
+    if (btnEl) btnEl.disabled = false;
+  }
+}
+
+function parseMiniRkGammaPresets(stdout){
+  const out = [];
+  const seen = new Set();
+  String(stdout || '').split(/\r?\n/).forEach(rawLine => {
+    const line = rawLine.trim();
+    if (!line || /^available presets/i.test(line) || seen.has(line)) return;
+    seen.add(line);
+    out.push(line);
+  });
+  return out;
+}
+
+function renderMiniRkGammaPresets(presets){
+  const select = document.getElementById('pixelpilotMiniRkGammaSelect');
+  const applyBtn = document.getElementById('pixelpilotMiniRkApplyGammaBtn');
+  if (!select || !applyBtn) return;
+  select.innerHTML = '';
+  const items = Array.isArray(presets) ? presets : [];
+  const placeholder = document.createElement('option');
+  placeholder.value = '';
+  placeholder.disabled = true;
+  placeholder.selected = true;
+  placeholder.textContent = items.length ? 'Select preset…' : 'No presets available';
+  select.appendChild(placeholder);
+  items.forEach(preset => {
+    const option = document.createElement('option');
+    option.value = preset;
+    option.textContent = preset;
+    select.appendChild(option);
+  });
+  select.disabled = items.length === 0;
+  applyBtn.disabled = true;
+}
+
+async function loadMiniRkGammaPresets(){
+  const select = document.getElementById('pixelpilotMiniRkGammaSelect');
+  const applyBtn = document.getElementById('pixelpilotMiniRkApplyGammaBtn');
+  const reloadBtn = document.getElementById('pixelpilotMiniRkReloadGammaBtn');
+  const noticeEl = document.getElementById('pixelpilotMiniRkGammaNotice');
+  if (!select || !applyBtn) return;
+  if (miniRkState.gamma.loading) return;
+  miniRkState.gamma.loading = true;
+  select.disabled = true;
+  applyBtn.disabled = true;
+  if (reloadBtn) reloadBtn.disabled = true;
+  if (noticeEl) noticeEl.textContent = 'Loading presets…';
+  try {
+    const res = await postExec({ path: '/sys/pixelpilot_mini_rk/gamma', args: ['--list'] });
+    const presets = parseMiniRkGammaPresets(res?.stdout || '');
+    miniRkState.gamma.presets = presets;
+    renderMiniRkGammaPresets(presets);
+    if (noticeEl){
+      noticeEl.textContent = presets.length ? `Loaded ${presets.length} preset${presets.length === 1 ? '' : 's'}` : 'No presets reported';
+    }
+  } catch (err) {
+    miniRkState.gamma.presets = [];
+    renderMiniRkGammaPresets([]);
+    if (noticeEl) noticeEl.textContent = err.message || 'Failed to load presets';
+  } finally {
+    if (reloadBtn) reloadBtn.disabled = false;
+    miniRkState.gamma.loading = false;
+  }
+}
+
+function initMiniRkGammaControls(){
+  const select = document.getElementById('pixelpilotMiniRkGammaSelect');
+  const applyBtn = document.getElementById('pixelpilotMiniRkApplyGammaBtn');
+  const reloadBtn = document.getElementById('pixelpilotMiniRkReloadGammaBtn');
+  if (!select || !applyBtn) return;
+  select.addEventListener('change', () => {
+    applyBtn.disabled = !select.value;
+  });
+  applyBtn.addEventListener('click', () => {
+    const preset = select.value.trim();
+    if (!preset) return;
+    runMiniRkCommand({ path: '/sys/pixelpilot_mini_rk/gamma', args: [preset] }, applyBtn);
+  });
+  if (reloadBtn){
+    reloadBtn.addEventListener('click', () => { void loadMiniRkGammaPresets(); });
+  }
+  void loadMiniRkGammaPresets();
+}
+
+function ensureMiniRkCard(){
+  if (miniRkState.initialized) return;
+  setMiniRkStatusIdle('Idle');
+  const mapping = [
+    { selector: '#pixelpilotMiniRkToggleOsdBtn', command: { path: '/sys/pixelpilot_mini_rk/toggle_osd' } },
+    { selector: '#pixelpilotMiniRkToggleRecordingBtn', command: { path: '/sys/pixelpilot_mini_rk/toggle_recording' } },
+    { selector: '#pixelpilotMiniRkRestartServiceBtn', command: { path: '/sys/pixelpilot_mini_rk/restart' } },
+    { selector: '#pixelpilotMiniRkStopServiceBtn', command: { path: '/sys/pixelpilot_mini_rk/stop' } },
+    { selector: '#pixelpilotMiniRkStartServiceBtn', command: { path: '/sys/pixelpilot_mini_rk/start' } },
+    { selector: '#pixelpilotMiniRkRebootBtn', command: { path: '/sys/reboot' } },
+    { selector: '#pixelpilotMiniRkShutdownBtn', command: { path: '/sys/shutdown' } }
+  ];
+  mapping.forEach(entry => {
+    const btn = document.querySelector(entry.selector);
+    if (btn) btn.addEventListener('click', () => { void runMiniRkCommand(entry.command, btn); });
+  });
+  initMiniRkGammaControls();
+  miniRkState.initialized = true;
 }
 
 function setupExecCard(){
@@ -578,11 +1146,15 @@ async function requestReplay(slotNumber){
   }
 }
 
+const capsRefreshBtn = document.getElementById('capsRefreshBtn');
+if (capsRefreshBtn) capsRefreshBtn.addEventListener('click', () => { void fetchCaps(); });
+ensureDvrHandlers();
 setupExecCard();
 $('#refreshNodesBtn').addEventListener('click', fetchNodes);
 $('#refreshSyncBtn').addEventListener('click', fetchSync);
 $('#nodesScanBtn').addEventListener('click', triggerNodesScan);
 $('#syncRefreshBtn').addEventListener('click', fetchSync);
+void fetchCaps();
 fetchNodes();
 fetchSync();
 </script>
