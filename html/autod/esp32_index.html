@@ -4,7 +4,11 @@
 <link rel="stylesheet" href="./assets/console-theme.css">
 <link rel="stylesheet" href="./assets/vrx/vrx.css">
 <style>
+  body { margin: 0; }
   header { padding: 1.5rem; display: flex; justify-content: space-between; align-items: center; }
+  header h1 { margin: 0; }
+  .header-actions { justify-content: flex-end; gap: 0.5rem; flex-wrap: wrap; }
+  .header-actions button { min-width: 150px; }
   main { padding: 1.5rem; }
   .tabs { display: flex; gap: 0.5rem; padding: 0 1.5rem; flex-wrap: wrap; }
   .tabs button { border: none; background: rgba(255,255,255,0.1); color: inherit; padding: 0.5rem 1rem; border-radius: 999px; cursor: pointer; }
@@ -13,22 +17,39 @@
   .status-pill { background: rgba(255,255,255,0.08); border-radius: 999px; padding: 0.35rem 0.75rem; font-size: 0.9rem; }
   .tab-panel { display: none; flex-direction: column; gap: 1.5rem; }
   .tab-panel.active { display: flex; }
+  .card h2, .card h3 { margin: 0 0 0.25rem; }
   .slot-layout { display: grid; gap: 1.5rem; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
   .slot-card .body { display: flex; flex-direction: column; gap: 0.75rem; }
   .slot-summary-block { display: flex; flex-direction: column; gap: 0.35rem; }
   .slot-line strong { font-size: 1.1rem; }
-  .slot-actions, .slot-waiting { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
-  .slot-actions label, .slot-waiting label { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.9rem; }
-  .slot-actions select, .slot-waiting select { min-width: 180px; }
-  .slot-node-card .body { padding: 1rem; }
+  .slot-actions, .slot-waiting { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center; padding: 0.35rem 0; }
+  .slot-actions label, .slot-waiting label { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.95rem; min-width: 220px; }
+  .slot-actions select, .slot-waiting select { min-width: 200px; }
+  .slot-actions button, .slot-waiting button { height: 38px; }
+  .slot-node-card .body { padding: 1rem; display: flex; flex-direction: column; gap: 0.75rem; }
   .node-controls { gap: 1rem; }
-  .node-relay { border-top: 1px solid rgba(255,255,255,0.08); padding-top: 0.5rem; display: flex; flex-direction: column; gap: 0.5rem; }
-  .node-relay textarea { width: 100%; min-height: 120px; }
-  .node-relay .row { gap: 0.5rem; flex-wrap: wrap; }
+  .node-relay { border-top: 1px solid rgba(255,255,255,0.08); padding-top: 0.75rem; display: flex; flex-direction: column; gap: 0.75rem; }
+  .node-relay textarea { width: 100%; min-height: 140px; }
+  .node-relay .row { gap: 0.75rem; flex-wrap: wrap; align-items: flex-end; }
+  .node-relay label { font-size: 0.95rem; display: flex; flex-direction: column; gap: 0.25rem; }
   .node-relay input[type="text"],
   .node-relay input[type="number"],
-  .node-relay select { min-width: 120px; }
+  .node-relay select { min-width: 160px; }
   textarea { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
+
+  @media (max-width: 960px){
+    header { flex-direction: column; align-items: flex-start; gap: 0.75rem; }
+    .header-actions { width: 100%; justify-content: flex-start; }
+    .tabs { padding: 0 1rem; }
+    .tabs button { flex: 1 1 calc(50% - 0.5rem); text-align: center; }
+    .status-row { flex-direction: column; align-items: stretch; }
+    .slot-actions, .slot-waiting { flex-direction: column; align-items: stretch; }
+    .slot-actions button, .slot-waiting button, .slot-actions select, .slot-waiting select { width: 100%; }
+    .slot-actions label, .slot-waiting label { width: 100%; }
+    .node-relay .row { flex-direction: column; align-items: stretch; }
+    .node-relay input[type="text"], .node-relay input[type="number"], .node-relay select { width: 100%; }
+    header { padding-bottom: 0.5rem; }
+  }
 </style>
 
 <header>
@@ -36,7 +57,7 @@
     <div class="title">autod — ESP32 console</div>
     <div class="sub" id="subtitle">nodes + sync overview</div>
   </div>
-  <div class="row" style="justify-content:flex-end; gap:0.5rem; flex-wrap:wrap;">
+  <div class="row header-actions">
     <button id="refreshNodesBtn">Refresh /nodes</button>
     <button id="nodesScanBtn">POST /nodes (scan)</button>
     <button id="syncRefreshBtn">Refresh /sync/slaves</button>
