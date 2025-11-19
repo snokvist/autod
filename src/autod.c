@@ -1686,7 +1686,26 @@ static int h_http(struct mg_connection *c, void *ud) {
     }
     dprintf(fd, "Connection: close\r\n\r\n");
     if (body_len > 0) {
-        (void)send(fd, body_data, body_len, 0);
+        size_t sent = 0;
+        int send_err = 0;
+        while (sent < body_len) {
+            ssize_t w = send(fd, body_data + sent, body_len - sent, 0);
+            if (w < 0) { send_err = errno ? errno : EIO; break; }
+            if (w == 0) { send_err = EPIPE; break; }
+            sent += (size_t)w;
+        }
+        if (send_err) {
+            if (body_buf) free(body_buf);
+            close(fd);
+            JSON_Value *v = json_value_init_object();
+            JSON_Object *o = json_object(v);
+            json_object_set_string(o, "error", "send_failed");
+            json_object_set_string(o, "detail", strerror(send_err));
+            send_json(c, v, 502, 1);
+            json_value_free(v);
+            json_value_free(root);
+            return 1;
+        }
     }
 
     size_t bufcap = 4096;
