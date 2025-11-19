@@ -4,8 +4,23 @@
 <link rel="stylesheet" href="./assets/console-theme.css">
 <link rel="stylesheet" href="./assets/vrx/vrx.css">
 <style>
-  main { padding: 1.5rem; display: flex; flex-direction: column; gap: 1.5rem; }
   header { padding: 1.5rem; display: flex; justify-content: space-between; align-items: center; }
+  main { padding: 1.5rem; }
+  .tabs { display: flex; gap: 0.5rem; padding: 0 1.5rem; flex-wrap: wrap; }
+  .tabs button { border: none; background: rgba(255,255,255,0.1); color: inherit; padding: 0.5rem 1rem; border-radius: 999px; cursor: pointer; }
+  .tabs button.active { background: #fff; color: #000; }
+  .status-row { padding: 0 1.5rem 1rem; display: flex; gap: 1rem; flex-wrap: wrap; }
+  .status-pill { background: rgba(255,255,255,0.08); border-radius: 999px; padding: 0.35rem 0.75rem; font-size: 0.9rem; }
+  .tab-panel { display: none; flex-direction: column; gap: 1.5rem; }
+  .tab-panel.active { display: flex; }
+  .slot-layout { display: grid; gap: 1.5rem; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
+  .slot-card .body { display: flex; flex-direction: column; gap: 0.75rem; }
+  .slot-summary-block { display: flex; flex-direction: column; gap: 0.35rem; }
+  .slot-line strong { font-size: 1.1rem; }
+  .slot-actions, .slot-waiting { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+  .slot-actions label, .slot-waiting label { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.9rem; }
+  .slot-actions select, .slot-waiting select { min-width: 180px; }
+  .slot-node-card .body { padding: 1rem; }
   .node-controls { gap: 1rem; }
   .node-relay { border-top: 1px solid rgba(255,255,255,0.08); padding-top: 0.5rem; display: flex; flex-direction: column; gap: 0.5rem; }
   .node-relay textarea { width: 100%; min-height: 120px; }
@@ -13,8 +28,6 @@
   .node-relay input[type="text"],
   .node-relay input[type="number"],
   .node-relay select { min-width: 120px; }
-  .sync-grid { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
-  .sync-slot-actions { display: flex; gap: 0.5rem; align-items: center; }
   textarea { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
 </style>
 
@@ -25,143 +38,217 @@
   </div>
   <div class="row" style="justify-content:flex-end; gap:0.5rem; flex-wrap:wrap;">
     <button id="refreshNodesBtn">Refresh /nodes</button>
-    <button id="refreshSyncBtn">Refresh /sync/slaves</button>
+    <button id="nodesScanBtn">POST /nodes (scan)</button>
+    <button id="syncRefreshBtn">Refresh /sync/slaves</button>
   </div>
 </header>
 
+<nav class="tabs" role="tablist">
+  <button class="active" data-tab="groundstation" aria-controls="panel-groundstation">Groundstation</button>
+  <button data-tab="slot1" aria-controls="panel-slot1">Slot 1</button>
+  <button data-tab="slot2" aria-controls="panel-slot2">Slot 2</button>
+  <button data-tab="slot3" aria-controls="panel-slot3">Slot 3</button>
+</nav>
+
+<div class="status-row">
+  <div class="status-pill" id="nodesSummary">Nodes: waiting…</div>
+  <div class="status-pill" id="syncSummary">Sync: waiting…</div>
+</div>
+
 <main>
-  <section class="card" id="capsCard">
-    <h2>Device & runtime</h2>
-    <div class="body grid">
-      <div class="row" style="gap:0.75rem; flex-wrap:wrap;">
-        <button id="capsRefreshBtn">Refresh /caps</button>
-        <div class="spacer"></div>
-        <div class="mut" id="capsStatus">waiting…</div>
-      </div>
-      <div class="kv"><div class="mut">Device</div><div id="dev_device">—</div></div>
-      <div class="kv"><div class="mut">Role</div><div id="dev_role">—</div></div>
-      <div class="kv"><div class="mut">Version</div><div id="dev_version">—</div></div>
-      <div class="kv"><div class="mut">Interfaces</div><div id="dev_if">—</div></div>
-      <div class="kv"><div class="mut">Uptime</div><div id="dev_uptime">—</div></div>
-      <div class="kv"><div class="mut">Loadavg</div><div id="dev_load">—</div></div>
-      <div class="kv"><div class="mut">Capabilities</div><div class="caps" id="dev_caps">—</div></div>
-      <div class="kv"><div class="mut">SSE</div><div class="sse" id="dev_sse">—</div></div>
-      <div class="row" id="deviceRuntimeActions" style="display:none">
-        <button id="pixelpilotMiniRkRebootBtn">Reboot device</button>
-        <button id="pixelpilotMiniRkShutdownBtn">Shutdown device</button>
-      </div>
-    </div>
-  </section>
-
-  <section class="card" id="pixelpilotMiniRkCard" style="display:none">
-    <h2>Pixelpilot Mini RK</h2>
-    <div class="body grid">
-      <div class="cap-toolbar">
-        <div class="row" id="pixelpilotMiniRkActions">
-          <button id="pixelpilotMiniRkToggleOsdBtn">Toggle OSD</button>
-          <button id="pixelpilotMiniRkToggleRecordingBtn">Toggle Recording</button>
-          <button id="pixelpilotMiniRkRestartServiceBtn">Restart pixelpilot_mini_rk</button>
-          <button id="pixelpilotMiniRkStopServiceBtn">Stop pixelpilot_mini_rk</button>
-          <button id="pixelpilotMiniRkStartServiceBtn">Start pixelpilot_mini_rk</button>
+  <section class="tab-panel active" data-panel="groundstation" id="panel-groundstation">
+    <section class="card" id="capsCard">
+      <h2>Device & runtime</h2>
+      <div class="body grid">
+        <div class="row" style="gap:0.75rem; flex-wrap:wrap;">
+          <button id="capsRefreshBtn">Refresh /caps</button>
+          <div class="spacer"></div>
+          <div class="mut" id="capsStatus">waiting…</div>
         </div>
-        <div class="row mini-rk-gamma-row">
-          <label for="pixelpilotMiniRkGammaSelect">Gamma preset</label>
-          <select id="pixelpilotMiniRkGammaSelect" disabled>
-            <option>Loading presets…</option>
-          </select>
-          <button id="pixelpilotMiniRkApplyGammaBtn" type="button" disabled>Apply preset</button>
-          <button id="pixelpilotMiniRkReloadGammaBtn" type="button">Reload presets</button>
-          <div class="mut" id="pixelpilotMiniRkGammaNotice">Loading presets…</div>
-        </div>
-        <div class="spacer"></div>
-        <div class="mini-status">
-          <div class="status-indicator" id="pixelpilotMiniRkStatus" aria-live="polite">Idle</div>
+        <div class="kv"><div class="mut">Device</div><div id="dev_device">—</div></div>
+        <div class="kv"><div class="mut">Role</div><div id="dev_role">—</div></div>
+        <div class="kv"><div class="mut">Version</div><div id="dev_version">—</div></div>
+        <div class="kv"><div class="mut">Interfaces</div><div id="dev_if">—</div></div>
+        <div class="kv"><div class="mut">Uptime</div><div id="dev_uptime">—</div></div>
+        <div class="kv"><div class="mut">Loadavg</div><div id="dev_load">—</div></div>
+        <div class="kv"><div class="mut">Capabilities</div><div class="caps" id="dev_caps">—</div></div>
+        <div class="kv"><div class="mut">SSE</div><div class="sse" id="dev_sse">—</div></div>
+        <div class="row" id="deviceRuntimeActions" style="display:none">
+          <button id="pixelpilotMiniRkRebootBtn">Reboot device</button>
+          <button id="pixelpilotMiniRkShutdownBtn">Shutdown device</button>
         </div>
       </div>
+    </section>
+
+    <section class="card" id="pixelpilotMiniRkCard" style="display:none">
+      <h2>Pixelpilot Mini RK</h2>
+      <div class="body grid">
+        <div class="cap-toolbar">
+          <div class="row" id="pixelpilotMiniRkActions">
+            <button id="pixelpilotMiniRkToggleOsdBtn">Toggle OSD</button>
+            <button id="pixelpilotMiniRkToggleRecordingBtn">Toggle Recording</button>
+            <button id="pixelpilotMiniRkRestartServiceBtn">Restart pixelpilot_mini_rk</button>
+            <button id="pixelpilotMiniRkStopServiceBtn">Stop pixelpilot_mini_rk</button>
+            <button id="pixelpilotMiniRkStartServiceBtn">Start pixelpilot_mini_rk</button>
+          </div>
+          <div class="row mini-rk-gamma-row">
+            <label for="pixelpilotMiniRkGammaSelect">Gamma preset</label>
+            <select id="pixelpilotMiniRkGammaSelect" disabled>
+              <option>Loading presets…</option>
+            </select>
+            <button id="pixelpilotMiniRkApplyGammaBtn" type="button" disabled>Apply preset</button>
+            <button id="pixelpilotMiniRkReloadGammaBtn" type="button">Reload presets</button>
+            <div class="mut" id="pixelpilotMiniRkGammaNotice">Loading presets…</div>
+          </div>
+          <div class="spacer"></div>
+          <div class="mini-status">
+            <div class="status-indicator" id="pixelpilotMiniRkStatus" aria-live="polite">Idle</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card" id="dvrCard" style="display:none">
+      <h2>DVR recordings</h2>
+      <div class="body grid dvr-body">
+        <div class="row">
+          <button id="dvrRefreshBtn">Refresh list</button>
+          <button id="dvrDeleteAllBtn">Delete all</button>
+          <div class="spacer"></div>
+          <div class="mut" id="dvrStatus">—</div>
+        </div>
+        <div class="dvr-scroll">
+          <div id="dvrMessage" class="dvr-message" style="display:none"></div>
+          <div id="dvrEmptyState" class="dvr-empty" style="display:none">No recordings found.</div>
+          <div id="dvrList" class="dvr-list"></div>
+        </div>
+      </div>
+    </section>
+  </section>
+
+  <section class="tab-panel" data-panel="slot1" id="panel-slot1">
+    <div class="slot-layout" data-slot="1">
+      <section class="card slot-card">
+        <h2>Slot 1</h2>
+        <div class="body">
+          <div class="slot-summary-block">
+            <div class="slot-line" id="slot1Summary">No slave assigned.</div>
+            <div class="slot-line mut" id="slot1Meta">—</div>
+            <div class="slot-line mut" id="slot1LastSeen">Last seen —</div>
+            <div class="slot-line mut" id="slot1Generation">Generation: —</div>
+            <div class="slot-line mut" id="slot1SlotMeta">Slot config: —</div>
+          </div>
+          <div class="slot-actions">
+            <button type="button" class="slot-replay-btn" data-slot="1">Replay commands</button>
+            <label>Move assignment
+              <select id="slot1MoveSelect" class="slot-move-select"></select>
+            </label>
+            <button type="button" class="slot-move-btn" data-slot="1">Send move</button>
+          </div>
+          <div class="slot-waiting">
+            <label>Assign waiting slave
+              <select id="slot1AssignSelect" class="slot-assign-select"></select>
+            </label>
+            <button type="button" class="slot-assign-btn" data-slot="1">Assign to slot 1</button>
+            <div class="mut" id="slot1WaitingSummary">Waiting: —</div>
+          </div>
+        </div>
+      </section>
+      <section class="card slot-node-card">
+        <h3>Node & relay</h3>
+        <div class="body" id="slot1NodeContainer">
+          <div class="mut">Assign a slave to view node details.</div>
+        </div>
+      </section>
     </div>
   </section>
 
-  <section class="card" id="dvrCard" style="display:none">
-    <h2>DVR recordings</h2>
-    <div class="body grid dvr-body">
-      <div class="row">
-        <button id="dvrRefreshBtn">Refresh list</button>
-        <button id="dvrDeleteAllBtn">Delete all</button>
-        <div class="spacer"></div>
-        <div class="mut" id="dvrStatus">—</div>
-      </div>
-      <div class="dvr-scroll">
-        <div id="dvrMessage" class="dvr-message" style="display:none"></div>
-        <div id="dvrEmptyState" class="dvr-empty" style="display:none">No recordings found.</div>
-        <div id="dvrList" class="dvr-list"></div>
-      </div>
+  <section class="tab-panel" data-panel="slot2" id="panel-slot2">
+    <div class="slot-layout" data-slot="2">
+      <section class="card slot-card">
+        <h2>Slot 2</h2>
+        <div class="body">
+          <div class="slot-summary-block">
+            <div class="slot-line" id="slot2Summary">No slave assigned.</div>
+            <div class="slot-line mut" id="slot2Meta">—</div>
+            <div class="slot-line mut" id="slot2LastSeen">Last seen —</div>
+            <div class="slot-line mut" id="slot2Generation">Generation: —</div>
+            <div class="slot-line mut" id="slot2SlotMeta">Slot config: —</div>
+          </div>
+          <div class="slot-actions">
+            <button type="button" class="slot-replay-btn" data-slot="2">Replay commands</button>
+            <label>Move assignment
+              <select id="slot2MoveSelect" class="slot-move-select"></select>
+            </label>
+            <button type="button" class="slot-move-btn" data-slot="2">Send move</button>
+          </div>
+          <div class="slot-waiting">
+            <label>Assign waiting slave
+              <select id="slot2AssignSelect" class="slot-assign-select"></select>
+            </label>
+            <button type="button" class="slot-assign-btn" data-slot="2">Assign to slot 2</button>
+            <div class="mut" id="slot2WaitingSummary">Waiting: —</div>
+          </div>
+        </div>
+      </section>
+      <section class="card slot-node-card">
+        <h3>Node & relay</h3>
+        <div class="body" id="slot2NodeContainer">
+          <div class="mut">Assign a slave to view node details.</div>
+        </div>
+      </section>
     </div>
   </section>
 
-  <section class="card" id="execCard">
-    <h2>/exec — local runner</h2>
-    <div class="body">
-      <div class="row" style="gap:0.75rem; flex-wrap:wrap;">
-        <label>path <input id="exec_path" value="/sys/help"></label>
-        <label>args (space-separated) <input id="exec_args" placeholder=''></label>
-        <button id="exec_btn">POST /exec</button>
-      </div>
-      <div class="mut">Body preview:</div>
-      <pre class="inline" id="exec_body_preview">{}</pre>
-      <div class="mut">Response:</div>
-      <textarea id="exec_out" readonly></textarea>
-    </div>
-  </section>
-
-  <section class="card" id="nodesCard">
-    <h2>Nodes</h2>
-    <div class="body grid">
-      <div class="nodes-toolbar">
-        <button id="nodesScanBtn">POST /nodes (scan)</button>
-        <div class="spacer"></div>
-        <div class="nodes-stats" id="nodesStats">—</div>
-      </div>
-      <div class="progress" aria-label="Scan progress"><div id="nodesProgress"></div></div>
-      <div id="nodesNotice" class="mut">—</div>
-      <div class="nodes-grid" id="nodesGrid"></div>
-    </div>
-  </section>
-
-  <section class="card" id="syncCard">
-    <h2>Sync slots</h2>
-    <div class="body grid">
-      <div class="row" style="gap:0.75rem; flex-wrap:wrap;">
-        <button id="syncRefreshBtn">Refresh status</button>
-        <div class="spacer"></div>
-        <div class="mut" id="syncStatus">waiting…</div>
-      </div>
-      <div class="sync-grid" id="syncGrid"></div>
-      <div>
-        <div class="mut">Waiting / unassigned slaves</div>
-        <div id="syncWaiting" class="sync-waiting">—</div>
-      </div>
+  <section class="tab-panel" data-panel="slot3" id="panel-slot3">
+    <div class="slot-layout" data-slot="3">
+      <section class="card slot-card">
+        <h2>Slot 3</h2>
+        <div class="body">
+          <div class="slot-summary-block">
+            <div class="slot-line" id="slot3Summary">No slave assigned.</div>
+            <div class="slot-line mut" id="slot3Meta">—</div>
+            <div class="slot-line mut" id="slot3LastSeen">Last seen —</div>
+            <div class="slot-line mut" id="slot3Generation">Generation: —</div>
+            <div class="slot-line mut" id="slot3SlotMeta">Slot config: —</div>
+          </div>
+          <div class="slot-actions">
+            <button type="button" class="slot-replay-btn" data-slot="3">Replay commands</button>
+            <label>Move assignment
+              <select id="slot3MoveSelect" class="slot-move-select"></select>
+            </label>
+            <button type="button" class="slot-move-btn" data-slot="3">Send move</button>
+          </div>
+          <div class="slot-waiting">
+            <label>Assign waiting slave
+              <select id="slot3AssignSelect" class="slot-assign-select"></select>
+            </label>
+            <button type="button" class="slot-assign-btn" data-slot="3">Assign to slot 3</button>
+            <div class="mut" id="slot3WaitingSummary">Waiting: —</div>
+          </div>
+        </div>
+      </section>
+      <section class="card slot-node-card">
+        <h3>Node & relay</h3>
+        <div class="body" id="slot3NodeContainer">
+          <div class="mut">Assign a slave to view node details.</div>
+        </div>
+      </section>
     </div>
   </section>
 </main>
 
 <script type="module">
 const $ = (sel, root = document) => root.querySelector(sel);
-const nodesState = { expanded: new Set(), pollTimer: null, loading: false };
+const nodesState = { expanded: new Set(), pollTimer: null, loading: false, list: [], scanning: false };
 const MAX_SYNC_SLOTS = 3;
+const syncState = { slots: Array.from({ length: MAX_SYNC_SLOTS }, () => null), meta: new Map(), waiting: [], refMs: 0 };
+const syncUiState = { busy: false };
+const tabState = { active: 'groundstation' };
 const DEFAULT_CMD_TIMEOUT_MS = 6000;
 const capsState = { capList: new Set(), hasExec: false };
 const dvrState = { initialized: false, hasExec: false, loading: false };
 const miniRkState = { initialized: false, gamma: { presets: [], loading: false } };
-
-function parseArgs(text){
-  const out = [];
-  const re = /"([^\"]*)"|'([^']*)'|(\S+)/g;
-  (text || '').replace(re, (_, dq, sq, bare) => {
-    out.push((dq ?? sq ?? bare) + '');
-    return '';
-  });
-  return out;
-}
 
 function secsToHhMmSs(value){
   const sec = Number(value);
@@ -272,6 +359,225 @@ function decodeBase64ToUtf8(b64){
   } catch (err) {
     console.warn('Failed to decode relay body', err);
     try { return atob(b64); } catch { return ''; }
+  }
+}
+
+function initTabs(){
+  const buttons = document.querySelectorAll('.tabs button[data-tab]');
+  const panels = document.querySelectorAll('.tab-panel');
+  const setActive = name => {
+    if (!name) return;
+    tabState.active = name;
+    buttons.forEach(btn => {
+      const match = btn.dataset.tab === name;
+      btn.classList.toggle('active', match);
+      btn.setAttribute('aria-selected', match ? 'true' : 'false');
+    });
+    panels.forEach(panel => {
+      const match = panel.dataset.panel === name;
+      panel.classList.toggle('active', match);
+      panel.setAttribute('aria-hidden', match ? 'false' : 'true');
+    });
+  };
+  buttons.forEach(btn => {
+    btn.setAttribute('role', 'tab');
+    btn.addEventListener('click', () => setActive(btn.dataset.tab));
+  });
+  panels.forEach(panel => panel.setAttribute('role', 'tabpanel'));
+  setActive(tabState.active);
+}
+
+function setSyncSummary(text){
+  const el = document.getElementById('syncSummary');
+  if (el) el.textContent = text;
+}
+
+function setSyncBusy(flag){
+  syncUiState.busy = !!flag;
+  updateSlotPanels();
+}
+
+function formatSlaveMeta(rec){
+  if (!rec) return '—';
+  const parts = [];
+  if (rec.device) parts.push(rec.device);
+  if (rec.role) parts.push(rec.role);
+  if (rec.version) parts.push(`v${rec.version}`);
+  if (rec.remote_ip) parts.push(rec.remote_ip);
+  if (rec.address && rec.address !== rec.remote_ip) parts.push(rec.address);
+  return parts.join(' • ') || '—';
+}
+
+function formatSlotConfig(meta){
+  if (!meta) return '—';
+  const parts = [];
+  if (meta.label) parts.push(meta.label);
+  if (meta.prefer_id) parts.push(`prefer ${meta.prefer_id}`);
+  if (meta.assigned_id) parts.push(`assigned ${meta.assigned_id}`);
+  return parts.join(' • ') || '—';
+}
+
+function findNodeForSlave(rec){
+  if (!rec) return null;
+  const list = Array.isArray(nodesState.list) ? nodesState.list : [];
+  const id = (rec.id || '').trim();
+  const ip = (rec.remote_ip || rec.address || '').trim();
+  const remotePort = Number(rec.remote_port);
+  for (const node of list){
+    if (!node || typeof node !== 'object') continue;
+    if (id && (node.id === id || node.name === id)) return node;
+    const nodeIp = (node.ip || node.host || '').trim();
+    if (ip && nodeIp === ip){
+      if (!Number.isFinite(remotePort)) return node;
+      const nodePort = Number(node.port);
+      if (!Number.isFinite(nodePort) || nodePort === remotePort) return node;
+    }
+  }
+  return null;
+}
+
+function renderSlotNode(slotNumber, rec){
+  const container = document.getElementById(`slot${slotNumber}NodeContainer`);
+  if (!container) return;
+  container.innerHTML = '';
+  if (!rec){
+    const msg = document.createElement('div');
+    msg.className = 'mut';
+    msg.textContent = 'Assign a slave to view node details.';
+    container.append(msg);
+    return;
+  }
+  const node = findNodeForSlave(rec);
+  if (node){
+    container.append(buildNodeCard(node, slotNumber));
+  } else {
+    const msg = document.createElement('div');
+    msg.className = 'mut';
+    const targetIp = rec.remote_ip || rec.address || 'unknown';
+    msg.textContent = `No /nodes entry for ${targetIp}. Refresh nodes to discover relay details.`;
+    container.append(msg);
+  }
+}
+
+function updateSlotSummary(slotNumber, rec){
+  const summaryEl = document.getElementById(`slot${slotNumber}Summary`);
+  const metaEl = document.getElementById(`slot${slotNumber}Meta`);
+  const lastSeenEl = document.getElementById(`slot${slotNumber}LastSeen`);
+  const genEl = document.getElementById(`slot${slotNumber}Generation`);
+  const slotMetaEl = document.getElementById(`slot${slotNumber}SlotMeta`);
+  const slotMeta = syncState.meta.get(slotNumber) || null;
+  if (summaryEl){
+    if (rec){
+      summaryEl.innerHTML = `<strong>${rec.id || rec.remote_ip || 'unnamed'}</strong>`;
+    } else {
+      summaryEl.textContent = 'No slave assigned.';
+    }
+  }
+  if (metaEl){
+    metaEl.textContent = rec ? formatSlaveMeta(rec) : '—';
+  }
+  if (lastSeenEl){
+    lastSeenEl.textContent = rec ? `Last seen ${formatAgoMs(rec.last_seen_ms, syncState.refMs)}` : 'Last seen —';
+  }
+  if (genEl){
+    genEl.textContent = rec
+      ? `Generation ack ${rec.last_ack_generation ?? '—'} / slot ${rec.slot_generation ?? '—'}`
+      : 'Generation: —';
+  }
+  if (slotMetaEl){
+    slotMetaEl.textContent = `Slot config: ${formatSlotConfig(slotMeta)}`;
+  }
+}
+
+function describeWaiting(waiting){
+  if (!waiting.length) return 'Waiting: None';
+  const names = waiting.map(rec => rec?.id || rec?.remote_ip || 'unknown');
+  return `Waiting: ${waiting.length} (${names.join(', ')})`;
+}
+
+function updateSlotWaiting(slotNumber){
+  const waitingEl = document.getElementById(`slot${slotNumber}WaitingSummary`);
+  if (waitingEl) waitingEl.textContent = describeWaiting(syncState.waiting);
+}
+
+function populateWaitingSelect(select){
+  if (!select) return;
+  select.innerHTML = '';
+  const waiting = syncState.waiting.filter(item => item && item.id);
+  if (!waiting.length){
+    const opt = document.createElement('option');
+    opt.value = '';
+    opt.textContent = 'No waiting slaves';
+    select.append(opt);
+    select.disabled = true;
+    return;
+  }
+  const placeholder = document.createElement('option');
+  placeholder.value = '';
+  placeholder.textContent = 'Select slave…';
+  placeholder.selected = true;
+  select.append(placeholder);
+  waiting.forEach(rec => {
+    const opt = document.createElement('option');
+    opt.value = rec.id;
+    const last = formatAgoMs(rec.last_seen_ms, syncState.refMs);
+    opt.textContent = `${rec.id} (${last})`;
+    select.append(opt);
+  });
+  select.disabled = syncUiState.busy;
+}
+
+function updateSlotControls(slotNumber, rec){
+  const moveSelect = document.getElementById(`slot${slotNumber}MoveSelect`);
+  const moveBtn = document.querySelector(`.slot-move-btn[data-slot="${slotNumber}"]`);
+  if (moveSelect){
+    moveSelect.innerHTML = '';
+    if (!rec){
+      const opt = document.createElement('option');
+      opt.value = '';
+      opt.textContent = 'No assigned slave';
+      moveSelect.append(opt);
+      moveSelect.disabled = true;
+    } else {
+      const placeholder = document.createElement('option');
+      placeholder.value = '';
+      placeholder.textContent = 'Select target…';
+      placeholder.selected = true;
+      moveSelect.append(placeholder);
+      for (let i = 1; i <= MAX_SYNC_SLOTS; i += 1){
+        if (i === slotNumber) continue;
+        const opt = document.createElement('option');
+        opt.value = String(i);
+        opt.textContent = `Slot ${i}`;
+        moveSelect.append(opt);
+      }
+      const unassignOpt = document.createElement('option');
+      unassignOpt.value = '__unassign__';
+      unassignOpt.textContent = 'Unassign';
+      moveSelect.append(unassignOpt);
+      moveSelect.disabled = syncUiState.busy;
+    }
+  }
+  if (moveBtn){
+    moveBtn.disabled = syncUiState.busy || !rec;
+  }
+  const assignSelect = document.getElementById(`slot${slotNumber}AssignSelect`);
+  if (assignSelect){
+    populateWaitingSelect(assignSelect);
+  }
+  const assignBtn = document.querySelector(`.slot-assign-btn[data-slot="${slotNumber}"]`);
+  if (assignBtn){
+    assignBtn.disabled = syncUiState.busy || !syncState.waiting.some(rec => rec && rec.id);
+  }
+}
+
+function updateSlotPanels(){
+  for (let slot = 1; slot <= MAX_SYNC_SLOTS; slot += 1){
+    const rec = syncState.slots[slot - 1] || null;
+    updateSlotSummary(slot, rec);
+    renderSlotNode(slot, rec);
+    updateSlotControls(slot, rec);
+    updateSlotWaiting(slot);
   }
 }
 
@@ -699,32 +1005,6 @@ function ensureMiniRkCard(){
   miniRkState.initialized = true;
 }
 
-function setupExecCard(){
-  const btn = $('#exec_btn');
-  const pathInput = $('#exec_path');
-  const argsInput = $('#exec_args');
-  const previewEl = $('#exec_body_preview');
-  const outEl = $('#exec_out');
-  if (!btn || !pathInput || !argsInput || !previewEl || !outEl) return;
-  btn.addEventListener('click', async () => {
-    const path = pathInput.value.trim();
-    const args = parseArgs(argsInput.value || '');
-    const body = { path, args };
-    previewEl.textContent = JSON.stringify(body);
-    try {
-      const res = await fetch('/exec', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
-      });
-      const txt = await res.text();
-      outEl.value = txt.replace(/\n/g, '\\n');
-    } catch (err) {
-      outEl.value = JSON.stringify({ error: 'request_failed', message: err.message });
-    }
-  });
-}
-
 function nodeKey(node, idx){
   const ip = (node?.ip || node?.host || '').trim();
   const port = node?.port;
@@ -733,9 +1013,9 @@ function nodeKey(node, idx){
   return `node-${idx}`;
 }
 
-function setNodesNotice(text){
-  const notice = $('#nodesNotice');
-  if (notice) notice.textContent = text;
+function setNodesSummary(text){
+  const summary = document.getElementById('nodesSummary');
+  if (summary) summary.textContent = text;
 }
 
 async function sendRelayRequest(node, elements){
@@ -941,27 +1221,25 @@ function buildNodeCard(node, idx){
 }
 
 function renderNodes(data){
-  const statsEl = $('#nodesStats');
-  const progressEl = $('#nodesProgress');
   const nodes = Array.isArray(data?.nodes) ? data.nodes : [];
-  const pct = typeof data?.progress_pct === 'number'
-    ? Math.max(0, Math.min(100, Math.round(data.progress_pct)))
-    : (data?.targets ? Math.round((data.done || 0) / (data.targets || 1) * 100) : 0);
-  if (statsEl){
-    statsEl.textContent = `feature:${data?.scan_feature_enabled ? 'on' : 'off'} • scanning:${data?.scanning ? 'yes' : 'no'} • targets:${data?.targets ?? 0} • done:${data?.done ?? 0}`;
+  nodesState.list = nodes;
+  nodesState.scanning = !!data?.scanning;
+  const scanEnabled = data?.scan_feature_enabled !== false;
+  const parts = [];
+  parts.push(`${nodes.length} node${nodes.length === 1 ? '' : 's'}`);
+  if (nodesState.scanning){
+    const pct = typeof data?.progress_pct === 'number'
+      ? Math.max(0, Math.min(100, Math.round(data.progress_pct)))
+      : null;
+    parts.push(pct === null ? 'scanning…' : `scanning ${pct}%`);
+  } else {
+    parts.push(scanEnabled ? 'scan idle' : 'scan disabled');
   }
-  if (progressEl){
-    progressEl.style.width = `${pct}%`;
-  }
-  setNodesNotice(nodes.length ? `${nodes.length} node(s) found` : (data?.scanning ? 'Scanning…' : 'No nodes found'));
-  $('#nodesScanBtn').disabled = !data?.scan_feature_enabled || !!data?.scanning;
-  const grid = $('#nodesGrid');
-  if (grid){
-    grid.innerHTML = '';
-    const frag = document.createDocumentFragment();
-    nodes.forEach((node, idx) => frag.append(buildNodeCard(node, idx)));
-    grid.append(frag);
-  }
+  setNodesSummary(`Nodes: ${parts.filter(Boolean).join(' • ')}`);
+  const scanBtn = document.getElementById('nodesScanBtn');
+  if (scanBtn) scanBtn.disabled = !scanEnabled || !!data?.scanning;
+  scheduleNodesPoll(nodesState.scanning);
+  updateSlotPanels();
 }
 
 async function fetchNodes(){
@@ -971,15 +1249,21 @@ async function fetchNodes(){
     const res = await fetch('/nodes', { cache: 'no-store' });
     if (!res.ok){
       const detail = await res.text().catch(() => '');
-      setNodesNotice(`Failed to load /nodes (${res.status} ${detail.trim()})`);
-      renderNodes({ nodes: [] });
+      setNodesSummary(`Nodes: Failed (${res.status} ${detail.trim()})`);
+      nodesState.list = [];
+      nodesState.scanning = false;
+      scheduleNodesPoll(false);
+      updateSlotPanels();
     } else {
       const data = await res.json();
       renderNodes(data);
-      scheduleNodesPoll(!!data?.scanning);
     }
   } catch (err) {
-    setNodesNotice(`Failed to load /nodes (${err.message})`);
+    setNodesSummary(`Nodes: Failed (${err.message})`);
+    nodesState.list = [];
+    nodesState.scanning = false;
+    scheduleNodesPoll(false);
+    updateSlotPanels();
   } finally {
     nodesState.loading = false;
   }
@@ -1000,75 +1284,20 @@ async function triggerNodesScan(){
   try {
     await fetch('/nodes', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
   } catch (err) {
-    setNodesNotice(`Failed to start scan: ${err.message}`);
+    setNodesSummary(`Nodes: Scan failed (${err.message})`);
   } finally {
     fetchNodes();
   }
 }
 
-function buildSlotCard(slotNumber, rec, meta, refMs){
-  const slot = document.createElement('div');
-  slot.className = 'sync-slot';
-  const header = document.createElement('div');
-  header.className = 'sync-slot-head';
-  header.textContent = `Slot ${slotNumber}` + (meta?.label ? ` — ${meta.label}` : '');
-  slot.append(header);
-  const body = document.createElement('div');
-  body.className = 'sync-slot-body';
-  if (rec){
-    const title = document.createElement('div');
-    title.innerHTML = `<strong>${rec.id || 'unnamed'}</strong>`;
-    body.append(title);
-    const metaLine = document.createElement('div');
-    metaLine.className = 'mut';
-    const parts = [];
-    if (rec.device) parts.push(rec.device);
-    if (rec.role) parts.push(rec.role);
-    if (rec.version) parts.push(`v${rec.version}`);
-    if (rec.remote_ip) parts.push(rec.remote_ip);
-    metaLine.textContent = parts.join(' • ') || '—';
-    body.append(metaLine);
-    const lastSeen = document.createElement('div');
-    lastSeen.className = 'mut';
-    lastSeen.textContent = `Last seen ${formatAgoMs(rec.last_seen_ms, refMs)}`;
-    body.append(lastSeen);
-    const gen = document.createElement('div');
-    gen.className = 'mut';
-    gen.textContent = `Generation ack ${rec.last_ack_generation ?? '—'} / slot ${rec.slot_generation ?? '—'}`;
-    body.append(gen);
-    const actions = document.createElement('div');
-    actions.className = 'sync-slot-actions';
-    const replayBtn = document.createElement('button');
-    replayBtn.type = 'button';
-    replayBtn.textContent = 'Replay commands';
-    replayBtn.addEventListener('click', () => { requestReplay(slotNumber); });
-    actions.append(replayBtn);
-    body.append(actions);
-  } else {
-    const empty = document.createElement('div');
-    empty.className = 'mut';
-    empty.textContent = 'Empty';
-    body.append(empty);
-  }
-  if (meta?.prefer_id){
-    const prefer = document.createElement('div');
-    prefer.className = 'mut';
-    prefer.textContent = `Preferred id: ${meta.prefer_id}`;
-    body.append(prefer);
-  }
-  slot.append(body);
-  return slot;
-}
-
 function renderSync(data){
-  const statusEl = $('#syncStatus');
-  const grid = $('#syncGrid');
-  const waitingEl = $('#syncWaiting');
-  if (!statusEl || !grid || !waitingEl) return;
   if (!data){
-    statusEl.textContent = 'No data';
-    grid.innerHTML = '';
-    waitingEl.textContent = '—';
+    syncState.slots = Array.from({ length: MAX_SYNC_SLOTS }, () => null);
+    syncState.meta = new Map();
+    syncState.waiting = [];
+    syncState.refMs = 0;
+    setSyncSummary('Sync: No data');
+    updateSlotPanels();
     return;
   }
   const slotsMeta = new Map();
@@ -1091,43 +1320,68 @@ function renderSync(data){
       waiting.push(rec);
     }
   });
-  grid.innerHTML = '';
-  const frag = document.createDocumentFragment();
-  slots.forEach((rec, idx) => {
-    const slotNum = idx + 1;
-    frag.append(buildSlotCard(slotNum, rec, slotsMeta.get(slotNum), refMs));
-  });
-  grid.append(frag);
-  if (waiting.length){
-    waitingEl.textContent = waiting.map(rec => `${rec.id || rec.remote_ip || 'unknown'} (${formatAgoMs(rec.last_seen_ms, refMs)})`).join(', ');
-  } else {
-    waitingEl.textContent = 'None';
-  }
-  statusEl.textContent = `Updated ${new Date().toLocaleTimeString()} • ${ (data.slaves?.length) || 0 } known`;
+  syncState.slots = slots;
+  syncState.meta = slotsMeta;
+  syncState.waiting = waiting;
+  syncState.refMs = refMs;
+  setSyncSummary(`Sync: Updated ${new Date().toLocaleTimeString()} • ${ (data.slaves?.length) || 0 } known`);
+  updateSlotPanels();
 }
 
 async function fetchSync(){
-  $('#syncStatus').textContent = 'Loading /sync/slaves…';
+async function sendMoveRequest(slaveId, slotTarget){
+  if (!slaveId) return;
+  if (slotTarget !== null && !Number.isFinite(slotTarget)) return;
+  const label = slotTarget === null ? `unassign ${slaveId}` : `move ${slaveId} → slot ${slotTarget}`;
+  setSyncBusy(true);
+  setSyncSummary(`Sync: Requesting ${label}…`);
+  try {
+    const res = await fetch('/sync/push', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ moves: [{ slave_id: slaveId, slot: slotTarget }] })
+    });
+    if (!res.ok){
+      const txt = await res.text().catch(() => '');
+      throw new Error(`${res.status} ${txt.trim()}`.trim());
+    }
+    setSyncSummary(`Sync: Move queued for ${slaveId}`);
+    await fetchSync();
+  } catch (err) {
+    setSyncSummary(`Sync: Move failed (${err.message})`);
+  } finally {
+    setSyncBusy(false);
+  }
+}
+
+async function fetchSync(){
+  setSyncSummary('Sync: Loading /sync/slaves…');
   try {
     const res = await fetch('/sync/slaves', { cache: 'no-store' });
     if (!res.ok){
       const text = await res.text().catch(() => '');
-      $('#syncStatus').textContent = `Failed (${res.status} ${text.trim()})`;
-      $('#syncGrid').innerHTML = '';
-      $('#syncWaiting').textContent = '—';
+      setSyncSummary(`Sync: Failed (${res.status} ${text.trim()})`);
+      syncState.slots = Array.from({ length: MAX_SYNC_SLOTS }, () => null);
+      syncState.meta = new Map();
+      syncState.waiting = [];
+      updateSlotPanels();
       return;
     }
     const data = await res.json();
     renderSync(data);
   } catch (err) {
-    $('#syncStatus').textContent = `Failed (${err.message})`;
-    $('#syncGrid').innerHTML = '';
-    $('#syncWaiting').textContent = '—';
+    setSyncSummary(`Sync: Failed (${err.message})`);
+    syncState.slots = Array.from({ length: MAX_SYNC_SLOTS }, () => null);
+    syncState.meta = new Map();
+    syncState.waiting = [];
+    updateSlotPanels();
   }
 }
 
 async function requestReplay(slotNumber){
-  $('#syncStatus').textContent = `Requesting replay for slot ${slotNumber}…`;
+  if (!Number.isFinite(slotNumber)) return;
+  setSyncBusy(true);
+  setSyncSummary(`Sync: Requesting replay for slot ${slotNumber}…`);
   try {
     const res = await fetch('/sync/push', {
       method: 'POST',
@@ -1136,22 +1390,63 @@ async function requestReplay(slotNumber){
     });
     if (!res.ok){
       const txt = await res.text().catch(() => '');
-      $('#syncStatus').textContent = `Replay failed (${res.status} ${txt.trim()})`;
-      return;
+      throw new Error(`${res.status} ${txt.trim()}`.trim());
     }
-    $('#syncStatus').textContent = `Replay requested for slot ${slotNumber}`;
-    fetchSync();
+    setSyncSummary(`Sync: Replay requested for slot ${slotNumber}`);
+    await fetchSync();
   } catch (err) {
-    $('#syncStatus').textContent = `Replay failed (${err.message})`;
+    setSyncSummary(`Sync: Replay failed (${err.message})`);
+  } finally {
+    setSyncBusy(false);
   }
+}
+
+function attachSlotHandlers(){
+  document.querySelectorAll('.slot-replay-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const slot = Number(btn.dataset.slot);
+      if (!Number.isFinite(slot)) return;
+      void requestReplay(slot);
+    });
+  });
+  document.querySelectorAll('.slot-move-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const slot = Number(btn.dataset.slot);
+      if (!Number.isFinite(slot)) return;
+      const select = document.getElementById(`slot${slot}MoveSelect`);
+      if (!select) return;
+      const value = select.value;
+      if (!value) return;
+      const rec = syncState.slots[slot - 1];
+      if (!rec || !rec.id) return;
+      let target = null;
+      if (value !== '__unassign__'){
+        target = Number(value);
+        if (!Number.isFinite(target)) return;
+      }
+      select.selectedIndex = 0;
+      void sendMoveRequest(rec.id, target);
+    });
+  });
+  document.querySelectorAll('.slot-assign-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const slot = Number(btn.dataset.slot);
+      if (!Number.isFinite(slot)) return;
+      const select = document.getElementById(`slot${slot}AssignSelect`);
+      if (!select || !select.value) return;
+      const slaveId = select.value;
+      select.selectedIndex = 0;
+      void sendMoveRequest(slaveId, slot);
+    });
+  });
 }
 
 const capsRefreshBtn = document.getElementById('capsRefreshBtn');
 if (capsRefreshBtn) capsRefreshBtn.addEventListener('click', () => { void fetchCaps(); });
 ensureDvrHandlers();
-setupExecCard();
+initTabs();
+attachSlotHandlers();
 $('#refreshNodesBtn').addEventListener('click', fetchNodes);
-$('#refreshSyncBtn').addEventListener('click', fetchSync);
 $('#nodesScanBtn').addEventListener('click', triggerNodesScan);
 $('#syncRefreshBtn').addEventListener('click', fetchSync);
 void fetchCaps();
