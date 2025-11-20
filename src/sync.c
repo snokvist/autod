@@ -1106,6 +1106,8 @@ static void *sync_slave_thread_main(void *arg) {
             last_slot_reported = slot_number;
             strncpy(last_slot_label, label_checked, sizeof(last_slot_label) - 1);
             last_slot_label[sizeof(last_slot_label) - 1] = '\0';
+            sync_slave_set_applied_generation(&app->slave, 0);
+            sync_slave_set_last_received(&app->slave, 0);
         }
         sync_slave_set_current_slot(&app->slave, slot_number, label_checked);
 
