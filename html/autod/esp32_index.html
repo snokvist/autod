@@ -5,15 +5,32 @@
 <link rel="stylesheet" href="./assets/vrx/vrx.css">
 <style>
   body { margin: 0; }
-  header { padding: 1.5rem; display: flex; justify-content: space-between; align-items: center; }
-  header h1 { margin: 0; }
-  .header-actions { justify-content: flex-end; gap: 0.5rem; flex-wrap: wrap; }
-  .header-actions button { min-width: 150px; }
+  header { padding: 1.5rem; display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; flex-wrap: wrap; }
+  .title-stack { display: flex; flex-direction: column; gap: 0.15rem; }
+  .subline { display: flex; align-items: center; gap: 0.5rem; color: var(--mut); font-size: 0.95rem; }
+  .connection-note { padding: 0.15rem 0.55rem; border: 1px solid var(--line); border-radius: 999px; font-size: 0.9rem; color: var(--mut); }
+  .header-actions { display: flex; justify-content: flex-end; gap: 0.5rem; flex-wrap: wrap; align-items: stretch; width: 100%; }
+  .header-actions .button { min-width: 150px; }
+  .header-actions .danger-action { margin-left: auto; }
+  .button.primary { background: #e8e8ea; color: #000; border-color: #e8e8ea; box-shadow: 0 8px 18px rgba(0,0,0,0.25); }
+  .button.primary:hover { background: #fff; border-color: #fff; }
+  .button.ghost { background: transparent; color: var(--fg); border-color: var(--line); }
+  .button.ghost:hover { border-color: var(--mut); background: rgba(255,255,255,0.04); }
+  .button.danger { background: rgba(255,107,107,0.16); color: var(--err); border-color: var(--err); }
+  .button.danger:hover { background: rgba(255,107,107,0.28); color: #fff; }
+  .secondary-actions { display: flex; align-items: center; gap: 0.5rem; position: relative; }
+  .secondary-actions .action-list { display: flex; gap: 0.5rem; align-items: stretch; }
+  .secondary-actions .action-toggle { display: none; min-width: auto; }
+  .secondary-actions.menu-mode .action-toggle { display: flex; }
+  .secondary-actions.menu-mode .action-list { display: none; position: absolute; right: 0; top: calc(100% + 6px); background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 0.5rem; flex-direction: column; min-width: 220px; box-shadow: 0 12px 30px rgba(0,0,0,0.35); }
+  .secondary-actions.menu-mode.open .action-list { display: flex; }
+  .secondary-actions .action-list .button { min-width: 180px; }
   main { padding: 1.5rem; }
-  .tabs { display: flex; gap: 0.5rem; padding: 0 1.5rem; flex-wrap: wrap; }
+  .tabs { display: flex; column-gap: 0.5rem; row-gap: 0.35rem; padding: 0 1.5rem; flex-wrap: wrap; }
   .tabs button { border: none; background: rgba(255,255,255,0.1); color: inherit; padding: 0.5rem 1rem; border-radius: 999px; cursor: pointer; }
-  .tabs button.active { background: #fff; color: #000; }
-  .status-row { padding: 0 1.5rem 1rem; display: flex; gap: 1rem; flex-wrap: wrap; }
+  .tabs button.slot-primary { border: 1px solid var(--ok); color: var(--ok); background: rgba(54,194,117,0.14); box-shadow: 0 0 0 1px rgba(54,194,117,0.25); }
+  .tabs button.slot-primary.active { background: #fff; color: #000; box-shadow: none; }
+  .status-row { padding: 0 1.5rem 1rem; display: flex; column-gap: 1rem; row-gap: 0.35rem; flex-wrap: wrap; }
   .status-pill { background: rgba(255,255,255,0.08); border-radius: 999px; padding: 0.35rem 0.75rem; font-size: 0.9rem; }
   .tab-panel { display: none; flex-direction: column; gap: 1.5rem; }
   .tab-panel.active { display: flex; }
@@ -38,8 +55,13 @@
   textarea { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
 
   @media (max-width: 960px){
-    header { flex-direction: column; align-items: flex-start; gap: 0.75rem; }
+    header { flex-direction: column; align-items: stretch; gap: 0.75rem; }
     .header-actions { width: 100%; justify-content: flex-start; }
+    .header-actions .button { width: 100%; }
+    .secondary-actions { width: 100%; }
+    .secondary-actions.menu-mode .action-list { position: static; width: 100%; box-shadow: none; }
+    .secondary-actions.menu-mode .action-list .button { width: 100%; }
+    .header-actions .danger-action { margin-left: 0; }
     .tabs { padding: 0 1rem; }
     .tabs button { flex: 1 1 calc(50% - 0.5rem); text-align: center; }
     .status-row { flex-direction: column; align-items: stretch; }
@@ -53,20 +75,28 @@
 </style>
 
 <header>
-  <div>
+  <div class="title-stack">
     <div class="title">autod — ESP32 console</div>
-    <div class="sub" id="subtitle">nodes + sync overview</div>
+    <div class="subline">
+      <span class="sub" id="subtitle">nodes + sync overview</span>
+      <span class="connection-note" id="headerStatus">Waiting for /caps…</span>
+    </div>
   </div>
   <div class="row header-actions">
-    <button id="refreshNodesBtn">Refresh /nodes</button>
-    <button id="nodesScanBtn">POST /nodes (scan)</button>
-    <button id="syncRefreshBtn">Refresh /sync/slaves</button>
+    <button class="button primary" id="refreshNodesBtn">Refresh /nodes</button>
+    <div class="secondary-actions" id="secondaryActions">
+      <button class="button ghost action-toggle" id="secondaryActionsToggle" aria-expanded="false" aria-controls="secondaryActionList">More actions</button>
+      <div class="action-list" id="secondaryActionList">
+        <button class="button ghost" id="syncRefreshBtn">Refresh /sync/slaves</button>
+      </div>
+    </div>
+    <button class="button danger danger-action" id="nodesScanBtn">POST /nodes (scan)</button>
   </div>
 </header>
 
 <nav class="tabs" role="tablist">
   <button class="active" data-tab="groundstation" aria-controls="panel-groundstation">Groundstation</button>
-  <button data-tab="slot1" aria-controls="panel-slot1">Slot 1</button>
+  <button data-tab="slot1" aria-controls="panel-slot1" class="slot-primary">Slot 1</button>
   <button data-tab="slot2" aria-controls="panel-slot2">Slot 2</button>
   <button data-tab="slot3" aria-controls="panel-slot3">Slot 3</button>
 </nav>
@@ -626,6 +656,12 @@ async function postExec(payload, timeoutMs = DEFAULT_CMD_TIMEOUT_MS){
 function setCapsStatus(text){
   const statusEl = document.getElementById('capsStatus');
   if (statusEl) statusEl.textContent = text;
+  setHeaderStatus(text);
+}
+
+function setHeaderStatus(text){
+  const headerStatus = document.getElementById('headerStatus');
+  if (headerStatus) headerStatus.textContent = text;
 }
 
 function applyCapabilityToggles(capList){
@@ -1461,11 +1497,37 @@ function attachSlotHandlers(){
   });
 }
 
+function initSecondaryActionsMenu(){
+  const container = document.getElementById('secondaryActions');
+  const toggle = document.getElementById('secondaryActionsToggle');
+  if (!container || !toggle) return;
+  const mediaQuery = window.matchMedia('(max-width: 720px)');
+
+  const syncMode = () => {
+    const isNarrow = mediaQuery.matches;
+    container.classList.toggle('menu-mode', isNarrow);
+    if (!isNarrow){
+      container.classList.remove('open');
+      toggle.setAttribute('aria-expanded', 'false');
+    }
+  };
+
+  toggle.addEventListener('click', () => {
+    if (!container.classList.contains('menu-mode')) return;
+    const isOpen = container.classList.toggle('open');
+    toggle.setAttribute('aria-expanded', String(isOpen));
+  });
+
+  mediaQuery.addEventListener('change', syncMode);
+  syncMode();
+}
+
 const capsRefreshBtn = document.getElementById('capsRefreshBtn');
 if (capsRefreshBtn) capsRefreshBtn.addEventListener('click', () => { void fetchCaps(); });
 ensureDvrHandlers();
 initTabs();
 attachSlotHandlers();
+initSecondaryActionsMenu();
 $('#refreshNodesBtn').addEventListener('click', fetchNodes);
 $('#nodesScanBtn').addEventListener('click', triggerNodesScan);
 $('#syncRefreshBtn').addEventListener('click', fetchSync);
