@@ -56,13 +56,34 @@
   .card h2, .card h3 { margin: 0 0 0.25rem; }
   .slot-layout { display: grid; gap: 1.5rem; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
   .slot-card .body { display: flex; flex-direction: column; gap: 0.75rem; }
-  .slot-summary-block { display: flex; flex-direction: column; gap: 0.35rem; }
-  .slot-line strong { font-size: 1.1rem; }
-  .slot-actions, .slot-waiting { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center; padding: 0.35rem 0; }
-  .slot-actions label, .slot-waiting label { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.95rem; min-width: 220px; }
-  .slot-actions select, .slot-waiting select { min-width: 200px; }
-  .slot-actions button, .slot-waiting button { height: 38px; }
+  .slot-summary-block { display: flex; flex-direction: column; gap: 0.5rem; }
+  .slot-summary-head { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap; }
+  .slot-summary-title { display: flex; align-items: center; gap: 0.4rem; font-size: 1.05rem; }
+  .slot-summary-title strong { font-size: 1.1rem; }
+  .slot-meta-inline { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
+  .slot-meta-inline .badge { background: rgba(255,255,255,0.04); border-color: rgba(255,255,255,0.12); }
+  .slot-meta-inline .badge.critical { border-color: var(--err); color: var(--err); }
+  .slot-line { color: var(--mut); }
+  .slot-line strong { font-size: 1.05rem; color: var(--fg); }
+  .slot-actions { display: flex; flex-direction: column; gap: 0.75rem; border: 1px solid var(--line); border-radius: 12px; padding: 0.75rem; background: rgba(255,255,255,0.02); }
+  .slot-action-switch { display: inline-flex; align-items: stretch; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .slot-action-switch button { border: none; background: transparent; color: var(--mut); padding: 0.45rem 0.9rem; cursor: pointer; transition: background 120ms ease, color 120ms ease; font-weight: 600; flex: 1; text-align: center; }
+  .slot-action-switch button + button { border-left: 1px solid var(--line); }
+  .slot-action-switch button.active { background: rgba(255,255,255,0.12); color: var(--fg); }
+  .slot-action-switch button:disabled { cursor: not-allowed; color: rgba(255,255,255,0.28); background: rgba(255,255,255,0.04); }
+  .slot-action-panels { width: 100%; }
+  .slot-action-panel { display: none; }
+  .slot-action-panel.active { display: block; }
+  .slot-actions-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 0.75rem 1rem; align-items: end; }
+  .slot-actions-grid label { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.95rem; }
+  .slot-actions-grid select { min-height: 38px; }
+  .slot-action-row { display: flex; flex-direction: column; gap: 0.35rem; align-items: flex-start; }
+  .slot-action-row .mut { line-height: 1.4; }
+  .slot-waiting .mut { color: var(--mut); }
   .slot-node-card .body { padding: 1rem; display: flex; flex-direction: column; gap: 0.75rem; }
+  .slot-node-empty { border: 1px dashed var(--line); background: rgba(255,255,255,0.02); border-radius: 10px; padding: 0.75rem 0.9rem; color: var(--mut); display: flex; align-items: center; gap: 0.5rem; }
+  .slot-node-empty.loading::before { content: ''; width: 10px; height: 10px; border-radius: 999px; border: 2px solid rgba(255,255,255,0.35); border-top-color: transparent; display: inline-block; animation: spin 0.8s linear infinite; }
+  @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
   .node-controls { gap: 1rem; }
   .node-relay { border-top: 1px solid rgba(255,255,255,0.08); padding-top: 0.75rem; display: flex; flex-direction: column; gap: 0.75rem; }
   .node-relay textarea { width: 100%; min-height: 140px; }
@@ -88,6 +109,9 @@
     .slot-actions, .slot-waiting { flex-direction: column; align-items: stretch; }
     .slot-actions button, .slot-waiting button, .slot-actions select, .slot-waiting select { width: 100%; }
     .slot-actions label, .slot-waiting label { width: 100%; }
+    .slot-action-switch { width: 100%; }
+    .slot-action-switch button { flex: 1; justify-content: center; }
+    .slot-actions-grid { grid-template-columns: 1fr; }
     .node-relay .row { flex-direction: column; align-items: stretch; }
     .node-relay input[type="text"], .node-relay input[type="number"], .node-relay select { width: 100%; }
     header { padding-bottom: 0.5rem; }
@@ -241,32 +265,63 @@
         <h2>Slot 1</h2>
         <div class="body">
           <div class="slot-summary-block">
-            <div class="slot-line" id="slot1Summary">No slave assigned.</div>
-            <div class="slot-line mut" id="slot1Meta">—</div>
-            <div class="slot-line mut" id="slot1LastSeen">Last seen —</div>
-            <div class="slot-line mut" id="slot1Generation">Generation: —</div>
-            <div class="slot-line mut" id="slot1SlotMeta">Slot config: —</div>
+            <div class="slot-summary-head">
+              <div class="slot-summary-title">
+                <strong id="slot1Summary">No slave assigned.</strong>
+              </div>
+              <div class="slot-meta-inline">
+                <span class="badge" id="slot1LastSeen">Last seen —</span>
+                <span class="badge" id="slot1Generation">Generation: —</span>
+              </div>
+            </div>
+            <div class="slot-line" id="slot1Meta">—</div>
+            <div class="slot-line" id="slot1SlotMeta">Slot config: —</div>
           </div>
-          <div class="slot-actions">
-            <button type="button" class="slot-replay-btn" data-slot="1">Replay commands</button>
-            <label>Move assignment
-              <select id="slot1MoveSelect" class="slot-move-select"></select>
-            </label>
-            <button type="button" class="slot-move-btn" data-slot="1">Send move</button>
-          </div>
-          <div class="slot-waiting">
-            <label>Assign waiting slave
-              <select id="slot1AssignSelect" class="slot-assign-select"></select>
-            </label>
-            <button type="button" class="slot-assign-btn" data-slot="1">Assign to slot 1</button>
-            <div class="mut" id="slot1WaitingSummary">Waiting: —</div>
+          <div class="slot-actions" data-slot="1">
+            <div class="slot-action-switch" role="group" aria-label="Slot 1 actions">
+              <button type="button" class="active" data-slot-action="assign">Assign</button>
+              <button type="button" data-slot-action="move">Move</button>
+              <button type="button" data-slot-action="replay">Replay</button>
+            </div>
+            <div class="slot-action-panels">
+              <div class="slot-action-panel slot-waiting active" data-slot-panel="assign">
+                <div class="slot-actions-grid">
+                  <label>Assign waiting slave
+                    <select id="slot1AssignSelect" class="slot-assign-select"></select>
+                  </label>
+                  <div class="slot-action-row">
+                    <button type="button" class="slot-assign-btn" data-slot="1">Assign to slot 1</button>
+                    <div class="mut" id="slot1WaitingSummary">Waiting: —</div>
+                  </div>
+                </div>
+              </div>
+              <div class="slot-action-panel" data-slot-panel="move">
+                <div class="slot-actions-grid">
+                  <label>Move assignment
+                    <select id="slot1MoveSelect" class="slot-move-select"></select>
+                  </label>
+                  <div class="slot-action-row">
+                    <button type="button" class="slot-move-btn" data-slot="1">Send move</button>
+                    <div class="mut">Move or unassign the current slave.</div>
+                  </div>
+                </div>
+              </div>
+              <div class="slot-action-panel" data-slot-panel="replay">
+                <div class="slot-actions-grid">
+                  <div class="slot-action-row">
+                    <button type="button" class="slot-replay-btn" data-slot="1">Replay commands</button>
+                    <div class="mut">Re-send the latest slot commands to this slave.</div>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </section>
       <section class="card slot-node-card">
         <h3>Node & relay</h3>
         <div class="body" id="slot1NodeContainer">
-          <div class="mut">Assign a slave to view node details.</div>
+          <div class="slot-node-empty">Waiting for slot assignment.</div>
         </div>
       </section>
     </div>
@@ -278,32 +333,63 @@
         <h2>Slot 2</h2>
         <div class="body">
           <div class="slot-summary-block">
-            <div class="slot-line" id="slot2Summary">No slave assigned.</div>
-            <div class="slot-line mut" id="slot2Meta">—</div>
-            <div class="slot-line mut" id="slot2LastSeen">Last seen —</div>
-            <div class="slot-line mut" id="slot2Generation">Generation: —</div>
-            <div class="slot-line mut" id="slot2SlotMeta">Slot config: —</div>
+            <div class="slot-summary-head">
+              <div class="slot-summary-title">
+                <strong id="slot2Summary">No slave assigned.</strong>
+              </div>
+              <div class="slot-meta-inline">
+                <span class="badge" id="slot2LastSeen">Last seen —</span>
+                <span class="badge" id="slot2Generation">Generation: —</span>
+              </div>
+            </div>
+            <div class="slot-line" id="slot2Meta">—</div>
+            <div class="slot-line" id="slot2SlotMeta">Slot config: —</div>
           </div>
-          <div class="slot-actions">
-            <button type="button" class="slot-replay-btn" data-slot="2">Replay commands</button>
-            <label>Move assignment
-              <select id="slot2MoveSelect" class="slot-move-select"></select>
-            </label>
-            <button type="button" class="slot-move-btn" data-slot="2">Send move</button>
-          </div>
-          <div class="slot-waiting">
-            <label>Assign waiting slave
-              <select id="slot2AssignSelect" class="slot-assign-select"></select>
-            </label>
-            <button type="button" class="slot-assign-btn" data-slot="2">Assign to slot 2</button>
-            <div class="mut" id="slot2WaitingSummary">Waiting: —</div>
+          <div class="slot-actions" data-slot="2">
+            <div class="slot-action-switch" role="group" aria-label="Slot 2 actions">
+              <button type="button" class="active" data-slot-action="assign">Assign</button>
+              <button type="button" data-slot-action="move">Move</button>
+              <button type="button" data-slot-action="replay">Replay</button>
+            </div>
+            <div class="slot-action-panels">
+              <div class="slot-action-panel slot-waiting active" data-slot-panel="assign">
+                <div class="slot-actions-grid">
+                  <label>Assign waiting slave
+                    <select id="slot2AssignSelect" class="slot-assign-select"></select>
+                  </label>
+                  <div class="slot-action-row">
+                    <button type="button" class="slot-assign-btn" data-slot="2">Assign to slot 2</button>
+                    <div class="mut" id="slot2WaitingSummary">Waiting: —</div>
+                  </div>
+                </div>
+              </div>
+              <div class="slot-action-panel" data-slot-panel="move">
+                <div class="slot-actions-grid">
+                  <label>Move assignment
+                    <select id="slot2MoveSelect" class="slot-move-select"></select>
+                  </label>
+                  <div class="slot-action-row">
+                    <button type="button" class="slot-move-btn" data-slot="2">Send move</button>
+                    <div class="mut">Move or unassign the current slave.</div>
+                  </div>
+                </div>
+              </div>
+              <div class="slot-action-panel" data-slot-panel="replay">
+                <div class="slot-actions-grid">
+                  <div class="slot-action-row">
+                    <button type="button" class="slot-replay-btn" data-slot="2">Replay commands</button>
+                    <div class="mut">Re-send the latest slot commands to this slave.</div>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </section>
       <section class="card slot-node-card">
         <h3>Node & relay</h3>
         <div class="body" id="slot2NodeContainer">
-          <div class="mut">Assign a slave to view node details.</div>
+          <div class="slot-node-empty">Waiting for slot assignment.</div>
         </div>
       </section>
     </div>
@@ -315,32 +401,63 @@
         <h2>Slot 3</h2>
         <div class="body">
           <div class="slot-summary-block">
-            <div class="slot-line" id="slot3Summary">No slave assigned.</div>
-            <div class="slot-line mut" id="slot3Meta">—</div>
-            <div class="slot-line mut" id="slot3LastSeen">Last seen —</div>
-            <div class="slot-line mut" id="slot3Generation">Generation: —</div>
-            <div class="slot-line mut" id="slot3SlotMeta">Slot config: —</div>
+            <div class="slot-summary-head">
+              <div class="slot-summary-title">
+                <strong id="slot3Summary">No slave assigned.</strong>
+              </div>
+              <div class="slot-meta-inline">
+                <span class="badge" id="slot3LastSeen">Last seen —</span>
+                <span class="badge" id="slot3Generation">Generation: —</span>
+              </div>
+            </div>
+            <div class="slot-line" id="slot3Meta">—</div>
+            <div class="slot-line" id="slot3SlotMeta">Slot config: —</div>
           </div>
-          <div class="slot-actions">
-            <button type="button" class="slot-replay-btn" data-slot="3">Replay commands</button>
-            <label>Move assignment
-              <select id="slot3MoveSelect" class="slot-move-select"></select>
-            </label>
-            <button type="button" class="slot-move-btn" data-slot="3">Send move</button>
-          </div>
-          <div class="slot-waiting">
-            <label>Assign waiting slave
-              <select id="slot3AssignSelect" class="slot-assign-select"></select>
-            </label>
-            <button type="button" class="slot-assign-btn" data-slot="3">Assign to slot 3</button>
-            <div class="mut" id="slot3WaitingSummary">Waiting: —</div>
+          <div class="slot-actions" data-slot="3">
+            <div class="slot-action-switch" role="group" aria-label="Slot 3 actions">
+              <button type="button" class="active" data-slot-action="assign">Assign</button>
+              <button type="button" data-slot-action="move">Move</button>
+              <button type="button" data-slot-action="replay">Replay</button>
+            </div>
+            <div class="slot-action-panels">
+              <div class="slot-action-panel slot-waiting active" data-slot-panel="assign">
+                <div class="slot-actions-grid">
+                  <label>Assign waiting slave
+                    <select id="slot3AssignSelect" class="slot-assign-select"></select>
+                  </label>
+                  <div class="slot-action-row">
+                    <button type="button" class="slot-assign-btn" data-slot="3">Assign to slot 3</button>
+                    <div class="mut" id="slot3WaitingSummary">Waiting: —</div>
+                  </div>
+                </div>
+              </div>
+              <div class="slot-action-panel" data-slot-panel="move">
+                <div class="slot-actions-grid">
+                  <label>Move assignment
+                    <select id="slot3MoveSelect" class="slot-move-select"></select>
+                  </label>
+                  <div class="slot-action-row">
+                    <button type="button" class="slot-move-btn" data-slot="3">Send move</button>
+                    <div class="mut">Move or unassign the current slave.</div>
+                  </div>
+                </div>
+              </div>
+              <div class="slot-action-panel" data-slot-panel="replay">
+                <div class="slot-actions-grid">
+                  <div class="slot-action-row">
+                    <button type="button" class="slot-replay-btn" data-slot="3">Replay commands</button>
+                    <div class="mut">Re-send the latest slot commands to this slave.</div>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </section>
       <section class="card slot-node-card">
         <h3>Node & relay</h3>
         <div class="body" id="slot3NodeContainer">
-          <div class="mut">Assign a slave to view node details.</div>
+          <div class="slot-node-empty">Waiting for slot assignment.</div>
         </div>
       </section>
     </div>
@@ -353,6 +470,7 @@ const nodesState = { expanded: new Set(), pollTimer: null, loading: false, list:
 const MAX_SYNC_SLOTS = 3;
 const syncState = { slots: Array.from({ length: MAX_SYNC_SLOTS }, () => null), meta: new Map(), waiting: [], refMs: 0 };
 const syncUiState = { busy: false };
+const slotActionState = new Map();
 const tabState = { active: 'groundstation' };
 const DEFAULT_CMD_TIMEOUT_MS = 6000;
 const capsState = { capList: new Set(), hasExec: false };
@@ -565,6 +683,62 @@ function formatSlotConfig(meta){
   return parts.join(' • ') || '—';
 }
 
+function slotActionSection(slotNumber){
+  return document.querySelector(`.slot-actions[data-slot="${slotNumber}"]`);
+}
+
+function setSlotActionActive(slotNumber, action){
+  const section = slotActionSection(slotNumber);
+  if (!section || !action) return;
+  const buttons = section.querySelectorAll('[data-slot-action]');
+  const panels = section.querySelectorAll('[data-slot-panel]');
+  buttons.forEach(btn => {
+    const match = btn.dataset.slotAction === action;
+    btn.classList.toggle('active', match);
+    btn.setAttribute('aria-pressed', match ? 'true' : 'false');
+  });
+  panels.forEach(panel => {
+    const match = panel.dataset.slotPanel === action;
+    panel.classList.toggle('active', match);
+    panel.hidden = !match;
+  });
+  slotActionState.set(slotNumber, action);
+}
+
+function syncSlotActionSelection(slotNumber){
+  const section = slotActionSection(slotNumber);
+  if (!section) return;
+  const buttons = Array.from(section.querySelectorAll('[data-slot-action]'));
+  const desired = slotActionState.get(slotNumber);
+  const candidate = buttons.find(btn => !btn.disabled && btn.dataset.slotAction === desired)
+    || buttons.find(btn => !btn.disabled)
+    || buttons[0];
+  if (candidate){
+    setSlotActionActive(slotNumber, candidate.dataset.slotAction);
+  }
+}
+
+function initSlotActionSegments(){
+  document.querySelectorAll('.slot-actions').forEach(section => {
+    const slot = Number(section.dataset.slot);
+    if (!Number.isFinite(slot)) return;
+    section.querySelectorAll('[data-slot-action]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        if (btn.disabled) return;
+        setSlotActionActive(slot, btn.dataset.slotAction);
+      });
+    });
+    syncSlotActionSelection(slot);
+  });
+}
+
+function buildSlotPlaceholder(text, className = ''){
+  const wrapper = document.createElement('div');
+  wrapper.className = `slot-node-empty${className ? ` ${className}` : ''}`;
+  wrapper.textContent = text;
+  return wrapper;
+}
+
 function findNodeForSlave(rec){
   if (!rec) return null;
   const list = Array.isArray(nodesState.list) ? nodesState.list : [];
@@ -588,23 +762,25 @@ function renderSlotNode(slotNumber, rec){
   const container = document.getElementById(`slot${slotNumber}NodeContainer`);
   if (!container) return;
   container.innerHTML = '';
+  if (syncUiState.busy && !rec){
+    container.append(buildSlotPlaceholder('Syncing slot updates…', 'loading'));
+    return;
+  }
   if (!rec){
-    const msg = document.createElement('div');
-    msg.className = 'mut';
-    msg.textContent = 'Assign a slave to view node details.';
-    container.append(msg);
+    container.append(buildSlotPlaceholder('Waiting for slot assignment.'));
     return;
   }
   const node = findNodeForSlave(rec);
   if (node){
     container.append(buildNodeCard(node, slotNumber));
-  } else {
-    const msg = document.createElement('div');
-    msg.className = 'mut';
-    const targetIp = rec.remote_ip || rec.address || 'unknown';
-    msg.textContent = `No /nodes entry for ${targetIp}. Refresh nodes to discover relay details.`;
-    container.append(msg);
+    return;
   }
+  if (nodesState.loading){
+    container.append(buildSlotPlaceholder('Loading node details…', 'loading'));
+    return;
+  }
+  const targetIp = rec.remote_ip || rec.address || 'unknown';
+  container.append(buildSlotPlaceholder(`No /nodes entry for ${targetIp}. Refresh nodes to discover relay details.`));
 }
 
 function updateSlotSummary(slotNumber, rec){
@@ -615,11 +791,7 @@ function updateSlotSummary(slotNumber, rec){
   const slotMetaEl = document.getElementById(`slot${slotNumber}SlotMeta`);
   const slotMeta = syncState.meta.get(slotNumber) || null;
   if (summaryEl){
-    if (rec){
-      summaryEl.innerHTML = `<strong>${rec.id || rec.remote_ip || 'unnamed'}</strong>`;
-    } else {
-      summaryEl.textContent = 'No slave assigned.';
-    }
+    summaryEl.textContent = rec ? (rec.id || rec.remote_ip || 'unnamed') : 'No slave assigned.';
   }
   if (metaEl){
     metaEl.textContent = rec ? formatSlaveMeta(rec) : '—';
@@ -678,6 +850,8 @@ function populateWaitingSelect(select){
 function updateSlotControls(slotNumber, rec){
   const moveSelect = document.getElementById(`slot${slotNumber}MoveSelect`);
   const moveBtn = document.querySelector(`.slot-move-btn[data-slot="${slotNumber}"]`);
+  const actionSection = slotActionSection(slotNumber);
+  const hasWaiting = syncState.waiting.some(entry => entry && entry.id);
   if (moveSelect){
     moveSelect.innerHTML = '';
     if (!rec){
@@ -709,14 +883,27 @@ function updateSlotControls(slotNumber, rec){
   if (moveBtn){
     moveBtn.disabled = syncUiState.busy || !rec;
   }
+  const replayBtn = document.querySelector(`.slot-replay-btn[data-slot="${slotNumber}"]`);
+  if (replayBtn){
+    replayBtn.disabled = syncUiState.busy || !rec;
+  }
   const assignSelect = document.getElementById(`slot${slotNumber}AssignSelect`);
   if (assignSelect){
     populateWaitingSelect(assignSelect);
   }
   const assignBtn = document.querySelector(`.slot-assign-btn[data-slot="${slotNumber}"]`);
   if (assignBtn){
-    assignBtn.disabled = syncUiState.busy || !syncState.waiting.some(rec => rec && rec.id);
+    assignBtn.disabled = syncUiState.busy || !hasWaiting;
   }
+  if (actionSection){
+    const assignToggle = actionSection.querySelector('[data-slot-action="assign"]');
+    const moveToggle = actionSection.querySelector('[data-slot-action="move"]');
+    const replayToggle = actionSection.querySelector('[data-slot-action="replay"]');
+    if (assignToggle) assignToggle.disabled = syncUiState.busy || !hasWaiting;
+    if (moveToggle) moveToggle.disabled = syncUiState.busy || !rec;
+    if (replayToggle) replayToggle.disabled = syncUiState.busy || !rec;
+  }
+  syncSlotActionSelection(slotNumber);
 }
 
 function updateSlotPanels(){
@@ -1646,6 +1833,7 @@ if (capsRefreshBtn) capsRefreshBtn.addEventListener('click', () => { void fetchC
 ensureDvrHandlers();
 initTabs();
 attachSlotHandlers();
+initSlotActionSegments();
 initSecondaryActionsMenu();
 $('#refreshNodesBtn').addEventListener('click', fetchNodes);
 $('#nodesScanBtn').addEventListener('click', triggerNodesScan);
