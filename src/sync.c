@@ -276,6 +276,7 @@ static sync_slave_record_t *sync_master_find_record(sync_master_state_t *state, 
     strncpy(slot->id, id, sizeof(slot->id) - 1);
     slot->id[sizeof(slot->id) - 1] = '\0';
     slot->slot_index = -1;
+    slot->last_reported_slot_index = -1;
     slot->last_ack_generation = 0;
     return slot;
 }
@@ -306,6 +307,7 @@ static void sync_master_release_slot_locked(sync_master_state_t *state,
         sync_master_find_record(state, state->slot_assignees[slot_index], 0);
     if (rec && rec->slot_index == slot_index) {
         rec->slot_index = -1;
+        rec->last_reported_slot_index = -1;
         rec->last_ack_generation = 0;
     }
     state->slot_assignees[slot_index][0] = '\0';
@@ -1260,11 +1262,13 @@ static int h_sync_register(struct mg_connection *c, void *ud) {
     }
 
     int previous_slot = rec->slot_index;
+    int previous_reported_slot = rec->last_reported_slot_index;
     int previous_ack_generation = rec->last_ack_generation;
     assigned_slot = sync_master_auto_assign_slot_locked(&app->master, rec, &cfg);
     if (assigned_slot >= 0) {
         slot_generation = app->master.slot_generation[assigned_slot];
-        int slot_changed = (previous_slot != assigned_slot);
+        int slot_changed = (previous_slot != assigned_slot) ||
+                           (previous_reported_slot != assigned_slot);
         const char *send_reason = "pending_generation";
         /*
          * Slot commands carry a generation value so slaves can avoid
@@ -1294,10 +1298,14 @@ static int h_sync_register(struct mg_connection *c, void *ud) {
             }
         }
         if (slot_changed) {
+            int log_from_slot = previous_slot;
+            if (log_from_slot == assigned_slot && previous_reported_slot >= 0) {
+                log_from_slot = previous_reported_slot;
+            }
             char prev_label[32];
-            if (previous_slot >= 0) {
+            if (log_from_slot >= 0) {
                 snprintf(prev_label, sizeof(prev_label), "slot %d",
-                         previous_slot + 1);
+                         log_from_slot + 1);
             } else {
                 strncpy(prev_label, "no slot", sizeof(prev_label) - 1);
                 prev_label[sizeof(prev_label) - 1] = '\0';
@@ -1317,6 +1325,9 @@ static int h_sync_register(struct mg_connection *c, void *ud) {
                     sizeof(slot_label) - 1);
             slot_label[sizeof(slot_label) - 1] = '\0';
         }
+    }
+    if (assigned_slot >= 0) {
+        rec->last_reported_slot_index = assigned_slot;
     }
     pthread_mutex_unlock(&app->master.lock);
 
