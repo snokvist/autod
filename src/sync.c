@@ -276,6 +276,7 @@ static sync_slave_record_t *sync_master_find_record(sync_master_state_t *state, 
     strncpy(slot->id, id, sizeof(slot->id) - 1);
     slot->id[sizeof(slot->id) - 1] = '\0';
     slot->slot_index = -1;
+    slot->last_reported_slot_index = -1;
     slot->last_ack_generation = 0;
     return slot;
 }
@@ -306,6 +307,7 @@ static void sync_master_release_slot_locked(sync_master_state_t *state,
         sync_master_find_record(state, state->slot_assignees[slot_index], 0);
     if (rec && rec->slot_index == slot_index) {
         rec->slot_index = -1;
+        rec->last_reported_slot_index = -1;
         rec->last_ack_generation = 0;
     }
     state->slot_assignees[slot_index][0] = '\0';
@@ -1260,10 +1262,14 @@ static int h_sync_register(struct mg_connection *c, void *ud) {
     }
 
     int previous_slot = rec->slot_index;
+    int previous_reported_slot = rec->last_reported_slot_index;
+    int previous_ack_generation = rec->last_ack_generation;
     assigned_slot = sync_master_auto_assign_slot_locked(&app->master, rec, &cfg);
     if (assigned_slot >= 0) {
         slot_generation = app->master.slot_generation[assigned_slot];
-        int slot_changed = (previous_slot != assigned_slot);
+        int slot_changed = (previous_slot != assigned_slot) ||
+                           (previous_reported_slot != assigned_slot);
+        const char *send_reason = "pending_generation";
         /*
          * Slot commands carry a generation value so slaves can avoid
          * re-running commands they have already applied. A slave reports the
@@ -1275,21 +1281,53 @@ static int h_sync_register(struct mg_connection *c, void *ud) {
          */
         if (slot_changed) {
             rec->last_ack_generation = 0;
+            send_reason = "slot_change";
         } else if (ack_generation > 0) {
             if (ack_generation > slot_generation) {
                 rec->last_ack_generation = 0;
+                send_reason = "ack_out_of_range";
             } else if (ack_generation > rec->last_ack_generation) {
                 rec->last_ack_generation = ack_generation;
+                send_reason = "ack_behind";
             }
         }
         if (slot_generation > rec->last_ack_generation) {
             send_generation = slot_generation;
+            if (rec->last_ack_generation <= 0 && !slot_changed) {
+                send_reason = "no_ack";
+            }
+        }
+        if (slot_changed) {
+            int log_from_slot = previous_slot;
+            if (log_from_slot == assigned_slot && previous_reported_slot >= 0) {
+                log_from_slot = previous_reported_slot;
+            }
+            char prev_label[32];
+            if (log_from_slot >= 0) {
+                snprintf(prev_label, sizeof(prev_label), "slot %d",
+                         log_from_slot + 1);
+            } else {
+                strncpy(prev_label, "no slot", sizeof(prev_label) - 1);
+                prev_label[sizeof(prev_label) - 1] = '\0';
+            }
+            fprintf(stderr,
+                    "sync master: %s moved from %s to slot %d (generation %d)\n",
+                    id, prev_label, assigned_slot + 1, slot_generation);
+        }
+        if (send_generation > 0) {
+            fprintf(stderr,
+                    "sync master: sending slot %d generation %d commands to %s (prev_ack=%d, slot_generation=%d, reason=%s)\n",
+                    assigned_slot + 1, send_generation, id, previous_ack_generation,
+                    slot_generation, send_reason);
         }
         if (cfg.sync_slots[assigned_slot].name[0]) {
             strncpy(slot_label, cfg.sync_slots[assigned_slot].name,
                     sizeof(slot_label) - 1);
             slot_label[sizeof(slot_label) - 1] = '\0';
         }
+    }
+    if (assigned_slot >= 0) {
+        rec->last_reported_slot_index = assigned_slot;
     }
     pthread_mutex_unlock(&app->master.lock);
 

@@ -28,6 +28,7 @@ typedef struct {
     char caps[256];
     long long last_seen_ms;
     int slot_index;
+    int last_reported_slot_index;
     int last_ack_generation;
 } sync_slave_record_t;
 
