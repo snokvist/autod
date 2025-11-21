@@ -12,6 +12,22 @@
   .header-actions { display: flex; justify-content: flex-end; gap: 0.5rem; flex-wrap: wrap; align-items: stretch; width: 100%; }
   .header-actions .button { min-width: 150px; }
   .header-actions .danger-action { margin-left: auto; }
+  .card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+  .card-title-group { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+  .card-title-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .card-subtitle { display: flex; align-items: center; gap: 6px; color: var(--mut); font-size: 14px; }
+  .badge { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 999px; border: 1px solid var(--line); background: rgba(255,255,255,0.06); color: var(--mut); font-size: 13px; line-height: 1; }
+  .badge.status-badge { color: var(--fg); border-color: rgba(255,255,255,0.18); }
+  .card-summary { display: none; color: var(--mut); font-size: 14px; padding: 4px 0; }
+  .card.card-collapsed .card-summary { display: block; }
+  .card.card-collapsed .card-collapsible { display: none; }
+  .card-collapsible[hidden] { display: none !important; }
+  .toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .toolbar .button, .toolbar button, .toolbar select { min-height: 36px; }
+  .toolbar.primary .button, .toolbar.primary button { min-width: 160px; }
+  .toolbar .spacer { flex: 1; }
+  .optional-card .card-actions { justify-content: flex-end; }
+  .optional-card.card-collapsed .card-collapsible { display: none; }
   .button.primary { background: #e8e8ea; color: #000; border-color: #e8e8ea; box-shadow: 0 8px 18px rgba(0,0,0,0.25); }
   .button.primary:hover { background: #fff; border-color: #fff; }
   .button.ghost { background: transparent; color: var(--fg); border-color: var(--line); }
@@ -114,13 +130,23 @@
 <main>
   <section class="tab-panel active" data-panel="groundstation" id="panel-groundstation">
     <section class="card" id="capsCard">
-      <h2>Device & runtime</h2>
-      <div class="body grid">
-        <div class="row" style="gap:0.75rem; flex-wrap:wrap;">
-          <button id="capsRefreshBtn">Refresh /caps</button>
-          <div class="spacer"></div>
-          <div class="mut" id="capsStatus">waiting…</div>
+      <div class="card-head">
+        <div class="card-title-group">
+          <div class="card-title-row">
+            <h2>Device & runtime</h2>
+          </div>
+          <div class="card-subtitle">
+            <span>Runtime status</span>
+            <span class="badge" id="capsStatus">waiting…</span>
+          </div>
         </div>
+        <div class="card-actions">
+          <div class="toolbar primary">
+            <button class="button primary" id="capsRefreshBtn">Refresh /caps</button>
+          </div>
+        </div>
+      </div>
+      <div class="body grid">
         <div class="kv"><div class="mut">Device</div><div id="dev_device">—</div></div>
         <div class="kv"><div class="mut">Role</div><div id="dev_role">—</div></div>
         <div class="kv"><div class="mut">Version</div><div id="dev_version">—</div></div>
@@ -129,25 +155,41 @@
         <div class="kv"><div class="mut">Loadavg</div><div id="dev_load">—</div></div>
         <div class="kv"><div class="mut">Capabilities</div><div class="caps" id="dev_caps">—</div></div>
         <div class="kv"><div class="mut">SSE</div><div class="sse" id="dev_sse">—</div></div>
-        <div class="row" id="deviceRuntimeActions" style="display:none">
+        <div class="toolbar" id="deviceRuntimeActions" style="display:none">
           <button id="pixelpilotMiniRkRebootBtn">Reboot device</button>
           <button id="pixelpilotMiniRkShutdownBtn">Shutdown device</button>
         </div>
       </div>
     </section>
 
-    <section class="card" id="pixelpilotMiniRkCard" style="display:none">
-      <h2>Pixelpilot Mini RK</h2>
-      <div class="body grid">
+    <section class="card card-collapsed optional-card" id="pixelpilotMiniRkCard">
+      <div class="card-head">
+        <div class="card-title-group">
+          <div class="card-title-row">
+            <h2>Pixelpilot Mini RK</h2>
+          </div>
+          <div class="card-subtitle">
+            <span>Service status</span>
+            <span class="badge status-badge status-indicator" id="pixelpilotMiniRkStatus" aria-live="polite">waiting…</span>
+          </div>
+        </div>
+        <div class="card-actions">
+          <div class="toolbar">
+            <button class="button ghost" type="button" id="pixelpilotMiniRkToggle" data-card-toggle aria-expanded="false">Show details</button>
+            <button class="button primary" id="pixelpilotMiniRkToggleRecordingBtn">Toggle Recording</button>
+          </div>
+        </div>
+      </div>
+      <div class="card-summary" id="pixelpilotMiniRkSummary" data-card-summary>Waiting for capabilities…</div>
+      <div class="body grid card-collapsible" data-card-body hidden>
         <div class="cap-toolbar">
-          <div class="row" id="pixelpilotMiniRkActions">
+          <div class="toolbar" id="pixelpilotMiniRkActions">
             <button id="pixelpilotMiniRkToggleOsdBtn">Toggle OSD</button>
-            <button id="pixelpilotMiniRkToggleRecordingBtn">Toggle Recording</button>
             <button id="pixelpilotMiniRkRestartServiceBtn">Restart pixelpilot_mini_rk</button>
             <button id="pixelpilotMiniRkStopServiceBtn">Stop pixelpilot_mini_rk</button>
             <button id="pixelpilotMiniRkStartServiceBtn">Start pixelpilot_mini_rk</button>
           </div>
-          <div class="row mini-rk-gamma-row">
+          <div class="toolbar mini-rk-gamma-row">
             <label for="pixelpilotMiniRkGammaSelect">Gamma preset</label>
             <select id="pixelpilotMiniRkGammaSelect" disabled>
               <option>Loading presets…</option>
@@ -156,22 +198,33 @@
             <button id="pixelpilotMiniRkReloadGammaBtn" type="button">Reload presets</button>
             <div class="mut" id="pixelpilotMiniRkGammaNotice">Loading presets…</div>
           </div>
-          <div class="spacer"></div>
-          <div class="mini-status">
-            <div class="status-indicator" id="pixelpilotMiniRkStatus" aria-live="polite">Idle</div>
-          </div>
         </div>
       </div>
     </section>
 
-    <section class="card" id="dvrCard" style="display:none">
-      <h2>DVR recordings</h2>
-      <div class="body grid dvr-body">
-        <div class="row">
-          <button id="dvrRefreshBtn">Refresh list</button>
+    <section class="card card-collapsed optional-card" id="dvrCard">
+      <div class="card-head">
+        <div class="card-title-group">
+          <div class="card-title-row">
+            <h2>DVR recordings</h2>
+          </div>
+          <div class="card-subtitle">
+            <span>Recording status</span>
+            <span class="badge" id="dvrStatus">waiting…</span>
+          </div>
+        </div>
+        <div class="card-actions">
+          <div class="toolbar">
+            <button class="button ghost" type="button" id="dvrToggle" data-card-toggle aria-expanded="false">Show details</button>
+            <button class="button primary" id="dvrRefreshBtn">Refresh list</button>
+          </div>
+        </div>
+      </div>
+      <div class="card-summary" id="dvrSummary" data-card-summary>Waiting for capabilities…</div>
+      <div class="body grid dvr-body card-collapsible" data-card-body hidden>
+        <div class="toolbar">
           <button id="dvrDeleteAllBtn">Delete all</button>
           <div class="spacer"></div>
-          <div class="mut" id="dvrStatus">—</div>
         </div>
         <div class="dvr-scroll">
           <div id="dvrMessage" class="dvr-message" style="display:none"></div>
@@ -303,8 +356,47 @@ const syncUiState = { busy: false };
 const tabState = { active: 'groundstation' };
 const DEFAULT_CMD_TIMEOUT_MS = 6000;
 const capsState = { capList: new Set(), hasExec: false };
-const dvrState = { initialized: false, hasExec: false, loading: false };
+const dvrState = { initialized: false, hasExec: false, loading: false, enabled: false };
 const miniRkState = { initialized: false, gamma: { presets: [], loading: false } };
+
+function cardElements(cardId){
+  const card = document.getElementById(cardId);
+  if (!card) return {};
+  return {
+    card,
+    body: card.querySelector('[data-card-body]'),
+    summary: card.querySelector('[data-card-summary]'),
+    toggle: card.querySelector('[data-card-toggle]')
+  };
+}
+
+function setCardCollapsed(cardId, collapsed){
+  const { card, body, toggle } = cardElements(cardId);
+  if (!card || !body || !toggle) return;
+  card.classList.toggle('card-collapsed', collapsed);
+  body.hidden = collapsed;
+  toggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+  toggle.textContent = collapsed ? 'Show details' : 'Hide details';
+}
+
+function setOptionalCardState(cardId, options = {}){
+  const { card, summary } = cardElements(cardId);
+  if (!card) return;
+  const enabled = !!options.enabled;
+  card.dataset.enabled = enabled ? 'true' : 'false';
+  if (summary && typeof options.summary === 'string') summary.textContent = options.summary;
+  setCardCollapsed(cardId, !enabled);
+  card.classList.toggle('optional-inactive', !enabled);
+}
+
+function initCardToggle(cardId){
+  const { card, toggle } = cardElements(cardId);
+  if (!card || !toggle) return;
+  toggle.addEventListener('click', () => {
+    const next = !card.classList.contains('card-collapsed');
+    setCardCollapsed(cardId, next);
+  });
+}
 
 function secsToHhMmSs(value){
   const sec = Number(value);
@@ -680,8 +772,19 @@ function applyCapabilityToggles(capList){
   if (deviceActionsRow) deviceActionsRow.style.display = hasMiniRk ? '' : 'none';
 
   const pixelpilotCard = document.getElementById('pixelpilotMiniRkCard');
+  const miniRkToggle = document.getElementById('pixelpilotMiniRkToggle');
+  const miniRkPrimary = document.getElementById('pixelpilotMiniRkToggleRecordingBtn');
   if (pixelpilotCard){
-    pixelpilotCard.style.display = hasMiniRk ? '' : 'none';
+    setOptionalCardState('pixelpilotMiniRkCard', {
+      enabled: hasMiniRk,
+      summary: hasMiniRk ? 'Pixelpilot Mini RK ready' : 'Capability missing — controls hidden'
+    });
+    pixelpilotCard.querySelectorAll('button').forEach(btn => {
+      if (btn.id === 'pixelpilotMiniRkToggle') return;
+      btn.disabled = !hasMiniRk;
+    });
+    if (miniRkToggle) miniRkToggle.disabled = false;
+    if (miniRkPrimary) miniRkPrimary.disabled = !hasMiniRk;
     if (hasMiniRk){
       ensureMiniRkCard();
       setMiniRkStatusIdle('Idle');
@@ -692,10 +795,18 @@ function applyCapabilityToggles(capList){
 
   ensureDvrHandlers();
   dvrState.hasExec = capsState.hasExec;
+  dvrState.enabled = hasDvr;
   updateDvrControls();
   const dvrCard = document.getElementById('dvrCard');
+  const dvrToggle = document.getElementById('dvrToggle');
+  const dvrRefreshBtn = document.getElementById('dvrRefreshBtn');
   if (dvrCard){
-    dvrCard.style.display = hasDvr ? '' : 'none';
+    setOptionalCardState('dvrCard', {
+      enabled: hasDvr,
+      summary: hasDvr ? 'Recording list available' : 'Capability missing — collapsed'
+    });
+    if (dvrToggle) dvrToggle.disabled = false;
+    if (dvrRefreshBtn) dvrRefreshBtn.disabled = !hasDvr;
     if (hasDvr){
       refreshDvrList();
     } else {
@@ -749,8 +860,9 @@ function ensureDvrHandlers(){
 function updateDvrControls(){
   const deleteBtn = document.getElementById('dvrDeleteAllBtn');
   if (deleteBtn){
-    deleteBtn.disabled = !dvrState.hasExec;
-    deleteBtn.title = dvrState.hasExec ? '' : 'Requires exec capability';
+    const hasAccess = dvrState.enabled && dvrState.hasExec;
+    deleteBtn.disabled = !hasAccess;
+    deleteBtn.title = hasAccess ? '' : (dvrState.enabled ? 'Requires exec capability' : 'Requires DVR capability');
   }
 }
 
@@ -824,7 +936,7 @@ function parseDvrListFromHtml(html){
 
 async function refreshDvrList(){
   const card = document.getElementById('dvrCard');
-  if (!card || card.style.display === 'none') return;
+  if (!card || card.dataset.enabled !== 'true') return;
   if (dvrState.loading) return;
   const statusEl = document.getElementById('dvrStatus');
   const listEl = document.getElementById('dvrList');
@@ -885,7 +997,7 @@ async function refreshDvrList(){
 }
 
 async function deleteAllDvrRecordings(){
-  if (!dvrState.hasExec) return;
+  if (!dvrState.hasExec || !dvrState.enabled) return;
   if (!confirm('Delete all DVR recordings?')) return;
   const deleteBtn = document.getElementById('dvrDeleteAllBtn');
   const statusEl = document.getElementById('dvrStatus');
@@ -1527,6 +1639,8 @@ function initSecondaryActionsMenu(){
   syncMode();
 }
 
+initCardToggle('pixelpilotMiniRkCard');
+initCardToggle('dvrCard');
 const capsRefreshBtn = document.getElementById('capsRefreshBtn');
 if (capsRefreshBtn) capsRefreshBtn.addEventListener('click', () => { void fetchCaps(); });
 ensureDvrHandlers();
