@@ -285,6 +285,11 @@
   .card-head, .card-summary, .card > .body { padding: var(--card-pad); }
   .slot-layout { display: grid; gap: 1.5rem; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
   .slot-card .body { display: flex; flex-direction: column; gap: 0.75rem; }
+  .slot-card > h2,
+  .slot-node-card > h3 {
+    padding: var(--card-pad);
+    border-bottom: 1px solid var(--line);
+  }
   .slot-summary-block { display: flex; flex-direction: column; gap: 0.5rem; }
   .slot-summary-head { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap; }
   .slot-summary-title { display: flex; align-items: center; gap: 0.4rem; font-size: 1.05rem; }
