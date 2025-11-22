@@ -1056,13 +1056,6 @@ static int config_load(config_t *cfg, const char *path)
             if (parse_bool_value(val, &b) == 0) {
                 cfg->key_debug = b;
             }
-        } else if (!strncasecmp(key, "key_short_", 10)) {
-            int ch = atoi(key + 10);
-            if (ch >= 1 && ch <= 16) {
-                parse_key_binding(val, &cfg->key_short[ch - 1], path, lineno);
-            } else {
-                fprintf(stderr, "%s:%d: key_short_N expects 1-16\n", path, lineno);
-            }
         } else if (!strncasecmp(key, "key_short_low_", 14)) {
             int ch = atoi(key + 14);
             if (ch >= 1 && ch <= 16) {
@@ -1070,12 +1063,12 @@ static int config_load(config_t *cfg, const char *path)
             } else {
                 fprintf(stderr, "%s:%d: key_short_low_N expects 1-16\n", path, lineno);
             }
-        } else if (!strncasecmp(key, "key_long_", 9)) {
-            int ch = atoi(key + 9);
+        } else if (!strncasecmp(key, "key_short_", 10)) {
+            int ch = atoi(key + 10);
             if (ch >= 1 && ch <= 16) {
-                parse_key_binding(val, &cfg->key_long[ch - 1], path, lineno);
+                parse_key_binding(val, &cfg->key_short[ch - 1], path, lineno);
             } else {
-                fprintf(stderr, "%s:%d: key_long_N expects 1-16\n", path, lineno);
+                fprintf(stderr, "%s:%d: key_short_N expects 1-16\n", path, lineno);
             }
         } else if (!strncasecmp(key, "key_long_low_", 13)) {
             int ch = atoi(key + 13);
@@ -1083,6 +1076,13 @@ static int config_load(config_t *cfg, const char *path)
                 parse_key_binding(val, &cfg->key_long_low[ch - 1], path, lineno);
             } else {
                 fprintf(stderr, "%s:%d: key_long_low_N expects 1-16\n", path, lineno);
+            }
+        } else if (!strncasecmp(key, "key_long_", 9)) {
+            int ch = atoi(key + 9);
+            if (ch >= 1 && ch <= 16) {
+                parse_key_binding(val, &cfg->key_long[ch - 1], path, lineno);
+            } else {
+                fprintf(stderr, "%s:%d: key_long_N expects 1-16\n", path, lineno);
             }
         } else {
             fprintf(stderr, "%s:%d: unknown key '%s'\n", path, lineno, key);
@@ -1144,7 +1144,7 @@ static int uinput_emit_event(int fd, uint16_t type, uint16_t code, int32_t value
 {
     struct input_event ev;
     memset(&ev, 0, sizeof(ev));
-    clock_gettime(CLOCK_MONOTONIC, &ev.time);
+    gettimeofday(&ev.time, NULL);
     ev.type = type;
     ev.code = code;
     ev.value = value;
