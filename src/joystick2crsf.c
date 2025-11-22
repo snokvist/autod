@@ -61,6 +61,7 @@
 
 #define DEFAULT_CONF       "/etc/joystick2crsf.conf"
 #define MAX_LINE_LEN       512
+#define MAX_KEY_BINDINGS   SDL_NUM_SCANCODES
 
 /* ------------------------------------------------------------------------- */
 typedef struct {
@@ -84,7 +85,20 @@ typedef struct {
     int joystick_index;
     int rescan_interval;        /* seconds */
     int use_gamecontroller;
+    int key_short[MAX_KEY_BINDINGS];
+    int key_long[MAX_KEY_BINDINGS];
+    int key_long_ms;            /* ms threshold for long presses */
 } config_t;
+
+typedef struct {
+    SDL_Scancode scancode;
+    int short_channel;
+    int long_channel;
+    int active_channel;
+    int pressed;
+    int long_active;
+    struct timespec pressed_at;
+} key_state_t;
 
 /* ------------------------------------------------------------------------- */
 static volatile int g_run = 1;
@@ -844,6 +858,89 @@ static void parse_dead_list(const char *str, int out[16])
     free(dup);
 }
 
+static SDL_Scancode parse_key_name(const char *name)
+{
+    if (!name || !*name) {
+        return SDL_SCANCODE_UNKNOWN;
+    }
+
+    if (strlen(name) == 1) {
+        char c = (char)tolower((unsigned char)name[0]);
+        if (c >= 'a' && c <= 'z') {
+            return (SDL_Scancode)(SDL_SCANCODE_A + (c - 'a'));
+        }
+    }
+
+    if (!strcasecmp(name, "up")) {
+        return SDL_SCANCODE_UP;
+    }
+    if (!strcasecmp(name, "down")) {
+        return SDL_SCANCODE_DOWN;
+    }
+    if (!strcasecmp(name, "left")) {
+        return SDL_SCANCODE_LEFT;
+    }
+    if (!strcasecmp(name, "right")) {
+        return SDL_SCANCODE_RIGHT;
+    }
+    if (!strcasecmp(name, "enter") || !strcasecmp(name, "return")) {
+        return SDL_SCANCODE_RETURN;
+    }
+
+    return SDL_SCANCODE_UNKNOWN;
+}
+
+static void parse_key_channel_list(const char *str, int out[MAX_KEY_BINDINGS],
+                                   const char *path, int lineno,
+                                   const char *label)
+{
+    if (!str || !*str) {
+        return;
+    }
+
+    char *dup = strdup(str);
+    if (!dup) {
+        return;
+    }
+
+    char *save = NULL;
+    char *tok = strtok_r(dup, ",", &save);
+    while (tok) {
+        trim(tok);
+        char *colon = strchr(tok, ':');
+        if (!colon) {
+            fprintf(stderr, "%s:%d: %s entries must use key:channel syntax\n", path, lineno, label);
+            tok = strtok_r(NULL, ",", &save);
+            continue;
+        }
+
+        *colon = '\0';
+        char *key = tok;
+        char *channel_str = colon + 1;
+        trim(key);
+        trim(channel_str);
+
+        SDL_Scancode sc = parse_key_name(key);
+        if (sc == SDL_SCANCODE_UNKNOWN) {
+            fprintf(stderr, "%s:%d: unknown key name '%s' in %s\n", path, lineno, key, label);
+            tok = strtok_r(NULL, ",", &save);
+            continue;
+        }
+
+        int ch = atoi(channel_str);
+        if (ch < 1 || ch > 16) {
+            fprintf(stderr, "%s:%d: %s channel must be 1-16\n", path, lineno, label);
+            tok = strtok_r(NULL, ",", &save);
+            continue;
+        }
+
+        out[sc] = ch - 1;
+        tok = strtok_r(NULL, ",", &save);
+    }
+
+    free(dup);
+}
+
 static void config_defaults(config_t *cfg)
 {
     cfg->rate = 125;
@@ -863,10 +960,15 @@ static void config_defaults(config_t *cfg)
     cfg->joystick_index = 0;
     cfg->rescan_interval = 5;
     cfg->use_gamecontroller = 1;
+    cfg->key_long_ms = 600;
     for (int i = 0; i < 16; i++) {
         cfg->map[i] = i;
         cfg->invert[i] = 0;
         cfg->dead[i] = 0;
+    }
+    for (int i = 0; i < MAX_KEY_BINDINGS; i++) {
+        cfg->key_short[i] = -1;
+        cfg->key_long[i] = -1;
     }
 }
 
@@ -969,6 +1071,17 @@ static int config_load(config_t *cfg, const char *path)
             if (parse_bool_value(val, &b) == 0) {
                 cfg->use_gamecontroller = b;
             }
+        } else if (!strcasecmp(key, "key_short")) {
+            parse_key_channel_list(val, cfg->key_short, path, lineno, "key_short");
+        } else if (!strcasecmp(key, "key_long")) {
+            parse_key_channel_list(val, cfg->key_long, path, lineno, "key_long");
+        } else if (!strcasecmp(key, "key_long_ms")) {
+            int threshold = atoi(val);
+            if (threshold >= 0) {
+                cfg->key_long_ms = threshold;
+            } else {
+                fprintf(stderr, "%s:%d: key_long_ms must be non-negative\n", path, lineno);
+            }
         } else {
             fprintf(stderr, "%s:%d: unknown key '%s'\n", path, lineno, key);
         }
@@ -1019,6 +1132,92 @@ static int config_load(config_t *cfg, const char *path)
         }
     }
     return 0;
+}
+
+/* -------------------------- Keyboard helpers ------------------------------- */
+static int build_key_state_list(const config_t *cfg, key_state_t *out, int max)
+{
+    int count = 0;
+    for (int i = 0; i < MAX_KEY_BINDINGS && count < max; i++) {
+        if (cfg->key_short[i] >= 0 || cfg->key_long[i] >= 0) {
+            out[count].scancode = (SDL_Scancode)i;
+            out[count].short_channel = cfg->key_short[i];
+            out[count].long_channel = cfg->key_long[i];
+            out[count].active_channel = -1;
+            out[count].pressed = 0;
+            out[count].long_active = 0;
+            out[count].pressed_at.tv_sec = 0;
+            out[count].pressed_at.tv_nsec = 0;
+            count++;
+        }
+    }
+    return count;
+}
+
+static key_state_t *find_key_state(key_state_t *arr, int count, SDL_Scancode sc)
+{
+    for (int i = 0; i < count; i++) {
+        if (arr[i].scancode == sc) {
+            return &arr[i];
+        }
+    }
+    return NULL;
+}
+
+static void key_channel_release(int channel_counts[16], int ch)
+{
+    if (ch >= 0 && ch < 16 && channel_counts[ch] > 0) {
+        channel_counts[ch]--;
+    }
+}
+
+static void key_channel_activate(int channel_counts[16], int ch)
+{
+    if (ch >= 0 && ch < 16) {
+        channel_counts[ch]++;
+    }
+}
+
+static void key_state_start(key_state_t *state, const struct timespec *now,
+                            int channel_counts[16])
+{
+    if (state->pressed) {
+        return;
+    }
+    state->pressed = 1;
+    state->long_active = 0;
+    state->pressed_at = *now;
+    state->active_channel = state->short_channel;
+    key_channel_activate(channel_counts, state->active_channel);
+}
+
+static void key_state_stop(key_state_t *state, int channel_counts[16])
+{
+    key_channel_release(channel_counts, state->active_channel);
+    state->active_channel = -1;
+    state->pressed = 0;
+    state->long_active = 0;
+    state->pressed_at.tv_sec = 0;
+    state->pressed_at.tv_nsec = 0;
+}
+
+static void key_state_maybe_promote(key_state_t *state, const config_t *cfg,
+                                    const struct timespec *now,
+                                    int channel_counts[16])
+{
+    if (!state->pressed || state->long_active || state->long_channel < 0) {
+        return;
+    }
+
+    int64_t held_ms = timespec_diff_ms(&state->pressed_at, now);
+    if (held_ms < cfg->key_long_ms) {
+        return;
+    }
+
+    key_channel_release(channel_counts, state->active_channel);
+    state->active_channel = state->long_channel;
+    state->long_active = 1;
+    key_channel_activate(channel_counts, state->active_channel);
 }
 
 /* --------------------------- Time helpers ---------------------------------- */
@@ -1084,7 +1283,7 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    if (SDL_Init(SDL_INIT_JOYSTICK | SDL_INIT_GAMECONTROLLER) < 0) {
+    if (SDL_Init(SDL_INIT_JOYSTICK | SDL_INIT_GAMECONTROLLER | SDL_INIT_EVENTS) < 0) {
         fprintf(stderr, "SDL: %s\n", SDL_GetError());
         return 1;
     }
@@ -1212,6 +1411,10 @@ int main(int argc, char **argv)
         size_t frame_len = 0;
         uint8_t mavlink_seq = 0;
 
+        key_state_t key_states[MAX_KEY_BINDINGS];
+        int key_state_count = build_key_state_list(&cfg, key_states, MAX_KEY_BINDINGS);
+        int key_channel_counts[16] = {0};
+
         if (cfg.protocol == PROTOCOL_CRSF) {
             frame[0] = CRSF_DEST;
             frame[1] = CRSF_FRAME_LEN;
@@ -1232,6 +1435,30 @@ int main(int argc, char **argv)
                 fprintf(stderr, "Configuration reload requested; restarting.\n");
                 restart_requested = 1;
                 break;
+            }
+
+            SDL_Event ev;
+            while (SDL_PollEvent(&ev)) {
+                if (ev.type == SDL_QUIT) {
+                    g_run = 0;
+                    break;
+                }
+                if ((ev.type == SDL_KEYDOWN || ev.type == SDL_KEYUP) && !ev.key.repeat) {
+                    key_state_t *state = find_key_state(key_states, key_state_count,
+                                                        ev.key.keysym.scancode);
+                    if (!state) {
+                        continue;
+                    }
+                    if (ev.type == SDL_KEYDOWN) {
+                        key_state_start(state, &now, key_channel_counts);
+                    } else {
+                        key_state_stop(state, key_channel_counts);
+                    }
+                }
+            }
+
+            for (int i = 0; i < key_state_count; i++) {
+                key_state_maybe_promote(&key_states[i], &cfg, &now, key_channel_counts);
             }
 
             SDL_GameControllerUpdate();
@@ -1368,12 +1595,16 @@ int main(int argc, char **argv)
                 raw_out[i] = raw_source[src];
             }
 
-            if (arm_channel >= 0) {
-                int src = cfg.map[arm_channel];
-                if (src < 0 || src >= 16) {
-                    src = arm_channel;
+            for (int i = 0; i < 16; i++) {
+                if (key_channel_counts[i] > 0) {
+                    uint16_t high = cfg.invert[i] ? CRSF_MIN : CRSF_MAX;
+                    ch_out[i] = high;
+                    raw_out[i] = key_channel_counts[i];
                 }
-                uint16_t arm_input = ch_source[src];
+            }
+
+            if (arm_channel >= 0) {
+                uint16_t arm_input = ch_out[arm_channel];
                 int arm_high = arm_input > 1709;
                 if (arm_high) {
                     if (!arm_press_active) {
