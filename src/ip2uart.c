@@ -92,6 +92,9 @@ typedef struct {
     // Selectors
     uart_backend_t uart_backend;   // tty | stdio
 
+    // CRSF parser
+    int  crsf_detect;              // 0 | 1
+
     // UART
     char uart_device[128];
     int  uart_baud;
@@ -154,6 +157,23 @@ typedef struct {
     bool running;
 } state_t;
 
+/* ------------------------------ CRSF monitor ------------------------------- */
+typedef enum { CRSF_FROM_UART = 0, CRSF_FROM_UDP = 1, CRSF_SRC_MAX = 2 } crsf_source_t;
+
+typedef struct {
+    uint8_t frame[256];
+    size_t len;
+    size_t expected;
+} crsf_stream_t;
+
+typedef struct {
+    bool enabled;
+    crsf_stream_t streams[CRSF_SRC_MAX];
+    uint64_t type_counts[CRSF_SRC_MAX][256];
+    uint64_t invalid_frames[CRSF_SRC_MAX];
+    struct timespec last_report;
+} crsf_monitor_t;
+
 /* ------------------------------- Signals ------------------------------------ */
 static volatile sig_atomic_t g_reload = 0, g_stop = 0;
 static void on_sighup(int sig){ (void)sig; g_reload = 1; }
@@ -197,10 +217,27 @@ static int set_custom_baud(int fd, int baud){
 static void get_mono(struct timespec *ts){ clock_gettime(CLOCK_MONOTONIC, ts); }
 static long long diff_ms(const struct timespec *a, const struct timespec *b){ return (a->tv_sec-b->tv_sec)*1000LL + (a->tv_nsec-b->tv_nsec)/1000000LL; }
 
+static uint8_t crc8_d5(const uint8_t *d, size_t n)
+{
+    uint8_t c = 0;
+    while (n--) {
+        c ^= *d++;
+        for (int i = 0; i < 8; i++) {
+            if (c & 0x80U) {
+                c = (uint8_t)((c << 1) ^ 0xD5U);
+            } else {
+                c <<= 1;
+            }
+        }
+    }
+    return c;
+}
+
 static int parse_config(const char *path, config_t *cfg){
     memset(cfg,0,sizeof(*cfg));
     // Defaults
     cfg->uart_backend = UART_TTY;
+    cfg->crsf_detect = 0;
 
     strcpy(cfg->uart_device, "/dev/ttyS1");
     cfg->uart_baud=115200; cfg->uart_databits=8; strcpy(cfg->uart_parity,"none"); cfg->uart_stopbits=1; strcpy(cfg->uart_flow,"none");
@@ -248,6 +285,7 @@ static int parse_config(const char *path, config_t *cfg){
 
         else if(!strcmp(key,"rx_buf")) cfg->rx_buf=(size_t)strtoul(val,NULL,10);
         else if(!strcmp(key,"tx_buf")) cfg->tx_buf=(size_t)strtoul(val,NULL,10);
+        else if(!strcmp(key,"crsf_detect")) cfg->crsf_detect=atoi(val);
     }
     fclose(f);
 
@@ -412,6 +450,161 @@ static void reset_stats_window(state_t *st){
     st->last_report_bytes_net_to_uart = st->bytes_net_to_uart;
 }
 
+static void crsf_monitor_init(crsf_monitor_t *m, bool enabled)
+{
+    memset(m, 0, sizeof(*m));
+    m->enabled = enabled;
+}
+
+static void crsf_monitor_set_enabled(crsf_monitor_t *m, bool enabled)
+{
+    if (m->enabled == enabled) return;
+    crsf_monitor_init(m, enabled);
+}
+
+static void crsf_stream_reset(crsf_stream_t *s)
+{
+    s->len = 0;
+    s->expected = 0;
+}
+
+static void crsf_monitor_handle_frame(crsf_monitor_t *m, crsf_source_t src, crsf_stream_t *s)
+{
+    if (!m->enabled) return;
+
+    uint8_t len_field = s->frame[1];
+    size_t total = (size_t)len_field + 2;
+    if (len_field < 2 || total != s->len || total < 4 || total > sizeof(s->frame)) {
+        m->invalid_frames[src]++;
+        return;
+    }
+
+    size_t crc_off = total - 1;
+    uint8_t expected_crc = s->frame[crc_off];
+    uint8_t calc_crc = crc8_d5(s->frame + 2, (size_t)len_field - 1);
+    if (calc_crc != expected_crc) {
+        m->invalid_frames[src]++;
+        return;
+    }
+
+    uint8_t type = s->frame[2];
+    m->type_counts[src][type] += 1;
+}
+
+static void crsf_monitor_feed(crsf_monitor_t *m, crsf_source_t src, const uint8_t *data, size_t n)
+{
+    if (!m->enabled) return;
+
+    crsf_stream_t *s = &m->streams[src];
+
+    for (size_t i = 0; i < n; i++) {
+        uint8_t b = data[i];
+
+        if (s->len == 0) {
+            s->frame[0] = b;
+            s->len = 1;
+            s->expected = 0;
+            continue;
+        }
+
+        if (s->len == 1) {
+            s->frame[1] = b;
+            s->len = 2;
+            size_t total = (size_t)b + 2;
+            if (total < 4 || total > sizeof(s->frame)) {
+                crsf_stream_reset(s);
+            } else {
+                s->expected = total;
+            }
+            continue;
+        }
+
+        if (s->len < sizeof(s->frame)) {
+            s->frame[s->len] = b;
+        }
+        s->len++;
+
+        if (s->expected && s->len == s->expected) {
+            crsf_monitor_handle_frame(m, src, s);
+            crsf_stream_reset(s);
+        } else if (s->len >= sizeof(s->frame)) {
+            crsf_stream_reset(s);
+        }
+    }
+}
+
+static void crsf_monitor_maybe_report(crsf_monitor_t *m)
+{
+    if (!m->enabled || !g_verbosity) return;
+
+    struct timespec now;
+    get_mono(&now);
+    if (m->last_report.tv_sec == 0 && m->last_report.tv_nsec == 0) {
+        m->last_report = now;
+        return;
+    }
+
+    long long elapsed_ms = diff_ms(&now, &m->last_report);
+    if (elapsed_ms < 1000) return;
+
+    uint64_t totals_valid[CRSF_SRC_MAX] = {0};
+    uint64_t rc_channels[CRSF_SRC_MAX] = {0};
+    uint64_t gps[CRSF_SRC_MAX] = {0};
+    uint64_t battery[CRSF_SRC_MAX] = {0};
+    uint64_t link_stats[CRSF_SRC_MAX] = {0};
+    uint64_t attitude[CRSF_SRC_MAX] = {0};
+    uint64_t flight_mode[CRSF_SRC_MAX] = {0};
+    uint64_t other[CRSF_SRC_MAX] = {0};
+    uint64_t total_all[CRSF_SRC_MAX] = {0};
+
+    for (int s = 0; s < CRSF_SRC_MAX; s++) {
+        for (int i = 0; i < 256; i++) {
+            totals_valid[s] += m->type_counts[s][i];
+        }
+
+        rc_channels[s] = m->type_counts[s][0x16];
+        gps[s]        = m->type_counts[s][0x02];
+        battery[s]    = m->type_counts[s][0x08];
+        link_stats[s] = m->type_counts[s][0x14];
+        attitude[s]   = m->type_counts[s][0x1E];
+        flight_mode[s]= m->type_counts[s][0x21];
+
+        uint64_t known_sum = rc_channels[s] + gps[s] + battery[s] + link_stats[s] + attitude[s] + flight_mode[s];
+        other[s] = (totals_valid[s] >= known_sum) ? (totals_valid[s] - known_sum) : 0;
+        total_all[s] = totals_valid[s] + m->invalid_frames[s];
+    }
+
+    fprintf(stderr,
+            "[crsf] uart rc=%llu gps=%llu bat=%llu lnk=%llu att=%llu mode=%llu oth=%llu inv=%llu tot=%llu\n"
+            "       udp  rc=%llu gps=%llu bat=%llu lnk=%llu att=%llu mode=%llu oth=%llu inv=%llu tot=%llu\n",
+            (unsigned long long)rc_channels[CRSF_FROM_UART],
+            (unsigned long long)gps[CRSF_FROM_UART],
+            (unsigned long long)battery[CRSF_FROM_UART],
+            (unsigned long long)link_stats[CRSF_FROM_UART],
+            (unsigned long long)attitude[CRSF_FROM_UART],
+            (unsigned long long)flight_mode[CRSF_FROM_UART],
+            (unsigned long long)other[CRSF_FROM_UART],
+            (unsigned long long)m->invalid_frames[CRSF_FROM_UART],
+            (unsigned long long)total_all[CRSF_FROM_UART],
+            (unsigned long long)rc_channels[CRSF_FROM_UDP],
+            (unsigned long long)gps[CRSF_FROM_UDP],
+            (unsigned long long)battery[CRSF_FROM_UDP],
+            (unsigned long long)link_stats[CRSF_FROM_UDP],
+            (unsigned long long)attitude[CRSF_FROM_UDP],
+            (unsigned long long)flight_mode[CRSF_FROM_UDP],
+            (unsigned long long)other[CRSF_FROM_UDP],
+            (unsigned long long)m->invalid_frames[CRSF_FROM_UDP],
+            (unsigned long long)total_all[CRSF_FROM_UDP]);
+    fflush(stderr);
+
+    m->last_report = now;
+
+    for (int s = 0; s < CRSF_SRC_MAX; s++) {
+        memset(m->type_counts[s], 0, sizeof(m->type_counts[s]));
+        m->invalid_frames[s] = 0;
+    }
+}
+
 static void maybe_print_stats(state_t *st){
     if(!g_verbosity) return;
     struct timespec now;
@@ -466,7 +659,7 @@ int main(int argc, char **argv){
             fprintf(stderr,
                 "Usage: %s [-c /path/to/conf] [-v]\n"
                 "  -c FILE   Path to config (default %s)\n"
-                "  -v        Verbose stats once per second\n",
+                "  -v        Verbose stats once per second (enables CRSF output when configured)\n",
                 argv[0], DEFAULT_CONF);
             return 0;
         }
@@ -479,6 +672,9 @@ int main(int argc, char **argv){
     }
     vlog(1, "Loaded config: uart_backend=%s",
          (cfg.uart_backend==UART_TTY?"tty":"stdio"));
+
+    crsf_monitor_t crsf;
+    crsf_monitor_init(&crsf, cfg.crsf_detect && g_verbosity);
 
     state_t st; memset(&st,0,sizeof(st));
     st.fd_uart=st.fd_net=-1; st.fd_stdout=-1;
@@ -569,6 +765,8 @@ int main(int argc, char **argv){
 
                 cfg = newcfg;
 
+                crsf_monitor_set_enabled(&crsf, cfg.crsf_detect && g_verbosity);
+
                 if(rx_resize){
                     free(buf_uart);
                     free(buf_net);
@@ -648,6 +846,7 @@ int main(int argc, char **argv){
                 ssize_t r=read(st.fd_uart,(void*)buf_uart,cfg.rx_buf);
                 if(r>0){
                     get_mono(&st.last_uart_rx);
+                    crsf_monitor_feed(&crsf, CRSF_FROM_UART, buf_uart, (size_t)r);
                     size_t remaining=(size_t)r;
                     size_t offset=0;
                     while(remaining>0){
@@ -675,6 +874,7 @@ int main(int argc, char **argv){
                 struct sockaddr_in from; socklen_t flen=sizeof(from);
                 ssize_t r=recvfrom(st.fd_net, buf_net, cfg.rx_buf, 0,(struct sockaddr*)&from,&flen);
                 if(r>0){
+                    crsf_monitor_feed(&crsf, CRSF_FROM_UDP, buf_net, (size_t)r);
                     if(!cfg.udp_peer_addr[0]){
                         bool changed = !st.udp_peer_set ||
                             st.udp_peer.sin_addr.s_addr!=from.sin_addr.s_addr ||
@@ -730,9 +930,11 @@ int main(int argc, char **argv){
         udp_flush_if_ready(&cfg,&st,false,
             st.udp_out_len >= (size_t)cfg.udp_coalesce_bytes ? "size_threshold" : "pending");
         maybe_print_stats(&st);
+        crsf_monitor_maybe_report(&crsf);
     }
 
     maybe_print_stats(&st);
+    crsf_monitor_maybe_report(&crsf);
     vlog(1, "Exiting");
 
     if(cfg.uart_backend==UART_TTY && st.fd_uart>=0) del_ep(st.epfd,st.fd_uart), close_fd(&st.fd_uart);
