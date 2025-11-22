@@ -1,8 +1,9 @@
 /**
  * joystick2crsf.c - SDL joystick to CRSF bridge with UDP/SSE outputs
  *
- * The utility samples the selected joystick at 250 Hz, maps its controls to
- * 16 CRSF channels, and streams the packed frames to a UDP peer. Runtime
+ * The utility samples the selected joystick at a configurable rate (25–500 Hz),
+ * maps its controls to 16 CRSF channels, and streams the packed frames to a
+ * UDP peer. Runtime
  * behaviour is configured exclusively via a config
  * file (default: /etc/joystick2crsf.conf).
  */
@@ -34,8 +35,7 @@
 #endif
 
 /* ------------------------------------------------------------------------- */
-#define LOOP_HZ            250
-#define LOOP_NS            4000000L               /* 4 ms */
+#define NS_PER_SEC         1000000000L
 #define SSE_INTERVAL_NS    100000000L             /* 10 Hz */
 
 #define CRSF_DEST          0xC8
@@ -72,7 +72,7 @@
 
 /* ------------------------------------------------------------------------- */
 typedef struct {
-    int rate;                   /* 50 | 125 | 250 Hz */
+    int rate;                   /* 25 | 50 | 125 | 250 | 333 | 500 Hz */
     int stats;                  /* print timing stats */
     int channels;               /* print channels */
     int protocol;               /* PROTOCOL_* selector */
@@ -918,6 +918,21 @@ static void parse_key_binding(const char *val, int *dst, const char *path, int l
     *dst = code;
 }
 
+static int rate_supported(int rate)
+{
+    switch (rate) {
+    case 25:
+    case 50:
+    case 125:
+    case 250:
+    case 333:
+    case 500:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
 static void config_defaults(config_t *cfg)
 {
     cfg->rate = 125;
@@ -1277,6 +1292,17 @@ static int64_t timespec_diff_ms(const struct timespec *start, const struct times
     return sec * 1000 + nsec / 1000000L;
 }
 
+static int64_t timespec_diff_ns(const struct timespec *start, const struct timespec *end)
+{
+    int64_t sec = (int64_t)end->tv_sec - (int64_t)start->tv_sec;
+    int64_t nsec = (int64_t)end->tv_nsec - (int64_t)start->tv_nsec;
+    if (nsec < 0) {
+        sec -= 1;
+        nsec += NS_PER_SEC;
+    }
+    return sec * NS_PER_SEC + nsec;
+}
+
 /* ------------------------------- Main -------------------------------------- */
 int main(int argc, char **argv)
 {
@@ -1297,8 +1323,8 @@ int main(int argc, char **argv)
     if (config_load(&cfg, conf_path) < 0) {
         return 1;
     }
-    if (cfg.rate != 50 && cfg.rate != 125 && cfg.rate != 250) {
-        fprintf(stderr, "Config rate must be 50, 125, or 250\n");
+    if (!rate_supported(cfg.rate)) {
+        fprintf(stderr, "Config rate must be 25, 50, 125, 250, 333, or 500\n");
         return 1;
     }
 
@@ -1318,8 +1344,8 @@ int main(int argc, char **argv)
             exit_code = 1;
             break;
         }
-        if (cfg.rate != 50 && cfg.rate != 125 && cfg.rate != 250) {
-            fprintf(stderr, "Config rate must be 50, 125, or 250\n");
+        if (!rate_supported(cfg.rate)) {
+            fprintf(stderr, "Config rate must be 25, 50, 125, 250, 333, or 500\n");
             exit_code = 1;
             break;
         }
@@ -1432,20 +1458,22 @@ int main(int argc, char **argv)
 
         struct timespec next_rescan;
         clock_gettime(CLOCK_MONOTONIC, &next_rescan);
-        struct timespec next_tick = next_rescan;
+        struct timespec next_frame = next_rescan;
         struct timespec next_sse_emit = timespec_add(next_rescan, 0, SSE_INTERVAL_NS);
 
-        uint64_t loops = 0;
-        uint64_t every = LOOP_HZ / (uint64_t)cfg.rate;
-        if (every == 0) {
-            every = 1;
-        }
-        uint64_t frame_count = 0;
+        const long frame_interval_ns = NS_PER_SEC / (long)cfg.rate;
 
         double t_min = 1e9, t_max = 0.0, t_sum = 0.0;
         uint64_t t_cnt = 0;
+        double wait_min = 1e9, wait_max = 0.0, wait_sum = 0.0;
+        uint64_t wait_cnt = 0;
+        uint64_t wake_events = 0;
+        uint64_t wake_timeouts = 0;
         uint64_t udp_packets = 0;
         uint64_t sse_packets = 0;
+
+        struct timespec stats_window_start = next_rescan;
+        struct timespec last_loop = next_rescan;
 
         uint8_t frame[FRAME_BUFFER_MAX];
         size_t frame_len = 0;
@@ -1472,6 +1500,56 @@ int main(int argc, char **argv)
         while (g_run && !restart_requested) {
             struct timespec now;
             clock_gettime(CLOCK_MONOTONIC, &now);
+
+            struct timespec deadline = next_frame;
+            if (!js && timespec_cmp(&next_rescan, &deadline) < 0) {
+                deadline = next_rescan;
+            }
+            if (cfg.sse_enabled && sse_client_fd >= 0 &&
+                timespec_cmp(&next_sse_emit, &deadline) < 0) {
+                deadline = next_sse_emit;
+            }
+
+            int wait_ms = 0;
+            if (timespec_cmp(&now, &deadline) < 0) {
+                int64_t wait_ns = timespec_diff_ns(&now, &deadline);
+                if (wait_ns > 0) {
+                    wait_ms = (int)((wait_ns + 999999L) / 1000000L);
+                }
+            }
+
+            struct timespec wait_start = now;
+            SDL_Event ev;
+            int have_event = SDL_WaitEventTimeout(&ev, wait_ms);
+            if (have_event) {
+                if (ev.type == SDL_JOYDEVICEADDED ||
+                    ev.type == SDL_JOYDEVICEREMOVED ||
+                    ev.type == SDL_CONTROLLERDEVICEADDED ||
+                    ev.type == SDL_CONTROLLERDEVICEREMOVED) {
+                    next_rescan = now;
+                }
+            }
+
+            clock_gettime(CLOCK_MONOTONIC, &now);
+
+            double waited_s = (double)timespec_diff_ns(&wait_start, &now) / 1e9;
+            if (waited_s < wait_min) {
+                wait_min = waited_s;
+            }
+            if (waited_s > wait_max) {
+                wait_max = waited_s;
+            }
+            wait_sum += waited_s;
+            wait_cnt++;
+            if (have_event) {
+                wake_events++;
+            } else {
+                wake_timeouts++;
+            }
+
+            if (!have_event && timespec_cmp(&now, &deadline) < 0) {
+                continue;
+            }
 
             if (g_reload) {
                 g_reload = 0;
@@ -1712,6 +1790,8 @@ int main(int argc, char **argv)
                 }
             }
 
+            int ready_for_frame = (timespec_cmp(&now, &next_frame) >= 0);
+
             if (cfg.sse_enabled && sse_fd >= 0) {
                 int accepted = sse_accept_pending(sse_fd, &sse_client_fd, cfg.sse_path);
                 if (accepted > 0) {
@@ -1729,9 +1809,7 @@ int main(int argc, char **argv)
                 }
             }
 
-            frame_count++;
-            if (frame_count >= every) {
-                frame_count = 0;
+            if (ready_for_frame) {
                 if (cfg.protocol == PROTOCOL_CRSF) {
                     pack_channels(ch_out, frame + 3);
                     frame[CRSF_FRAME_LEN + 1] = crc8(frame + 2, CRSF_FRAME_LEN - 1);
@@ -1765,12 +1843,9 @@ int main(int argc, char **argv)
                     }
                 }
             }
-            loops++;
 
             if (cfg.stats) {
-                struct timespec current;
-                clock_gettime(CLOCK_MONOTONIC, &current);
-                double dt = (current.tv_sec - next_tick.tv_sec) + (current.tv_nsec - next_tick.tv_nsec) / 1e9;
+                double dt = (double)timespec_diff_ns(&last_loop, &now) / 1e9;
                 if (dt > 0.0) {
                     if (dt < t_min) {
                         t_min = dt;
@@ -1780,10 +1855,18 @@ int main(int argc, char **argv)
                     }
                     t_sum += dt;
                     t_cnt++;
-                    if (t_cnt >= LOOP_HZ) {
+                    if (timespec_diff_ms(&stats_window_start, &now) >= 1000) {
+                        double loop_avg_ms = (t_sum / (double)t_cnt) * 1e3;
+                        double wait_avg_ms = (wait_cnt > 0) ?
+                            (wait_sum / (double)wait_cnt) * 1e3 : 0.0;
+
                         printf("loop min %.3f  max %.3f  avg %.3f ms",
-                               t_min * 1e3, t_max * 1e3,
-                               (t_sum / (double)t_cnt) * 1e3);
+                               t_min * 1e3, t_max * 1e3, loop_avg_ms);
+                        printf("  wait min %.3f  max %.3f  avg %.3f ms",
+                               wait_min * 1e3, wait_max * 1e3, wait_avg_ms);
+                        printf("  wakes event %llu timeout %llu",
+                               (unsigned long long)wake_events,
+                               (unsigned long long)wake_timeouts);
                         if (udp_fd >= 0) {
                             printf("  udp %llu/s",
                                    (unsigned long long)udp_packets);
@@ -1797,17 +1880,25 @@ int main(int argc, char **argv)
                         t_max = 0.0;
                         t_sum = 0.0;
                         t_cnt = 0;
+                        wait_min = 1e9;
+                        wait_max = 0.0;
+                        wait_sum = 0.0;
+                        wait_cnt = 0;
+                        wake_events = 0;
+                        wake_timeouts = 0;
                         udp_packets = 0;
                         sse_packets = 0;
+                        stats_window_start = now;
                     }
                 }
+                last_loop = now;
             }
 
-            next_tick = timespec_add(next_tick, 0, LOOP_NS);
-            if (!g_run) {
-                break;
+            if (timespec_cmp(&now, &next_frame) >= 0) {
+                do {
+                    next_frame = timespec_add(next_frame, 0, frame_interval_ns);
+                } while (timespec_cmp(&now, &next_frame) >= 0);
             }
-            clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next_tick, NULL);
         }
 
         if (gc) {
