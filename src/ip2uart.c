@@ -837,6 +837,7 @@ int main(int argc, char **argv){
                 struct sockaddr_in from; socklen_t flen=sizeof(from);
                 ssize_t r=recvfrom(st.fd_net, buf_net, cfg.rx_buf, 0,(struct sockaddr*)&from,&flen);
                 if(r>0){
+                    crsf_monitor_feed(&crsf, buf_net, (size_t)r);
                     if(!cfg.udp_peer_addr[0]){
                         bool changed = !st.udp_peer_set ||
                             st.udp_peer.sin_addr.s_addr!=from.sin_addr.s_addr ||
