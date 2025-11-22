@@ -1,8 +1,9 @@
 /**
  * joystick2crsf.c - SDL joystick to CRSF bridge with UDP/SSE outputs
  *
- * The utility samples the selected joystick at 250 Hz, maps its controls to
- * 16 CRSF channels, and streams the packed frames to a UDP peer. Runtime
+ * The utility samples the selected joystick at a configurable rate (25–500 Hz),
+ * maps its controls to 16 CRSF channels, and streams the packed frames to a
+ * UDP peer. Runtime
  * behaviour is configured exclusively via a config
  * file (default: /etc/joystick2crsf.conf).
  */
@@ -71,7 +72,7 @@
 
 /* ------------------------------------------------------------------------- */
 typedef struct {
-    int rate;                   /* 50 | 125 | 250 Hz */
+    int rate;                   /* 25 | 50 | 125 | 250 | 333 | 500 Hz */
     int stats;                  /* print timing stats */
     int channels;               /* print channels */
     int protocol;               /* PROTOCOL_* selector */
@@ -917,6 +918,21 @@ static void parse_key_binding(const char *val, int *dst, const char *path, int l
     *dst = code;
 }
 
+static int rate_supported(int rate)
+{
+    switch (rate) {
+    case 25:
+    case 50:
+    case 125:
+    case 250:
+    case 333:
+    case 500:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
 static void config_defaults(config_t *cfg)
 {
     cfg->rate = 125;
@@ -1307,8 +1323,8 @@ int main(int argc, char **argv)
     if (config_load(&cfg, conf_path) < 0) {
         return 1;
     }
-    if (cfg.rate != 50 && cfg.rate != 125 && cfg.rate != 250) {
-        fprintf(stderr, "Config rate must be 50, 125, or 250\n");
+    if (!rate_supported(cfg.rate)) {
+        fprintf(stderr, "Config rate must be 25, 50, 125, 250, 333, or 500\n");
         return 1;
     }
 
@@ -1328,8 +1344,8 @@ int main(int argc, char **argv)
             exit_code = 1;
             break;
         }
-        if (cfg.rate != 50 && cfg.rate != 125 && cfg.rate != 250) {
-            fprintf(stderr, "Config rate must be 50, 125, or 250\n");
+        if (!rate_supported(cfg.rate)) {
+            fprintf(stderr, "Config rate must be 25, 50, 125, 250, 333, or 500\n");
             exit_code = 1;
             break;
         }
