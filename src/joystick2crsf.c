@@ -1774,12 +1774,7 @@ int main(int argc, char **argv)
                 }
             }
 
-            int cmp = timespec_cmp(&now, &next_frame);
-            int ready_for_frame = (cmp >= 0);
-            if (have_event && cmp < 0) {
-                ready_for_frame = 1;
-                next_frame = now;
-            }
+            int ready_for_frame = (timespec_cmp(&now, &next_frame) >= 0);
 
             if (cfg.sse_enabled && sse_fd >= 0) {
                 int accepted = sse_accept_pending(sse_fd, &sse_client_fd, cfg.sse_path);
