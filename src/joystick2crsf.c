@@ -85,6 +85,7 @@ typedef struct {
     int joystick_index;
     int rescan_interval;        /* seconds */
     int use_gamecontroller;
+    int key_log;                /* log key events */
     int key_short[MAX_KEY_BINDINGS];
     int key_long[MAX_KEY_BINDINGS];
     int key_long_ms;            /* ms threshold for long presses */
@@ -960,6 +961,7 @@ static void config_defaults(config_t *cfg)
     cfg->joystick_index = 0;
     cfg->rescan_interval = 5;
     cfg->use_gamecontroller = 1;
+    cfg->key_log = 0;
     cfg->key_long_ms = 600;
     for (int i = 0; i < 16; i++) {
         cfg->map[i] = i;
@@ -1070,6 +1072,11 @@ static int config_load(config_t *cfg, const char *path)
             int b;
             if (parse_bool_value(val, &b) == 0) {
                 cfg->use_gamecontroller = b;
+            }
+        } else if (!strcasecmp(key, "key_log")) {
+            int b;
+            if (parse_bool_value(val, &b) == 0) {
+                cfg->key_log = b;
             }
         } else if (!strcasecmp(key, "key_short")) {
             parse_key_channel_list(val, cfg->key_short, path, lineno, "key_short");
@@ -1256,6 +1263,11 @@ static void key_state_maybe_promote(key_state_t *state, const config_t *cfg,
     state->active_channel = state->long_channel;
     state->long_active = 1;
     key_channel_activate(channel_counts, state->active_channel);
+
+    if (cfg->key_log) {
+        fprintf(stderr, "Key %s long -> channel %d\n",
+                SDL_GetScancodeName(state->scancode), state->active_channel + 1);
+    }
 }
 
 /* ------------------------------- Main -------------------------------------- */
@@ -1447,12 +1459,28 @@ int main(int argc, char **argv)
                     key_state_t *state = find_key_state(key_states, key_state_count,
                                                         ev.key.keysym.scancode);
                     if (!state) {
+                        if (cfg.key_log) {
+                            fprintf(stderr, "Key %s %s (unbound)\n",
+                                    SDL_GetScancodeName(ev.key.keysym.scancode),
+                                    ev.type == SDL_KEYDOWN ? "down" : "up");
+                        }
                         continue;
                     }
                     if (ev.type == SDL_KEYDOWN) {
                         key_state_start(state, &now, key_channel_counts);
+                        if (cfg.key_log) {
+                            fprintf(stderr, "Key %s down -> channel %d (long in %d ms)\n",
+                                    SDL_GetScancodeName(ev.key.keysym.scancode),
+                                    state->active_channel + 1, cfg.key_long_ms);
+                        }
                     } else {
+                        int released_channel = state->active_channel;
                         key_state_stop(state, key_channel_counts);
+                        if (cfg.key_log) {
+                            fprintf(stderr, "Key %s up (released channel %d)\n",
+                                    SDL_GetScancodeName(ev.key.keysym.scancode),
+                                    released_channel + 1);
+                        }
                     }
                 }
             }
