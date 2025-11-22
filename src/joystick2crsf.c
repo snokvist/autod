@@ -1449,6 +1449,10 @@ int main(int argc, char **argv)
 
         double t_min = 1e9, t_max = 0.0, t_sum = 0.0;
         uint64_t t_cnt = 0;
+        double wait_min = 1e9, wait_max = 0.0, wait_sum = 0.0;
+        uint64_t wait_cnt = 0;
+        uint64_t wake_events = 0;
+        uint64_t wake_timeouts = 0;
         uint64_t udp_packets = 0;
         uint64_t sse_packets = 0;
 
@@ -1498,6 +1502,7 @@ int main(int argc, char **argv)
                 }
             }
 
+            struct timespec wait_start = now;
             SDL_Event ev;
             int have_event = SDL_WaitEventTimeout(&ev, wait_ms);
             if (have_event) {
@@ -1510,6 +1515,21 @@ int main(int argc, char **argv)
             }
 
             clock_gettime(CLOCK_MONOTONIC, &now);
+
+            double waited_s = (double)timespec_diff_ns(&wait_start, &now) / 1e9;
+            if (waited_s < wait_min) {
+                wait_min = waited_s;
+            }
+            if (waited_s > wait_max) {
+                wait_max = waited_s;
+            }
+            wait_sum += waited_s;
+            wait_cnt++;
+            if (have_event) {
+                wake_events++;
+            } else {
+                wake_timeouts++;
+            }
 
             if (!have_event && timespec_cmp(&now, &deadline) < 0) {
                 continue;
@@ -1825,9 +1845,17 @@ int main(int argc, char **argv)
                     t_sum += dt;
                     t_cnt++;
                     if (timespec_diff_ms(&stats_window_start, &now) >= 1000) {
+                        double loop_avg_ms = (t_sum / (double)t_cnt) * 1e3;
+                        double wait_avg_ms = (wait_cnt > 0) ?
+                            (wait_sum / (double)wait_cnt) * 1e3 : 0.0;
+
                         printf("loop min %.3f  max %.3f  avg %.3f ms",
-                               t_min * 1e3, t_max * 1e3,
-                               (t_sum / (double)t_cnt) * 1e3);
+                               t_min * 1e3, t_max * 1e3, loop_avg_ms);
+                        printf("  wait min %.3f  max %.3f  avg %.3f ms",
+                               wait_min * 1e3, wait_max * 1e3, wait_avg_ms);
+                        printf("  wakes event %llu timeout %llu",
+                               (unsigned long long)wake_events,
+                               (unsigned long long)wake_timeouts);
                         if (udp_fd >= 0) {
                             printf("  udp %llu/s",
                                    (unsigned long long)udp_packets);
@@ -1841,6 +1869,12 @@ int main(int argc, char **argv)
                         t_max = 0.0;
                         t_sum = 0.0;
                         t_cnt = 0;
+                        wait_min = 1e9;
+                        wait_max = 0.0;
+                        wait_sum = 0.0;
+                        wait_cnt = 0;
+                        wake_events = 0;
+                        wake_timeouts = 0;
                         udp_packets = 0;
                         sse_packets = 0;
                         stats_window_start = now;
