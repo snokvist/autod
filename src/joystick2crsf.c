@@ -19,6 +19,7 @@
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
@@ -86,6 +87,7 @@ typedef struct {
     int rescan_interval;        /* seconds */
     int use_gamecontroller;
     int key_log;                /* log key events */
+    char key_log_path[256];
     int key_short[MAX_KEY_BINDINGS];
     int key_long[MAX_KEY_BINDINGS];
     int key_long_ms;            /* ms threshold for long presses */
@@ -962,6 +964,7 @@ static void config_defaults(config_t *cfg)
     cfg->rescan_interval = 5;
     cfg->use_gamecontroller = 1;
     cfg->key_log = 0;
+    cfg->key_log_path[0] = '\0';
     cfg->key_long_ms = 600;
     for (int i = 0; i < 16; i++) {
         cfg->map[i] = i;
@@ -1078,6 +1081,16 @@ static int config_load(config_t *cfg, const char *path)
             if (parse_bool_value(val, &b) == 0) {
                 cfg->key_log = b;
             }
+        } else if (!strcasecmp(key, "key_log_path")) {
+            size_t len = strlen(val);
+            if (len >= sizeof(cfg->key_log_path)) {
+                fprintf(stderr, "%s:%d: key_log_path too long (max %zu)\n",
+                        path, lineno, sizeof(cfg->key_log_path) - 1);
+                fclose(fp);
+                return -1;
+            }
+            strncpy(cfg->key_log_path, val, sizeof(cfg->key_log_path));
+            cfg->key_log_path[sizeof(cfg->key_log_path) - 1] = '\0';
         } else if (!strcasecmp(key, "key_short")) {
             parse_key_channel_list(val, cfg->key_short, path, lineno, "key_short");
         } else if (!strcasecmp(key, "key_long")) {
@@ -1179,6 +1192,19 @@ static int64_t timespec_diff_ms(const struct timespec *start, const struct times
     return sec * 1000 + nsec / 1000000L;
 }
 
+static void key_logf(FILE *fp, const char *fmt, ...)
+{
+    if (!fp) {
+        return;
+    }
+
+    va_list ap;
+    va_start(ap, fmt);
+    vfprintf(fp, fmt, ap);
+    va_end(ap);
+    fflush(fp);
+}
+
 /* -------------------------- Keyboard helpers ------------------------------- */
 static int build_key_state_list(const config_t *cfg, key_state_t *out, int max)
 {
@@ -1248,7 +1274,8 @@ static void key_state_stop(key_state_t *state, int channel_counts[16])
 
 static void key_state_maybe_promote(key_state_t *state, const config_t *cfg,
                                     const struct timespec *now,
-                                    int channel_counts[16])
+                                    int channel_counts[16],
+                                    FILE *key_log_fp)
 {
     if (!state->pressed || state->long_active || state->long_channel < 0) {
         return;
@@ -1265,8 +1292,8 @@ static void key_state_maybe_promote(key_state_t *state, const config_t *cfg,
     key_channel_activate(channel_counts, state->active_channel);
 
     if (cfg->key_log) {
-        fprintf(stderr, "Key %s long -> channel %d\n",
-                SDL_GetScancodeName(state->scancode), state->active_channel + 1);
+        key_logf(key_log_fp, "Key %s long -> channel %d\n",
+                 SDL_GetScancodeName(state->scancode), state->active_channel + 1);
     }
 }
 
@@ -1320,6 +1347,7 @@ int main(int argc, char **argv)
         int udp_fd = -1;
         int sse_fd = -1;
         int sse_client_fd = -1;
+        FILE *key_log_fp = NULL;
         struct sockaddr_storage udp_addr;
         socklen_t udp_addrlen = 0;
         SDL_GameController *gc = NULL;
@@ -1332,6 +1360,23 @@ int main(int argc, char **argv)
         int fatal_error = 0;
         int restart_requested = 0;
         int restart_sleep = 0;
+
+        if (cfg.key_log) {
+            if (cfg.key_log_path[0]) {
+                key_log_fp = fopen(cfg.key_log_path, "a");
+                if (!key_log_fp) {
+                    fprintf(stderr, "Failed to open key_log_path %s: %s; falling back to stderr\n",
+                            cfg.key_log_path, strerror(errno));
+                    key_log_fp = stderr;
+                }
+            } else {
+                key_log_fp = stderr;
+            }
+
+            if (key_log_fp && key_log_fp != stderr) {
+                setvbuf(key_log_fp, NULL, _IOLBF, 0);
+            }
+        }
 
         if (!fatal_error && cfg.udp_enabled) {
             if (cfg.udp_target[0] == '\0') {
@@ -1370,6 +1415,9 @@ int main(int argc, char **argv)
             }
             js = NULL;
             js_owned = 0;
+            if (key_log_fp && key_log_fp != stderr) {
+                fclose(key_log_fp);
+            }
             if (udp_fd >= 0) {
                 close(udp_fd);
             }
@@ -1460,33 +1508,35 @@ int main(int argc, char **argv)
                                                         ev.key.keysym.scancode);
                     if (!state) {
                         if (cfg.key_log) {
-                            fprintf(stderr, "Key %s %s (unbound)\n",
-                                    SDL_GetScancodeName(ev.key.keysym.scancode),
-                                    ev.type == SDL_KEYDOWN ? "down" : "up");
+                            key_logf(key_log_fp, "Key %s %s (unbound)\n",
+                                     SDL_GetScancodeName(ev.key.keysym.scancode),
+                                     ev.type == SDL_KEYDOWN ? "down" : "up");
                         }
                         continue;
                     }
                     if (ev.type == SDL_KEYDOWN) {
                         key_state_start(state, &now, key_channel_counts);
                         if (cfg.key_log) {
-                            fprintf(stderr, "Key %s down -> channel %d (long in %d ms)\n",
-                                    SDL_GetScancodeName(ev.key.keysym.scancode),
-                                    state->active_channel + 1, cfg.key_long_ms);
+                            key_logf(key_log_fp,
+                                     "Key %s down -> channel %d (long in %d ms)\n",
+                                     SDL_GetScancodeName(ev.key.keysym.scancode),
+                                     state->active_channel + 1, cfg.key_long_ms);
                         }
                     } else {
                         int released_channel = state->active_channel;
                         key_state_stop(state, key_channel_counts);
                         if (cfg.key_log) {
-                            fprintf(stderr, "Key %s up (released channel %d)\n",
-                                    SDL_GetScancodeName(ev.key.keysym.scancode),
-                                    released_channel + 1);
+                            key_logf(key_log_fp, "Key %s up (released channel %d)\n",
+                                     SDL_GetScancodeName(ev.key.keysym.scancode),
+                                     released_channel + 1);
                         }
                     }
                 }
             }
 
             for (int i = 0; i < key_state_count; i++) {
-                key_state_maybe_promote(&key_states[i], &cfg, &now, key_channel_counts);
+                key_state_maybe_promote(&key_states[i], &cfg, &now, key_channel_counts,
+                                        key_log_fp);
             }
 
             SDL_GameControllerUpdate();
@@ -1784,6 +1834,10 @@ int main(int argc, char **argv)
         if (sse_fd >= 0) {
             close(sse_fd);
             sse_fd = -1;
+        }
+        if (key_log_fp && key_log_fp != stderr) {
+            fclose(key_log_fp);
+            key_log_fp = NULL;
         }
 
         if (fatal_error || !g_run) {
