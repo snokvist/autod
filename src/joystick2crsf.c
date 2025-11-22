@@ -1314,15 +1314,38 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    if (!getenv("SDL_VIDEODRIVER") && !getenv("DISPLAY") && !getenv("WAYLAND_DISPLAY")) {
+    int forced_dummy = 0;
+    const char *env_videodriver = getenv("SDL_VIDEODRIVER");
+    if (!env_videodriver && !getenv("DISPLAY") && !getenv("WAYLAND_DISPLAY")) {
         SDL_SetHint(SDL_HINT_VIDEODRIVER, "dummy");
-        fprintf(stderr, "No DISPLAY detected; forcing SDL_VIDEODRIVER=dummy for keyboard events.\n");
+        forced_dummy = 1;
     }
 
     uint32_t sdl_flags = SDL_INIT_VIDEO | SDL_INIT_JOYSTICK | SDL_INIT_GAMECONTROLLER | SDL_INIT_EVENTS;
     if (SDL_Init(sdl_flags) < 0) {
         fprintf(stderr, "SDL init failed: %s\n", SDL_GetError());
         return 1;
+    }
+
+    SDL_Window *key_window = NULL;
+    const char *video_driver = SDL_GetCurrentVideoDriver();
+    if (video_driver && strcmp(video_driver, "dummy") == 0) {
+        fprintf(stderr, "SDL video driver 'dummy' does not provide keyboard events; set DISPLAY or SDL_VIDEODRIVER to a real driver if you need key bindings.\n");
+    } else if (forced_dummy) {
+        fprintf(stderr, "No DISPLAY detected; keyboard bindings require a usable SDL video driver. Set DISPLAY or SDL_VIDEODRIVER before launch to pick a driver with keyboard support.\n");
+    } else {
+        key_window = SDL_CreateWindow("joystick2crsf keyboard", SDL_WINDOWPOS_UNDEFINED,
+                                      SDL_WINDOWPOS_UNDEFINED, 320, 180,
+                                      SDL_WINDOW_SHOWN | SDL_WINDOW_ALWAYS_ON_TOP);
+        if (key_window) {
+            SDL_SetWindowGrab(key_window, SDL_TRUE);
+            if (cfg.key_log) {
+                fprintf(stderr, "Keyboard capture window created using video driver '%s'; focus it if the terminal does not receive events.\n",
+                        video_driver ? video_driver : "unknown");
+            }
+        } else {
+            fprintf(stderr, "Failed to create keyboard capture window: %s\n", SDL_GetError());
+        }
     }
 
     int exit_code = 0;
@@ -1837,6 +1860,9 @@ int main(int argc, char **argv)
         }
     }
 
+    if (key_window) {
+        SDL_DestroyWindow(key_window);
+    }
     SDL_Quit();
     return exit_code;
 }
