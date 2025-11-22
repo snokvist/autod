@@ -552,7 +552,7 @@ static void crsf_monitor_maybe_report(crsf_monitor_t *m)
     uint64_t other = (total_valid >= known_sum) ? (total_valid - known_sum) : 0;
     uint64_t total_all = total_valid + m->invalid_frames;
 
-    fprintf(stdout,
+    fprintf(stderr,
             "[crsf] rc=%llu gps=%llu battery=%llu link=%llu attitude=%llu mode=%llu other=%llu invalid=%llu total=%llu\n",
             (unsigned long long)rc_channels,
             (unsigned long long)gps,
@@ -563,7 +563,7 @@ static void crsf_monitor_maybe_report(crsf_monitor_t *m)
             (unsigned long long)other,
             (unsigned long long)m->invalid_frames,
             (unsigned long long)total_all);
-    fflush(stdout);
+    fflush(stderr);
 
     m->last_report = now;
 }
