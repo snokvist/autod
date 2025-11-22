@@ -63,6 +63,8 @@
 
 #define KEY_TRIGGER_HIGH    1700
 #define KEY_TRIGGER_LOW     1500
+#define KEY_TRIGGER_NEG_HIGH (CRSF_MIN + (CRSF_MAX - KEY_TRIGGER_HIGH))
+#define KEY_TRIGGER_NEG_LOW  (CRSF_MIN + (CRSF_MAX - KEY_TRIGGER_LOW))
 #define KEY_LONG_DEFAULT_MS 700
 
 #define DEFAULT_CONF       "/etc/joystick2crsf.conf"
@@ -92,6 +94,8 @@ typedef struct {
     int use_gamecontroller;
     int key_short[16];
     int key_long[16];
+    int key_short_low[16];
+    int key_long_low[16];
     int key_long_threshold_ms;
     int key_debug;
 } config_t;
@@ -941,6 +945,8 @@ static void config_defaults(config_t *cfg)
         cfg->dead[i] = 0;
         cfg->key_short[i] = -1;
         cfg->key_long[i] = -1;
+        cfg->key_short_low[i] = -1;
+        cfg->key_long_low[i] = -1;
     }
 }
 
@@ -1057,12 +1063,26 @@ static int config_load(config_t *cfg, const char *path)
             } else {
                 fprintf(stderr, "%s:%d: key_short_N expects 1-16\n", path, lineno);
             }
+        } else if (!strncasecmp(key, "key_short_low_", 14)) {
+            int ch = atoi(key + 14);
+            if (ch >= 1 && ch <= 16) {
+                parse_key_binding(val, &cfg->key_short_low[ch - 1], path, lineno);
+            } else {
+                fprintf(stderr, "%s:%d: key_short_low_N expects 1-16\n", path, lineno);
+            }
         } else if (!strncasecmp(key, "key_long_", 9)) {
             int ch = atoi(key + 9);
             if (ch >= 1 && ch <= 16) {
                 parse_key_binding(val, &cfg->key_long[ch - 1], path, lineno);
             } else {
                 fprintf(stderr, "%s:%d: key_long_N expects 1-16\n", path, lineno);
+            }
+        } else if (!strncasecmp(key, "key_long_low_", 13)) {
+            int ch = atoi(key + 13);
+            if (ch >= 1 && ch <= 16) {
+                parse_key_binding(val, &cfg->key_long_low[ch - 1], path, lineno);
+            } else {
+                fprintf(stderr, "%s:%d: key_long_low_N expects 1-16\n", path, lineno);
             }
         } else {
             fprintf(stderr, "%s:%d: unknown key '%s'\n", path, lineno, key);
@@ -1307,7 +1327,8 @@ int main(int argc, char **argv)
         int key_fd = -1;
         int key_enabled = 0;
         for (int i = 0; i < 16; i++) {
-            if (cfg.key_short[i] >= 0 || cfg.key_long[i] >= 0) {
+            if (cfg.key_short[i] >= 0 || cfg.key_long[i] >= 0 ||
+                cfg.key_short_low[i] >= 0 || cfg.key_long_low[i] >= 0) {
                 key_enabled = 1;
                 break;
             }
@@ -1442,8 +1463,11 @@ int main(int argc, char **argv)
         struct timespec arm_press_start = {0, 0};
 
         int key_press_active[16] = {0};
+        int key_press_low_active[16] = {0};
         struct timespec key_press_start[16];
+        struct timespec key_press_low_start[16];
         memset(key_press_start, 0, sizeof(key_press_start));
+        memset(key_press_low_start, 0, sizeof(key_press_low_start));
 
         while (g_run && !restart_requested) {
             struct timespec now;
@@ -1628,34 +1652,62 @@ int main(int argc, char **argv)
 
             if (key_enabled && key_fd >= 0) {
                 for (int i = 0; i < 16; i++) {
-                    if (cfg.key_short[i] < 0 && cfg.key_long[i] < 0) {
-                        continue;
-                    }
-                    int pressed = ch_out[i] >= KEY_TRIGGER_HIGH;
-                    if (pressed) {
-                        if (!key_press_active[i]) {
-                            key_press_start[i] = now;
-                            key_press_active[i] = 1;
-                        }
-                    } else if (key_press_active[i] && ch_out[i] <= KEY_TRIGGER_LOW) {
-                        int64_t held = timespec_diff_ms(&key_press_start[i], &now);
-                        int code = -1;
-                        if (cfg.key_long[i] >= 0 && held >= cfg.key_long_threshold_ms) {
-                            code = cfg.key_long[i];
-                        } else if (cfg.key_short[i] >= 0) {
-                            code = cfg.key_short[i];
-                        } else if (cfg.key_long[i] >= 0) {
-                            code = cfg.key_long[i];
-                        }
-                        if (code >= 0) {
-                            uinput_send_key(key_fd, (uint16_t)code);
-                            if (cfg.key_debug) {
-                                const char *kind = (held >= cfg.key_long_threshold_ms) ? "long" : "short";
-                                fprintf(stderr, "CH%d %s press (%lld ms) -> key %s\n",
-                                        i + 1, kind, (long long)held, keycode_name(code));
+                    if (cfg.key_short[i] >= 0 || cfg.key_long[i] >= 0) {
+                        int pressed = ch_out[i] >= KEY_TRIGGER_HIGH;
+                        if (pressed) {
+                            if (!key_press_active[i]) {
+                                key_press_start[i] = now;
+                                key_press_active[i] = 1;
                             }
+                        } else if (key_press_active[i] && ch_out[i] <= KEY_TRIGGER_LOW) {
+                            int64_t held = timespec_diff_ms(&key_press_start[i], &now);
+                            int code = -1;
+                            if (cfg.key_long[i] >= 0 && held >= cfg.key_long_threshold_ms) {
+                                code = cfg.key_long[i];
+                            } else if (cfg.key_short[i] >= 0) {
+                                code = cfg.key_short[i];
+                            } else if (cfg.key_long[i] >= 0) {
+                                code = cfg.key_long[i];
+                            }
+                            if (code >= 0) {
+                                uinput_send_key(key_fd, (uint16_t)code);
+                                if (cfg.key_debug) {
+                                    const char *kind = (held >= cfg.key_long_threshold_ms) ? "long" : "short";
+                                    fprintf(stderr, "CH%d %s press (%lld ms) -> key %s\n",
+                                            i + 1, kind, (long long)held, keycode_name(code));
+                                }
+                            }
+                            key_press_active[i] = 0;
                         }
-                        key_press_active[i] = 0;
+                    }
+
+                    if (cfg.key_short_low[i] >= 0 || cfg.key_long_low[i] >= 0) {
+                        int pressed_low = ch_out[i] <= KEY_TRIGGER_NEG_HIGH;
+                        if (pressed_low) {
+                            if (!key_press_low_active[i]) {
+                                key_press_low_start[i] = now;
+                                key_press_low_active[i] = 1;
+                            }
+                        } else if (key_press_low_active[i] && ch_out[i] >= KEY_TRIGGER_NEG_LOW) {
+                            int64_t held = timespec_diff_ms(&key_press_low_start[i], &now);
+                            int code = -1;
+                            if (cfg.key_long_low[i] >= 0 && held >= cfg.key_long_threshold_ms) {
+                                code = cfg.key_long_low[i];
+                            } else if (cfg.key_short_low[i] >= 0) {
+                                code = cfg.key_short_low[i];
+                            } else if (cfg.key_long_low[i] >= 0) {
+                                code = cfg.key_long_low[i];
+                            }
+                            if (code >= 0) {
+                                uinput_send_key(key_fd, (uint16_t)code);
+                                if (cfg.key_debug) {
+                                    const char *kind = (held >= cfg.key_long_threshold_ms) ? "long" : "short";
+                                    fprintf(stderr, "CH%d low %s press (%lld ms) -> key %s\n",
+                                            i + 1, kind, (long long)held, keycode_name(code));
+                                }
+                            }
+                            key_press_low_active[i] = 0;
+                        }
                     }
                 }
             }
