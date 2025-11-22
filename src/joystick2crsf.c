@@ -1134,6 +1134,44 @@ static int config_load(config_t *cfg, const char *path)
     return 0;
 }
 
+/* --------------------------- Time helpers ---------------------------------- */
+static int timespec_cmp(const struct timespec *a, const struct timespec *b)
+{
+    if (a->tv_sec != b->tv_sec) {
+        return (a->tv_sec > b->tv_sec) ? 1 : -1;
+    }
+    if (a->tv_nsec != b->tv_nsec) {
+        return (a->tv_nsec > b->tv_nsec) ? 1 : -1;
+    }
+    return 0;
+}
+
+static struct timespec timespec_add(struct timespec ts, int sec, long nsec)
+{
+    ts.tv_sec += sec;
+    ts.tv_nsec += nsec;
+    while (ts.tv_nsec >= 1000000000L) {
+        ts.tv_nsec -= 1000000000L;
+        ts.tv_sec += 1;
+    }
+    while (ts.tv_nsec < 0) {
+        ts.tv_nsec += 1000000000L;
+        ts.tv_sec -= 1;
+    }
+    return ts;
+}
+
+static int64_t timespec_diff_ms(const struct timespec *start, const struct timespec *end)
+{
+    int64_t sec = (int64_t)end->tv_sec - (int64_t)start->tv_sec;
+    int64_t nsec = (int64_t)end->tv_nsec - (int64_t)start->tv_nsec;
+    if (nsec < 0) {
+        sec -= 1;
+        nsec += 1000000000L;
+    }
+    return sec * 1000 + nsec / 1000000L;
+}
+
 /* -------------------------- Keyboard helpers ------------------------------- */
 static int build_key_state_list(const config_t *cfg, key_state_t *out, int max)
 {
@@ -1218,44 +1256,6 @@ static void key_state_maybe_promote(key_state_t *state, const config_t *cfg,
     state->active_channel = state->long_channel;
     state->long_active = 1;
     key_channel_activate(channel_counts, state->active_channel);
-}
-
-/* --------------------------- Time helpers ---------------------------------- */
-static int timespec_cmp(const struct timespec *a, const struct timespec *b)
-{
-    if (a->tv_sec != b->tv_sec) {
-        return (a->tv_sec > b->tv_sec) ? 1 : -1;
-    }
-    if (a->tv_nsec != b->tv_nsec) {
-        return (a->tv_nsec > b->tv_nsec) ? 1 : -1;
-    }
-    return 0;
-}
-
-static struct timespec timespec_add(struct timespec ts, int sec, long nsec)
-{
-    ts.tv_sec += sec;
-    ts.tv_nsec += nsec;
-    while (ts.tv_nsec >= 1000000000L) {
-        ts.tv_nsec -= 1000000000L;
-        ts.tv_sec += 1;
-    }
-    while (ts.tv_nsec < 0) {
-        ts.tv_nsec += 1000000000L;
-        ts.tv_sec -= 1;
-    }
-    return ts;
-}
-
-static int64_t timespec_diff_ms(const struct timespec *start, const struct timespec *end)
-{
-    int64_t sec = (int64_t)end->tv_sec - (int64_t)start->tv_sec;
-    int64_t nsec = (int64_t)end->tv_nsec - (int64_t)start->tv_nsec;
-    if (nsec < 0) {
-        sec -= 1;
-        nsec += 1000000000L;
-    }
-    return sec * 1000 + nsec / 1000000L;
 }
 
 /* ------------------------------- Main -------------------------------------- */
