@@ -575,8 +575,8 @@ static void crsf_monitor_maybe_report(crsf_monitor_t *m)
     }
 
     fprintf(stderr,
-            "[crsf] uart rc=%llu gps=%llu battery=%llu link=%llu attitude=%llu mode=%llu other=%llu invalid=%llu total=%llu | "
-            "udp rc=%llu gps=%llu battery=%llu link=%llu attitude=%llu mode=%llu other=%llu invalid=%llu total=%llu\n",
+            "[crsf] uart rc=%llu gps=%llu bat=%llu lnk=%llu att=%llu mode=%llu oth=%llu inv=%llu tot=%llu\n"
+            "       udp  rc=%llu gps=%llu bat=%llu lnk=%llu att=%llu mode=%llu oth=%llu inv=%llu tot=%llu\n",
             (unsigned long long)rc_channels[CRSF_FROM_UART],
             (unsigned long long)gps[CRSF_FROM_UART],
             (unsigned long long)battery[CRSF_FROM_UART],
