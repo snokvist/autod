@@ -158,13 +158,19 @@ typedef struct {
 } state_t;
 
 /* ------------------------------ CRSF monitor ------------------------------- */
+typedef enum { CRSF_FROM_UART = 0, CRSF_FROM_UDP = 1, CRSF_SRC_MAX = 2 } crsf_source_t;
+
 typedef struct {
-    bool enabled;
     uint8_t frame[256];
     size_t len;
     size_t expected;
-    uint64_t type_counts[256];
-    uint64_t invalid_frames;
+} crsf_stream_t;
+
+typedef struct {
+    bool enabled;
+    crsf_stream_t streams[CRSF_SRC_MAX];
+    uint64_t type_counts[CRSF_SRC_MAX][256];
+    uint64_t invalid_frames[CRSF_SRC_MAX];
     struct timespec last_report;
 } crsf_monitor_t;
 
@@ -456,68 +462,73 @@ static void crsf_monitor_set_enabled(crsf_monitor_t *m, bool enabled)
     crsf_monitor_init(m, enabled);
 }
 
-static void crsf_monitor_handle_frame(crsf_monitor_t *m)
+static void crsf_stream_reset(crsf_stream_t *s)
+{
+    s->len = 0;
+    s->expected = 0;
+}
+
+static void crsf_monitor_handle_frame(crsf_monitor_t *m, crsf_source_t src, crsf_stream_t *s)
 {
     if (!m->enabled) return;
 
-    uint8_t len_field = m->frame[1];
+    uint8_t len_field = s->frame[1];
     size_t total = (size_t)len_field + 2;
-    if (len_field < 2 || total != m->len || total < 4 || total > sizeof(m->frame)) {
-        m->invalid_frames++;
+    if (len_field < 2 || total != s->len || total < 4 || total > sizeof(s->frame)) {
+        m->invalid_frames[src]++;
         return;
     }
 
     size_t crc_off = total - 1;
-    uint8_t expected_crc = m->frame[crc_off];
-    uint8_t calc_crc = crc8_d5(m->frame + 2, (size_t)len_field - 1);
+    uint8_t expected_crc = s->frame[crc_off];
+    uint8_t calc_crc = crc8_d5(s->frame + 2, (size_t)len_field - 1);
     if (calc_crc != expected_crc) {
-        m->invalid_frames++;
+        m->invalid_frames[src]++;
         return;
     }
 
-    uint8_t type = m->frame[2];
-    m->type_counts[type] += 1;
+    uint8_t type = s->frame[2];
+    m->type_counts[src][type] += 1;
 }
 
-static void crsf_monitor_feed(crsf_monitor_t *m, const uint8_t *data, size_t n)
+static void crsf_monitor_feed(crsf_monitor_t *m, crsf_source_t src, const uint8_t *data, size_t n)
 {
     if (!m->enabled) return;
+
+    crsf_stream_t *s = &m->streams[src];
 
     for (size_t i = 0; i < n; i++) {
         uint8_t b = data[i];
 
-        if (m->len == 0) {
-            m->frame[0] = b;
-            m->len = 1;
-            m->expected = 0;
+        if (s->len == 0) {
+            s->frame[0] = b;
+            s->len = 1;
+            s->expected = 0;
             continue;
         }
 
-        if (m->len == 1) {
-            m->frame[1] = b;
-            m->len = 2;
+        if (s->len == 1) {
+            s->frame[1] = b;
+            s->len = 2;
             size_t total = (size_t)b + 2;
-            if (total < 4 || total > sizeof(m->frame)) {
-                m->len = 0;
-                m->expected = 0;
+            if (total < 4 || total > sizeof(s->frame)) {
+                crsf_stream_reset(s);
             } else {
-                m->expected = total;
+                s->expected = total;
             }
             continue;
         }
 
-        if (m->len < sizeof(m->frame)) {
-            m->frame[m->len] = b;
+        if (s->len < sizeof(s->frame)) {
+            s->frame[s->len] = b;
         }
-        m->len++;
+        s->len++;
 
-        if (m->expected && m->len == m->expected) {
-            crsf_monitor_handle_frame(m);
-            m->len = 0;
-            m->expected = 0;
-        } else if (m->len >= sizeof(m->frame)) {
-            m->len = 0;
-            m->expected = 0;
+        if (s->expected && s->len == s->expected) {
+            crsf_monitor_handle_frame(m, src, s);
+            crsf_stream_reset(s);
+        } else if (s->len >= sizeof(s->frame)) {
+            crsf_stream_reset(s);
         }
     }
 }
@@ -536,36 +547,62 @@ static void crsf_monitor_maybe_report(crsf_monitor_t *m)
     long long elapsed_ms = diff_ms(&now, &m->last_report);
     if (elapsed_ms < 1000) return;
 
-    uint64_t total_valid = 0;
-    for (int i = 0; i < 256; i++) {
-        total_valid += m->type_counts[i];
+    uint64_t totals_valid[CRSF_SRC_MAX] = {0};
+    uint64_t rc_channels[CRSF_SRC_MAX] = {0};
+    uint64_t gps[CRSF_SRC_MAX] = {0};
+    uint64_t battery[CRSF_SRC_MAX] = {0};
+    uint64_t link_stats[CRSF_SRC_MAX] = {0};
+    uint64_t attitude[CRSF_SRC_MAX] = {0};
+    uint64_t flight_mode[CRSF_SRC_MAX] = {0};
+    uint64_t other[CRSF_SRC_MAX] = {0};
+    uint64_t total_all[CRSF_SRC_MAX] = {0};
+
+    for (int s = 0; s < CRSF_SRC_MAX; s++) {
+        for (int i = 0; i < 256; i++) {
+            totals_valid[s] += m->type_counts[s][i];
+        }
+
+        rc_channels[s] = m->type_counts[s][0x16];
+        gps[s]        = m->type_counts[s][0x02];
+        battery[s]    = m->type_counts[s][0x08];
+        link_stats[s] = m->type_counts[s][0x14];
+        attitude[s]   = m->type_counts[s][0x1E];
+        flight_mode[s]= m->type_counts[s][0x21];
+
+        uint64_t known_sum = rc_channels[s] + gps[s] + battery[s] + link_stats[s] + attitude[s] + flight_mode[s];
+        other[s] = (totals_valid[s] >= known_sum) ? (totals_valid[s] - known_sum) : 0;
+        total_all[s] = totals_valid[s] + m->invalid_frames[s];
     }
 
-    uint64_t rc_channels = m->type_counts[0x16];
-    uint64_t gps = m->type_counts[0x02];
-    uint64_t battery = m->type_counts[0x08];
-    uint64_t link_stats = m->type_counts[0x14];
-    uint64_t attitude = m->type_counts[0x1E];
-    uint64_t flight_mode = m->type_counts[0x21];
-
-    uint64_t known_sum = rc_channels + gps + battery + link_stats + attitude + flight_mode;
-    uint64_t other = (total_valid >= known_sum) ? (total_valid - known_sum) : 0;
-    uint64_t total_all = total_valid + m->invalid_frames;
-
     fprintf(stderr,
-            "[crsf] rc=%llu gps=%llu battery=%llu link=%llu attitude=%llu mode=%llu other=%llu invalid=%llu total=%llu\n",
-            (unsigned long long)rc_channels,
-            (unsigned long long)gps,
-            (unsigned long long)battery,
-            (unsigned long long)link_stats,
-            (unsigned long long)attitude,
-            (unsigned long long)flight_mode,
-            (unsigned long long)other,
-            (unsigned long long)m->invalid_frames,
-            (unsigned long long)total_all);
+            "[crsf] uart rc=%llu gps=%llu battery=%llu link=%llu attitude=%llu mode=%llu other=%llu invalid=%llu total=%llu | "
+            "udp rc=%llu gps=%llu battery=%llu link=%llu attitude=%llu mode=%llu other=%llu invalid=%llu total=%llu\n",
+            (unsigned long long)rc_channels[CRSF_FROM_UART],
+            (unsigned long long)gps[CRSF_FROM_UART],
+            (unsigned long long)battery[CRSF_FROM_UART],
+            (unsigned long long)link_stats[CRSF_FROM_UART],
+            (unsigned long long)attitude[CRSF_FROM_UART],
+            (unsigned long long)flight_mode[CRSF_FROM_UART],
+            (unsigned long long)other[CRSF_FROM_UART],
+            (unsigned long long)m->invalid_frames[CRSF_FROM_UART],
+            (unsigned long long)total_all[CRSF_FROM_UART],
+            (unsigned long long)rc_channels[CRSF_FROM_UDP],
+            (unsigned long long)gps[CRSF_FROM_UDP],
+            (unsigned long long)battery[CRSF_FROM_UDP],
+            (unsigned long long)link_stats[CRSF_FROM_UDP],
+            (unsigned long long)attitude[CRSF_FROM_UDP],
+            (unsigned long long)flight_mode[CRSF_FROM_UDP],
+            (unsigned long long)other[CRSF_FROM_UDP],
+            (unsigned long long)m->invalid_frames[CRSF_FROM_UDP],
+            (unsigned long long)total_all[CRSF_FROM_UDP]);
     fflush(stderr);
 
     m->last_report = now;
+
+    for (int s = 0; s < CRSF_SRC_MAX; s++) {
+        memset(m->type_counts[s], 0, sizeof(m->type_counts[s]));
+        m->invalid_frames[s] = 0;
+    }
 }
 
 static void maybe_print_stats(state_t *st){
@@ -809,7 +846,7 @@ int main(int argc, char **argv){
                 ssize_t r=read(st.fd_uart,(void*)buf_uart,cfg.rx_buf);
                 if(r>0){
                     get_mono(&st.last_uart_rx);
-                    crsf_monitor_feed(&crsf, buf_uart, (size_t)r);
+                    crsf_monitor_feed(&crsf, CRSF_FROM_UART, buf_uart, (size_t)r);
                     size_t remaining=(size_t)r;
                     size_t offset=0;
                     while(remaining>0){
@@ -837,7 +874,7 @@ int main(int argc, char **argv){
                 struct sockaddr_in from; socklen_t flen=sizeof(from);
                 ssize_t r=recvfrom(st.fd_net, buf_net, cfg.rx_buf, 0,(struct sockaddr*)&from,&flen);
                 if(r>0){
-                    crsf_monitor_feed(&crsf, buf_net, (size_t)r);
+                    crsf_monitor_feed(&crsf, CRSF_FROM_UDP, buf_net, (size_t)r);
                     if(!cfg.udp_peer_addr[0]){
                         bool changed = !st.udp_peer_set ||
                             st.udp_peer.sin_addr.s_addr!=from.sin_addr.s_addr ||
