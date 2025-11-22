@@ -32,6 +32,10 @@
 #define MSG_NOSIGNAL 0
 #endif
 
+#ifndef SDL_HINT_VIDEODRIVER
+#define SDL_HINT_VIDEODRIVER "SDL_VIDEODRIVER"
+#endif
+
 /* ------------------------------------------------------------------------- */
 #define LOOP_HZ            250
 #define LOOP_NS            4000000L               /* 4 ms */
