@@ -87,7 +87,6 @@ typedef struct {
     int rescan_interval;        /* seconds */
     int use_gamecontroller;
     int key_log;                /* log key events */
-    char key_log_path[256];
     int key_short[MAX_KEY_BINDINGS];
     int key_long[MAX_KEY_BINDINGS];
     int key_long_ms;            /* ms threshold for long presses */
@@ -964,7 +963,6 @@ static void config_defaults(config_t *cfg)
     cfg->rescan_interval = 5;
     cfg->use_gamecontroller = 1;
     cfg->key_log = 0;
-    cfg->key_log_path[0] = '\0';
     cfg->key_long_ms = 600;
     for (int i = 0; i < 16; i++) {
         cfg->map[i] = i;
@@ -1081,16 +1079,6 @@ static int config_load(config_t *cfg, const char *path)
             if (parse_bool_value(val, &b) == 0) {
                 cfg->key_log = b;
             }
-        } else if (!strcasecmp(key, "key_log_path")) {
-            size_t len = strlen(val);
-            if (len >= sizeof(cfg->key_log_path)) {
-                fprintf(stderr, "%s:%d: key_log_path too long (max %zu)\n",
-                        path, lineno, sizeof(cfg->key_log_path) - 1);
-                fclose(fp);
-                return -1;
-            }
-            strncpy(cfg->key_log_path, val, sizeof(cfg->key_log_path));
-            cfg->key_log_path[sizeof(cfg->key_log_path) - 1] = '\0';
         } else if (!strcasecmp(key, "key_short")) {
             parse_key_channel_list(val, cfg->key_short, path, lineno, "key_short");
         } else if (!strcasecmp(key, "key_long")) {
@@ -1322,8 +1310,14 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    if (SDL_Init(SDL_INIT_JOYSTICK | SDL_INIT_GAMECONTROLLER | SDL_INIT_EVENTS) < 0) {
-        fprintf(stderr, "SDL: %s\n", SDL_GetError());
+    if (!getenv("SDL_VIDEODRIVER") && !getenv("DISPLAY") && !getenv("WAYLAND_DISPLAY")) {
+        SDL_SetHint(SDL_HINT_VIDEODRIVER, "dummy");
+        fprintf(stderr, "No DISPLAY detected; forcing SDL_VIDEODRIVER=dummy for keyboard events.\n");
+    }
+
+    uint32_t sdl_flags = SDL_INIT_VIDEO | SDL_INIT_JOYSTICK | SDL_INIT_GAMECONTROLLER | SDL_INIT_EVENTS;
+    if (SDL_Init(sdl_flags) < 0) {
+        fprintf(stderr, "SDL init failed: %s\n", SDL_GetError());
         return 1;
     }
 
@@ -1347,7 +1341,7 @@ int main(int argc, char **argv)
         int udp_fd = -1;
         int sse_fd = -1;
         int sse_client_fd = -1;
-        FILE *key_log_fp = NULL;
+        FILE *key_log_fp = cfg.key_log ? stderr : NULL;
         struct sockaddr_storage udp_addr;
         socklen_t udp_addrlen = 0;
         SDL_GameController *gc = NULL;
@@ -1360,23 +1354,6 @@ int main(int argc, char **argv)
         int fatal_error = 0;
         int restart_requested = 0;
         int restart_sleep = 0;
-
-        if (cfg.key_log) {
-            if (cfg.key_log_path[0]) {
-                key_log_fp = fopen(cfg.key_log_path, "a");
-                if (!key_log_fp) {
-                    fprintf(stderr, "Failed to open key_log_path %s: %s; falling back to stderr\n",
-                            cfg.key_log_path, strerror(errno));
-                    key_log_fp = stderr;
-                }
-            } else {
-                key_log_fp = stderr;
-            }
-
-            if (key_log_fp && key_log_fp != stderr) {
-                setvbuf(key_log_fp, NULL, _IOLBF, 0);
-            }
-        }
 
         if (!fatal_error && cfg.udp_enabled) {
             if (cfg.udp_target[0] == '\0') {
@@ -1415,9 +1392,6 @@ int main(int argc, char **argv)
             }
             js = NULL;
             js_owned = 0;
-            if (key_log_fp && key_log_fp != stderr) {
-                fclose(key_log_fp);
-            }
             if (udp_fd >= 0) {
                 close(udp_fd);
             }
@@ -1474,6 +1448,15 @@ int main(int argc, char **argv)
         key_state_t key_states[MAX_KEY_BINDINGS];
         int key_state_count = build_key_state_list(&cfg, key_states, MAX_KEY_BINDINGS);
         int key_channel_counts[16] = {0};
+
+        if (cfg.key_log) {
+            fprintf(stderr, "Key logging enabled on stderr with %d binding%s (long press %d ms).\n",
+                    key_state_count, key_state_count == 1 ? "" : "s", cfg.key_long_ms);
+            if (key_state_count == 0) {
+                fprintf(stderr, "No key_short/key_long entries are configured; SDL key events will still log as unbound.\n");
+            }
+            fprintf(stderr, "Ensure the joystick2crsf terminal has focus so SDL receives keyboard events.\n");
+        }
 
         if (cfg.protocol == PROTOCOL_CRSF) {
             frame[0] = CRSF_DEST;
@@ -1835,10 +1818,7 @@ int main(int argc, char **argv)
             close(sse_fd);
             sse_fd = -1;
         }
-        if (key_log_fp && key_log_fp != stderr) {
-            fclose(key_log_fp);
-            key_log_fp = NULL;
-        }
+        key_log_fp = NULL;
 
         if (fatal_error || !g_run) {
             break;
