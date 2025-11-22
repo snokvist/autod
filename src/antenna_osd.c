@@ -25,12 +25,12 @@
 
 #define MAX_INFO_SOURCES 2
 
-static int last_valid_rssi=0, neg1_count_rssi=0, last_valid_udp=0, neg1_count_udp=0;
+static int last_valid_rssi=0, neg1_count_rssi=0, last_valid_rssi2=0, neg1_count_rssi2=0;
 static char *info_buf[MAX_INFO_SOURCES]={NULL,NULL};
 static size_t info_size[MAX_INFO_SOURCES]={0,0};
 static time_t last_info_attempt[MAX_INFO_SOURCES]={0,0};
 static bool info_buf_valid[MAX_INFO_SOURCES]={false,false};
-static int rssi_hist[3]={-1,-1,-1}, udp_hist[3]={-1,-1,-1};
+static int rssi_hist[3]={-1,-1,-1}, rssi2_hist[3]={-1,-1,-1};
 
 #define DEF_CFG_FILE        "/etc/antenna_osd.conf"
 #define DEF_INFO_FILE       "/proc/net/*8*/wlan0/trx_info_debug"
@@ -58,8 +58,8 @@ static int rssi_hist[3]={-1,-1,-1}, udp_hist[3]={-1,-1,-1};
 #define DEF_RSSI_KEY        "rssi"
 #define DEF_CURR_TX_RATE_KEY "curr_tx_rate"
 #define DEF_CURR_TX_BW_KEY   "curr_tx_bw"
-#define DEF_RSSI_UDP_ENABLE  0
-#define DEF_RSSI_UDP_KEY     "rssi_udp"
+#define DEF_RSSI_2_ENABLE  0
+#define DEF_RSSI_2_KEY     "rssi_2"
 #define DEF_TX_POWER_KEY     "txpwr"
 
 static inline int64_t now_ms(void){
@@ -91,8 +91,8 @@ typedef struct {
     const char *rssi_key;
     const char *curr_tx_rate_key;
     const char *curr_tx_bw_key;
-    bool        rssi_udp_enable;
-    const char *rssi_udp_key;
+    bool        rssi2_enable;
+    const char *rssi2_key;
     const char *tx_power_key;
 } cfg_t;
 
@@ -101,7 +101,7 @@ static const cfg_t cfg_default = {
     .osd_hdr=DEF_OSD_HDR, .osd_hdr2=DEF_OSD_HDR2, .sys_msg_hdr=DEF_SYS_MSG_HDR, .system_msg="", .show_stats_line=DEF_SHOW_STATS, .sys_msg_timeout=DEF_SYS_MSG_TIMEOUT,
     .rssi_control=DEF_RSSI_CONTROL, .rssi_hdr={DEF_RSSI_RANGE0,DEF_RSSI_RANGE1,DEF_RSSI_RANGE2,DEF_RSSI_RANGE3,DEF_RSSI_RANGE4,DEF_RSSI_RANGE5},
     .start_sym=DEF_START, .end_sym=DEF_END, .empty_sym=DEF_EMPTY, .rssi_key=DEF_RSSI_KEY,
-    .curr_tx_rate_key=DEF_CURR_TX_RATE_KEY, .curr_tx_bw_key=DEF_CURR_TX_BW_KEY, .rssi_udp_enable=DEF_RSSI_UDP_ENABLE, .rssi_udp_key=DEF_RSSI_UDP_KEY, .tx_power_key=DEF_TX_POWER_KEY
+    .curr_tx_rate_key=DEF_CURR_TX_RATE_KEY, .curr_tx_bw_key=DEF_CURR_TX_BW_KEY, .rssi2_enable=DEF_RSSI_2_ENABLE, .rssi2_key=DEF_RSSI_2_KEY, .tx_power_key=DEF_TX_POWER_KEY
 };
 
 static cfg_t cfg;
@@ -141,7 +141,7 @@ static void free_config_strings(void)
     if (cfg.rssi_key && cfg.rssi_key != cfg_default.rssi_key) free((void *)cfg.rssi_key);
     if (cfg.curr_tx_rate_key && cfg.curr_tx_rate_key != cfg_default.curr_tx_rate_key) free((void *)cfg.curr_tx_rate_key);
     if (cfg.curr_tx_bw_key && cfg.curr_tx_bw_key != cfg_default.curr_tx_bw_key) free((void *)cfg.curr_tx_bw_key);
-    if (cfg.rssi_udp_key && cfg.rssi_udp_key != cfg_default.rssi_udp_key) free((void *)cfg.rssi_udp_key);
+    if (cfg.rssi2_key && cfg.rssi2_key != cfg_default.rssi2_key) free((void *)cfg.rssi2_key);
     if (cfg.tx_power_key && cfg.tx_power_key != cfg_default.tx_power_key) free((void *)cfg.tx_power_key);
 }
 
@@ -201,8 +201,8 @@ static void set_cfg_field(const char *k, const char *v)
     else if (EQ(k, "rssi_key")) set_cfg_string(&cfg.rssi_key, v, cfg_default.rssi_key);
     else if (EQ(k, "curr_tx_rate_key")) set_cfg_string(&cfg.curr_tx_rate_key, v, cfg_default.curr_tx_rate_key);
     else if (EQ(k, "curr_tx_bw_key")) set_cfg_string(&cfg.curr_tx_bw_key, v, cfg_default.curr_tx_bw_key);
-    else if (EQ(k, "rssi_udp_enable")) cfg.rssi_udp_enable = atoi(v) != 0;
-    else if (EQ(k, "rssi_udp_key")) set_cfg_string(&cfg.rssi_udp_key, v, cfg_default.rssi_udp_key);
+    else if (EQ(k, "rssi_2_enable")) cfg.rssi2_enable = atoi(v) != 0;
+    else if (EQ(k, "rssi_2_key")) set_cfg_string(&cfg.rssi2_key, v, cfg_default.rssi2_key);
     else if (EQ(k, "tx_power_key")) set_cfg_string(&cfg.tx_power_key, v, cfg_default.tx_power_key);
 #undef EQ
 }
@@ -275,10 +275,10 @@ static int get_display_rssi(int raw){
     return last_valid_rssi;
 }
 
-static int get_display_udp(int raw){
-    if(raw>=0){last_valid_udp=raw; neg1_count_udp=0; return raw;}
-    if(++neg1_count_udp>=3) return -1;
-    return last_valid_udp;
+static int get_display_rssi2(int raw){
+    if(raw>=0){last_valid_rssi2=raw; neg1_count_rssi2=0; return raw;}
+    if(++neg1_count_rssi2>=3) return -1;
+    return last_valid_rssi2;
 }
 
 static FILE *fopen_glob_first(const char *pattern,const char *mode){
@@ -405,18 +405,18 @@ static inline const char *choose_rssi_hdr(int pct){
     int idx=(pct*6)/100; if(idx>5) idx=5; return cfg.rssi_hdr[idx];
 }
 
-static void write_osd(int rssi,int udp_rssi,const char *mcs_str,const char *bw_str,const char *tx_str){
+static void write_osd(int rssi,int rssi2,const char *mcs_str,const char *bw_str,const char *tx_str){
     int pct; if(rssi<0)pct=0; else if(rssi<=cfg.bottom)pct=0; else if(rssi>=cfg.top)pct=100; else pct=(rssi-cfg.bottom)*100/(cfg.top-cfg.bottom);
     char bar[cfg.bar_width*3+1]; build_bar(bar,sizeof(bar),pct); const char *hdr=choose_rssi_hdr(pct);
-    int pct_udp=0; char bar_udp[cfg.bar_width*3+1]; const char *hdr_udp=NULL;
-    if(cfg.rssi_udp_enable){
-        int disp_udp=udp_rssi;
-        if(disp_udp<0)pct_udp=0; else if(disp_udp<=cfg.bottom)pct_udp=0; else if(disp_udp>=cfg.top)pct_udp=100; else pct_udp=(disp_udp-cfg.bottom)*100/(cfg.top-cfg.bottom);
-        build_bar(bar_udp,sizeof(bar_udp),pct_udp); hdr_udp=choose_rssi_hdr(pct_udp);
+    int pct_rssi2=0; char bar_rssi2[cfg.bar_width*3+1]; const char *hdr_rssi2=NULL;
+    if(cfg.rssi2_enable){
+        int disp_rssi2=rssi2;
+        if(disp_rssi2<0)pct_rssi2=0; else if(disp_rssi2<=cfg.bottom)pct_rssi2=0; else if(disp_rssi2>=cfg.top)pct_rssi2=100; else pct_rssi2=(disp_rssi2-cfg.bottom)*100/(cfg.top-cfg.bottom);
+        build_bar(bar_rssi2,sizeof(bar_rssi2),pct_rssi2); hdr_rssi2=choose_rssi_hdr(pct_rssi2);
     }
     char filebuf[2048]; int flen=0;
     flen+=snprintf(filebuf+flen,sizeof(filebuf)-flen,"%s %3d%% %s%s%s\n",hdr,pct,cfg.start_sym,bar,cfg.end_sym);
-    if(cfg.rssi_udp_enable) flen+=snprintf(filebuf+flen,sizeof(filebuf)-flen,"%s %3d%% %s%s%s\n",hdr_udp,pct_udp,cfg.start_sym,bar_udp,cfg.end_sym);
+    if(cfg.rssi2_enable) flen+=snprintf(filebuf+flen,sizeof(filebuf)-flen,"%s %3d%% %s%s%s\n",hdr_rssi2,pct_rssi2,cfg.start_sym,bar_rssi2,cfg.end_sym);
     if (cfg.show_stats_line > 0) {
         int lvl = cfg.show_stats_line;
         if (lvl == 1) {
@@ -535,20 +535,20 @@ int main(int argc, char **argv){
         if(!any_info){
             strcpy(last_mcs,"NA"); strcpy(last_bw,"NA"); strcpy(last_tx,"NA");
             smooth_rssi_sample(rssi_hist, get_display_rssi(-1));
-            if (cfg.rssi_udp_enable) smooth_rssi_sample(udp_hist, get_display_udp(-1));
+            if (cfg.rssi2_enable) smooth_rssi_sample(rssi2_hist, get_display_rssi2(-1));
             continue;
         } else {
             int raw_rssi = parse_int_from_spec(cfg.rssi_key,have_info);
-            int raw_udp  = cfg.rssi_udp_enable ? parse_int_from_spec(cfg.rssi_udp_key,have_info) : -1;
+            int raw_rssi2  = cfg.rssi2_enable ? parse_int_from_spec(cfg.rssi2_key,have_info) : -1;
 
             int disp_rssi = get_display_rssi(raw_rssi); disp_rssi = smooth_rssi_sample(rssi_hist, disp_rssi);
-            int disp_udp  = get_display_udp(raw_udp);   disp_udp  = smooth_rssi_sample(udp_hist,  disp_udp);
+            int disp_rssi2  = get_display_rssi2(raw_rssi2);   disp_rssi2  = smooth_rssi_sample(rssi2_hist,  disp_rssi2);
 
             parse_value_from_spec(cfg.curr_tx_rate_key,have_info,last_mcs,sizeof(last_mcs));
             parse_value_from_spec(cfg.curr_tx_bw_key,  have_info,last_bw, sizeof(last_bw));
             parse_value_from_spec(cfg.tx_power_key,    have_info,last_tx, sizeof(last_tx));
 
-            write_osd(disp_rssi, disp_udp, last_mcs, last_bw, last_tx);
+            write_osd(disp_rssi, disp_rssi2, last_mcs, last_bw, last_tx);
         }
 
     }
