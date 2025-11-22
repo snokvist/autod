@@ -22,6 +22,13 @@ SRC_DIR      := src
 # Sources (filenames only; rules add SRC_DIR/)
 SRC_CORE     := autod.c sync.c scan.c parson.c civetweb.c
 
+# Parallelism (respect existing -j setting)
+ifneq ($(filter -j%,$(MAKEFLAGS)),)
+else
+NPROC        := $(shell command -v nproc >/dev/null 2>&1 && nproc || sysctl -n hw.ncpu 2>/dev/null || echo 1)
+MAKEFLAGS    += -j$(NPROC)
+endif
+
 # Tool defaults (can be overridden from env)
 CC_NATIVE    ?= gcc
 CC_MUSL      ?= arm-linux-musleabihf-gcc
