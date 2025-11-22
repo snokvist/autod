@@ -34,13 +34,6 @@
   .button.ghost:hover { border-color: var(--mut); background: rgba(255,255,255,0.04); }
   .button.danger { background: rgba(255,107,107,0.16); color: var(--err); border-color: var(--err); }
   .button.danger:hover { background: rgba(255,107,107,0.28); color: #fff; }
-  .secondary-actions { display: flex; align-items: center; gap: 0.5rem; position: relative; }
-  .secondary-actions .action-list { display: flex; gap: 0.5rem; align-items: stretch; }
-  .secondary-actions .action-toggle { display: none; min-width: auto; }
-  .secondary-actions.menu-mode .action-toggle { display: flex; }
-  .secondary-actions.menu-mode .action-list { display: none; position: absolute; right: 0; top: calc(100% + 6px); background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 0.5rem; flex-direction: column; min-width: 220px; box-shadow: 0 12px 30px rgba(0,0,0,0.35); }
-  .secondary-actions.menu-mode.open .action-list { display: flex; }
-  .secondary-actions .action-list .button { min-width: 180px; }
   main { padding: 1.5rem; }
   .tabs { display: flex; flex-direction: column; gap: 0.5rem; padding: 0 1.5rem 1rem; border-bottom: 1px solid rgba(255,255,255,0.08); }
   .tabs .tab-row { display: flex; column-gap: 0.5rem; row-gap: 0.35rem; flex-wrap: wrap; align-items: center; }
@@ -98,9 +91,6 @@
     header { flex-direction: column; align-items: stretch; gap: 0.75rem; }
     .header-actions { width: 100%; justify-content: flex-start; }
     .header-actions .button { width: 100%; }
-    .secondary-actions { width: 100%; }
-    .secondary-actions.menu-mode .action-list { position: static; width: 100%; box-shadow: none; }
-    .secondary-actions.menu-mode .action-list .button { width: 100%; }
     .header-actions .danger-action { margin-left: 0; }
     .tabs { padding: 0 1rem 1rem; }
     .tabs .tab-row { flex-direction: column; align-items: stretch; }
@@ -127,13 +117,6 @@
     </div>
   </div>
   <div class="row header-actions">
-    <button class="button primary" id="refreshNodesBtn">Refresh /nodes</button>
-    <div class="secondary-actions" id="secondaryActions">
-      <button class="button ghost action-toggle" id="secondaryActionsToggle" aria-expanded="false" aria-controls="secondaryActionList">More actions</button>
-      <div class="action-list" id="secondaryActionList">
-        <button class="button ghost" id="syncRefreshBtn">Refresh /sync/slaves</button>
-      </div>
-    </div>
     <button class="button danger danger-action" id="nodesScanBtn">POST /nodes (scan)</button>
   </div>
 </header>
@@ -466,10 +449,13 @@
 
 <script type="module">
 const $ = (sel, root = document) => root.querySelector(sel);
-const nodesState = { expanded: new Set(), pollTimer: null, loading: false, list: [], scanning: false };
+const nodesState = { expanded: new Set(), pollTimer: null, loading: false, list: [], scanning: false, pendingRefresh: false };
+const NODES_POLL_MS = 7000;
+const NODES_SCAN_POLL_MS = 1000;
 const MAX_SYNC_SLOTS = 3;
 const syncState = { slots: Array.from({ length: MAX_SYNC_SLOTS }, () => null), meta: new Map(), waiting: [], refMs: 0 };
-const syncUiState = { busy: false };
+const syncUiState = { busy: false, pollTimer: null, loading: false, pendingRefresh: false };
+const SYNC_POLL_MS = 7000;
 const slotActionState = new Map();
 const tabState = { active: 'groundstation' };
 const DEFAULT_CMD_TIMEOUT_MS = 6000;
@@ -1599,12 +1585,14 @@ function renderNodes(data){
   setNodesSummary(`Nodes: ${parts.filter(Boolean).join(' • ')}`);
   const scanBtn = document.getElementById('nodesScanBtn');
   if (scanBtn) scanBtn.disabled = !scanEnabled || !!data?.scanning;
-  scheduleNodesPoll(nodesState.scanning);
   updateSlotPanels();
 }
 
 async function fetchNodes(){
-  if (nodesState.loading) return;
+  if (nodesState.loading){
+    nodesState.pendingRefresh = true;
+    return;
+  }
   nodesState.loading = true;
   try {
     const res = await fetch('/nodes', { cache: 'no-store' });
@@ -1613,7 +1601,6 @@ async function fetchNodes(){
       setNodesSummary(`Nodes: Failed (${res.status} ${detail.trim()})`);
       nodesState.list = [];
       nodesState.scanning = false;
-      scheduleNodesPoll(false);
       updateSlotPanels();
     } else {
       const data = await res.json();
@@ -1623,21 +1610,25 @@ async function fetchNodes(){
     setNodesSummary(`Nodes: Failed (${err.message})`);
     nodesState.list = [];
     nodesState.scanning = false;
-    scheduleNodesPoll(false);
     updateSlotPanels();
   } finally {
     nodesState.loading = false;
+    if (nodesState.pendingRefresh){
+      nodesState.pendingRefresh = false;
+      fetchNodes();
+      return;
+    }
+    scheduleNodesPoll();
   }
 }
 
-function scheduleNodesPoll(keepPolling){
+function scheduleNodesPoll(){
   if (nodesState.pollTimer){
     clearTimeout(nodesState.pollTimer);
     nodesState.pollTimer = null;
   }
-  if (keepPolling){
-    nodesState.pollTimer = setTimeout(() => { nodesState.pollTimer = null; fetchNodes(); }, 1000);
-  }
+  const delay = nodesState.scanning ? NODES_SCAN_POLL_MS : NODES_POLL_MS;
+  nodesState.pollTimer = setTimeout(() => { nodesState.pollTimer = null; fetchNodes(); }, delay);
 }
 
 async function triggerNodesScan(){
@@ -1715,6 +1706,11 @@ async function sendMoveRequest(slaveId, slotTarget){
 }
 
 async function fetchSync(){
+  if (syncUiState.loading){
+    syncUiState.pendingRefresh = true;
+    return;
+  }
+  syncUiState.loading = true;
   setSyncSummary('Sync: Loading /sync/slaves…');
   try {
     const res = await fetch('/sync/slaves', { cache: 'no-store' });
@@ -1735,7 +1731,23 @@ async function fetchSync(){
     syncState.meta = new Map();
     syncState.waiting = [];
     updateSlotPanels();
+  } finally {
+    syncUiState.loading = false;
+    if (syncUiState.pendingRefresh){
+      syncUiState.pendingRefresh = false;
+      fetchSync();
+      return;
+    }
+    scheduleSyncPoll();
   }
+}
+
+function scheduleSyncPoll(){
+  if (syncUiState.pollTimer){
+    clearTimeout(syncUiState.pollTimer);
+    syncUiState.pollTimer = null;
+  }
+  syncUiState.pollTimer = setTimeout(() => { syncUiState.pollTimer = null; fetchSync(); }, SYNC_POLL_MS);
 }
 
 async function requestReplay(slotNumber){
@@ -1801,31 +1813,6 @@ function attachSlotHandlers(){
   });
 }
 
-function initSecondaryActionsMenu(){
-  const container = document.getElementById('secondaryActions');
-  const toggle = document.getElementById('secondaryActionsToggle');
-  if (!container || !toggle) return;
-  const mediaQuery = window.matchMedia('(max-width: 720px)');
-
-  const syncMode = () => {
-    const isNarrow = mediaQuery.matches;
-    container.classList.toggle('menu-mode', isNarrow);
-    if (!isNarrow){
-      container.classList.remove('open');
-      toggle.setAttribute('aria-expanded', 'false');
-    }
-  };
-
-  toggle.addEventListener('click', () => {
-    if (!container.classList.contains('menu-mode')) return;
-    const isOpen = container.classList.toggle('open');
-    toggle.setAttribute('aria-expanded', String(isOpen));
-  });
-
-  mediaQuery.addEventListener('change', syncMode);
-  syncMode();
-}
-
 initCardToggle('pixelpilotMiniRkCard');
 initCardToggle('dvrCard');
 const capsRefreshBtn = document.getElementById('capsRefreshBtn');
@@ -1834,10 +1821,7 @@ ensureDvrHandlers();
 initTabs();
 attachSlotHandlers();
 initSlotActionSegments();
-initSecondaryActionsMenu();
-$('#refreshNodesBtn').addEventListener('click', fetchNodes);
 $('#nodesScanBtn').addEventListener('click', triggerNodesScan);
-$('#syncRefreshBtn').addEventListener('click', fetchSync);
 void fetchCaps();
 fetchNodes();
 fetchSync();
