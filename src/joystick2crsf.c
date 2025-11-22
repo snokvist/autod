@@ -14,6 +14,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <linux/uinput.h>
 #include <netdb.h>
 #include <sched.h>
 #include <signal.h>
@@ -24,6 +25,7 @@
 #include <strings.h>
 #include <sys/socket.h>
 #include <sys/time.h>
+#include <sys/ioctl.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -59,6 +61,12 @@
 #define PROTOCOL_CRSF       0
 #define PROTOCOL_MAVLINK    1
 
+#define KEY_TRIGGER_HIGH    1700
+#define KEY_TRIGGER_LOW     1500
+#define KEY_TRIGGER_NEG_HIGH (CRSF_MIN + (CRSF_MAX - KEY_TRIGGER_HIGH))
+#define KEY_TRIGGER_NEG_LOW  (CRSF_MIN + (CRSF_MAX - KEY_TRIGGER_LOW))
+#define KEY_LONG_DEFAULT_MS 700
+
 #define DEFAULT_CONF       "/etc/joystick2crsf.conf"
 #define MAX_LINE_LEN       512
 
@@ -84,6 +92,12 @@ typedef struct {
     int joystick_index;
     int rescan_interval;        /* seconds */
     int use_gamecontroller;
+    int key_short[16];
+    int key_long[16];
+    int key_short_low[16];
+    int key_long_low[16];
+    int key_long_threshold_ms;
+    int key_debug;
 } config_t;
 
 /* ------------------------------------------------------------------------- */
@@ -844,6 +858,66 @@ static void parse_dead_list(const char *str, int out[16])
     free(dup);
 }
 
+static int keycode_from_name(const char *name)
+{
+    if (!name || !*name) {
+        return -1;
+    }
+
+    if (strlen(name) == 1 && isalpha((unsigned char)name[0])) {
+        char lower = (char)tolower((unsigned char)name[0]);
+        return KEY_A + (lower - 'a');
+    }
+
+    if (!strcasecmp(name, "up")) {
+        return KEY_UP;
+    }
+    if (!strcasecmp(name, "down")) {
+        return KEY_DOWN;
+    }
+    if (!strcasecmp(name, "left")) {
+        return KEY_LEFT;
+    }
+    if (!strcasecmp(name, "right")) {
+        return KEY_RIGHT;
+    }
+    if (!strcasecmp(name, "enter") || !strcasecmp(name, "return")) {
+        return KEY_ENTER;
+    }
+
+    return -1;
+}
+
+static const char *keycode_name(int code)
+{
+    switch (code) {
+    case KEY_UP: return "up";
+    case KEY_DOWN: return "down";
+    case KEY_LEFT: return "left";
+    case KEY_RIGHT: return "right";
+    case KEY_ENTER: return "enter";
+    default:
+        if (code >= KEY_A && code <= KEY_Z) {
+            static char buf[2];
+            buf[0] = (char)('a' + (code - KEY_A));
+            buf[1] = '\0';
+            return buf;
+        }
+        return "unknown";
+    }
+}
+
+static void parse_key_binding(const char *val, int *dst, const char *path, int lineno)
+{
+    int code = keycode_from_name(val);
+    if (code < 0) {
+        fprintf(stderr, "%s:%d: unsupported key '%s' (use up,down,left,right,enter,a-z)\n",
+                path, lineno, val);
+        return;
+    }
+    *dst = code;
+}
+
 static void config_defaults(config_t *cfg)
 {
     cfg->rate = 125;
@@ -863,10 +937,16 @@ static void config_defaults(config_t *cfg)
     cfg->joystick_index = 0;
     cfg->rescan_interval = 5;
     cfg->use_gamecontroller = 1;
+    cfg->key_long_threshold_ms = KEY_LONG_DEFAULT_MS;
+    cfg->key_debug = 0;
     for (int i = 0; i < 16; i++) {
         cfg->map[i] = i;
         cfg->invert[i] = 0;
         cfg->dead[i] = 0;
+        cfg->key_short[i] = -1;
+        cfg->key_long[i] = -1;
+        cfg->key_short_low[i] = -1;
+        cfg->key_long_low[i] = -1;
     }
 }
 
@@ -969,6 +1049,41 @@ static int config_load(config_t *cfg, const char *path)
             if (parse_bool_value(val, &b) == 0) {
                 cfg->use_gamecontroller = b;
             }
+        } else if (!strcasecmp(key, "key_long_threshold_ms")) {
+            cfg->key_long_threshold_ms = atoi(val);
+        } else if (!strcasecmp(key, "key_debug")) {
+            int b;
+            if (parse_bool_value(val, &b) == 0) {
+                cfg->key_debug = b;
+            }
+        } else if (!strncasecmp(key, "key_short_low_", 14)) {
+            int ch = atoi(key + 14);
+            if (ch >= 1 && ch <= 16) {
+                parse_key_binding(val, &cfg->key_short_low[ch - 1], path, lineno);
+            } else {
+                fprintf(stderr, "%s:%d: key_short_low_N expects 1-16\n", path, lineno);
+            }
+        } else if (!strncasecmp(key, "key_short_", 10)) {
+            int ch = atoi(key + 10);
+            if (ch >= 1 && ch <= 16) {
+                parse_key_binding(val, &cfg->key_short[ch - 1], path, lineno);
+            } else {
+                fprintf(stderr, "%s:%d: key_short_N expects 1-16\n", path, lineno);
+            }
+        } else if (!strncasecmp(key, "key_long_low_", 13)) {
+            int ch = atoi(key + 13);
+            if (ch >= 1 && ch <= 16) {
+                parse_key_binding(val, &cfg->key_long_low[ch - 1], path, lineno);
+            } else {
+                fprintf(stderr, "%s:%d: key_long_low_N expects 1-16\n", path, lineno);
+            }
+        } else if (!strncasecmp(key, "key_long_", 9)) {
+            int ch = atoi(key + 9);
+            if (ch >= 1 && ch <= 16) {
+                parse_key_binding(val, &cfg->key_long[ch - 1], path, lineno);
+            } else {
+                fprintf(stderr, "%s:%d: key_long_N expects 1-16\n", path, lineno);
+            }
         } else {
             fprintf(stderr, "%s:%d: unknown key '%s'\n", path, lineno, key);
         }
@@ -1018,7 +1133,110 @@ static int config_load(config_t *cfg, const char *path)
             cfg->mavlink_target_compid = 255;
         }
     }
+    if (cfg->key_long_threshold_ms <= 0) {
+        cfg->key_long_threshold_ms = KEY_LONG_DEFAULT_MS;
+    }
     return 0;
+}
+
+/* --------------------------- Uinput helpers -------------------------------- */
+static int uinput_emit_event(int fd, uint16_t type, uint16_t code, int32_t value)
+{
+    struct input_event ev;
+    memset(&ev, 0, sizeof(ev));
+    gettimeofday(&ev.time, NULL);
+    ev.type = type;
+    ev.code = code;
+    ev.value = value;
+    return (int)write(fd, &ev, sizeof(ev));
+}
+
+static void uinput_send_key(int fd, uint16_t code)
+{
+    if (fd < 0) {
+        return;
+    }
+    uinput_emit_event(fd, EV_KEY, code, 1);
+    uinput_emit_event(fd, EV_SYN, SYN_REPORT, 0);
+    uinput_emit_event(fd, EV_KEY, code, 0);
+    uinput_emit_event(fd, EV_SYN, SYN_REPORT, 0);
+}
+
+static int uinput_open_keyboard(void)
+{
+    static const uint16_t supported_keys[] = {
+        KEY_UP, KEY_DOWN, KEY_LEFT, KEY_RIGHT, KEY_ENTER,
+        KEY_A, KEY_B, KEY_C, KEY_D, KEY_E, KEY_F, KEY_G, KEY_H, KEY_I, KEY_J,
+        KEY_K, KEY_L, KEY_M, KEY_N, KEY_O, KEY_P, KEY_Q, KEY_R, KEY_S, KEY_T,
+        KEY_U, KEY_V, KEY_W, KEY_X, KEY_Y, KEY_Z
+    };
+
+    int fd = open("/dev/uinput", O_WRONLY | O_NONBLOCK);
+    if (fd < 0) {
+        perror("uinput open");
+        return -1;
+    }
+
+    if (ioctl(fd, UI_SET_EVBIT, EV_KEY) < 0) {
+        perror("uinput EV_KEY");
+        close(fd);
+        return -1;
+    }
+    for (size_t i = 0; i < sizeof(supported_keys) / sizeof(supported_keys[0]); i++) {
+        if (ioctl(fd, UI_SET_KEYBIT, supported_keys[i]) < 0) {
+            perror("uinput KEYBIT");
+            close(fd);
+            return -1;
+        }
+    }
+
+#ifdef UI_SET_EVBIT
+    if (ioctl(fd, UI_SET_EVBIT, EV_SYN) < 0) {
+        perror("uinput EV_SYN");
+        close(fd);
+        return -1;
+    }
+#endif
+
+#ifdef UI_DEV_SETUP
+    struct uinput_setup usetup;
+    memset(&usetup, 0, sizeof(usetup));
+    snprintf(usetup.name, UINPUT_MAX_NAME_SIZE, "joystick2crsf-keys");
+    usetup.id.bustype = BUS_USB;
+    usetup.id.vendor = 0x1d50;
+    usetup.id.product = 0x615e;
+    usetup.id.version = 1;
+    if (ioctl(fd, UI_DEV_SETUP, &usetup) < 0) {
+        perror("uinput setup");
+        close(fd);
+        return -1;
+    }
+    if (ioctl(fd, UI_DEV_CREATE) < 0) {
+        perror("uinput create");
+        close(fd);
+        return -1;
+    }
+#else
+    struct uinput_user_dev udev;
+    memset(&udev, 0, sizeof(udev));
+    snprintf(udev.name, UINPUT_MAX_NAME_SIZE, "joystick2crsf-keys");
+    udev.id.bustype = BUS_USB;
+    udev.id.vendor = 0x1d50;
+    udev.id.product = 0x615e;
+    udev.id.version = 1;
+    if (write(fd, &udev, sizeof(udev)) < 0) {
+        perror("uinput write");
+        close(fd);
+        return -1;
+    }
+    if (ioctl(fd, UI_DEV_CREATE) < 0) {
+        perror("uinput create");
+        close(fd);
+        return -1;
+    }
+#endif
+
+    return fd;
 }
 
 /* --------------------------- Time helpers ---------------------------------- */
@@ -1106,6 +1324,23 @@ int main(int argc, char **argv)
             break;
         }
 
+        int key_fd = -1;
+        int key_enabled = 0;
+        for (int i = 0; i < 16; i++) {
+            if (cfg.key_short[i] >= 0 || cfg.key_long[i] >= 0 ||
+                cfg.key_short_low[i] >= 0 || cfg.key_long_low[i] >= 0) {
+                key_enabled = 1;
+                break;
+            }
+        }
+        if (key_enabled) {
+            key_fd = uinput_open_keyboard();
+            if (key_fd < 0) {
+                fprintf(stderr, "Keyboard bindings requested but /dev/uinput is unavailable; disabling.\n");
+                key_enabled = 0;
+            }
+        }
+
         int udp_fd = -1;
         int sse_fd = -1;
         int sse_client_fd = -1;
@@ -1168,6 +1403,10 @@ int main(int argc, char **argv)
             if (sse_fd >= 0) {
                 close(sse_fd);
             }
+            if (key_fd >= 0) {
+                ioctl(key_fd, UI_DEV_DESTROY);
+                close(key_fd);
+            }
             break;
         }
 
@@ -1222,6 +1461,13 @@ int main(int argc, char **argv)
         int arm_sticky = 0;
         int arm_press_active = 0;
         struct timespec arm_press_start = {0, 0};
+
+        int key_press_active[16] = {0};
+        int key_press_low_active[16] = {0};
+        struct timespec key_press_start[16];
+        struct timespec key_press_low_start[16];
+        memset(key_press_start, 0, sizeof(key_press_start));
+        memset(key_press_low_start, 0, sizeof(key_press_low_start));
 
         while (g_run && !restart_requested) {
             struct timespec now;
@@ -1404,6 +1650,68 @@ int main(int argc, char **argv)
                 }
             }
 
+            if (key_enabled && key_fd >= 0) {
+                for (int i = 0; i < 16; i++) {
+                    if (cfg.key_short[i] >= 0 || cfg.key_long[i] >= 0) {
+                        int pressed = ch_out[i] >= KEY_TRIGGER_HIGH;
+                        if (pressed) {
+                            if (!key_press_active[i]) {
+                                key_press_start[i] = now;
+                                key_press_active[i] = 1;
+                            }
+                        } else if (key_press_active[i] && ch_out[i] <= KEY_TRIGGER_LOW) {
+                            int64_t held = timespec_diff_ms(&key_press_start[i], &now);
+                            int code = -1;
+                            if (cfg.key_long[i] >= 0 && held >= cfg.key_long_threshold_ms) {
+                                code = cfg.key_long[i];
+                            } else if (cfg.key_short[i] >= 0) {
+                                code = cfg.key_short[i];
+                            } else if (cfg.key_long[i] >= 0) {
+                                code = cfg.key_long[i];
+                            }
+                            if (code >= 0) {
+                                uinput_send_key(key_fd, (uint16_t)code);
+                                if (cfg.key_debug) {
+                                    const char *kind = (held >= cfg.key_long_threshold_ms) ? "long" : "short";
+                                    fprintf(stderr, "CH%d %s press (%lld ms) -> key %s\n",
+                                            i + 1, kind, (long long)held, keycode_name(code));
+                                }
+                            }
+                            key_press_active[i] = 0;
+                        }
+                    }
+
+                    if (cfg.key_short_low[i] >= 0 || cfg.key_long_low[i] >= 0) {
+                        int pressed_low = ch_out[i] <= KEY_TRIGGER_NEG_HIGH;
+                        if (pressed_low) {
+                            if (!key_press_low_active[i]) {
+                                key_press_low_start[i] = now;
+                                key_press_low_active[i] = 1;
+                            }
+                        } else if (key_press_low_active[i] && ch_out[i] >= KEY_TRIGGER_NEG_LOW) {
+                            int64_t held = timespec_diff_ms(&key_press_low_start[i], &now);
+                            int code = -1;
+                            if (cfg.key_long_low[i] >= 0 && held >= cfg.key_long_threshold_ms) {
+                                code = cfg.key_long_low[i];
+                            } else if (cfg.key_short_low[i] >= 0) {
+                                code = cfg.key_short_low[i];
+                            } else if (cfg.key_long_low[i] >= 0) {
+                                code = cfg.key_long_low[i];
+                            }
+                            if (code >= 0) {
+                                uinput_send_key(key_fd, (uint16_t)code);
+                                if (cfg.key_debug) {
+                                    const char *kind = (held >= cfg.key_long_threshold_ms) ? "long" : "short";
+                                    fprintf(stderr, "CH%d low %s press (%lld ms) -> key %s\n",
+                                            i + 1, kind, (long long)held, keycode_name(code));
+                                }
+                            }
+                            key_press_low_active[i] = 0;
+                        }
+                    }
+                }
+            }
+
             if (cfg.sse_enabled && sse_fd >= 0) {
                 int accepted = sse_accept_pending(sse_fd, &sse_client_fd, cfg.sse_path);
                 if (accepted > 0) {
@@ -1525,6 +1833,11 @@ int main(int argc, char **argv)
         if (sse_fd >= 0) {
             close(sse_fd);
             sse_fd = -1;
+        }
+        if (key_fd >= 0) {
+            ioctl(key_fd, UI_DEV_DESTROY);
+            close(key_fd);
+            key_fd = -1;
         }
 
         if (fatal_error || !g_run) {
