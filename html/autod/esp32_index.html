@@ -315,8 +315,27 @@
   .slot-action-row .mut { line-height: 1.4; }
   .slot-waiting .mut { color: var(--mut); }
   .slot-node-card .body { padding: var(--card-pad); display: flex; flex-direction: column; gap: 0.75rem; }
-  .slot-node-empty { border: 1px dashed var(--border-strong); background: rgba(255,255,255,0.45); border-radius: 10px; padding: 0.75rem 0.9rem; color: var(--mut); display: flex; align-items: center; gap: 0.5rem; }
-  .slot-node-empty.loading::before { content: ''; width: 10px; height: 10px; border-radius: 999px; border: 2px solid rgba(255,255,255,0.35); border-top-color: transparent; display: inline-block; animation: spin 0.8s linear infinite; }
+  .slot-node-empty {
+    border: 1px dashed var(--border-strong);
+    background: linear-gradient(135deg, rgba(26, 115, 232, 0.08), rgba(26, 115, 232, 0.03));
+    border-radius: 12px;
+    padding: 0.85rem 1rem;
+    color: var(--mut);
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    box-shadow: 0 8px 18px rgba(14, 76, 149, 0.08);
+  }
+  .slot-node-empty.loading::before {
+    content: '';
+    width: 10px;
+    height: 10px;
+    border-radius: 999px;
+    border: 2px solid rgba(26, 115, 232, 0.3);
+    border-top-color: transparent;
+    display: inline-block;
+    animation: spin 0.8s linear infinite;
+  }
   @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
   .node-controls { gap: 1rem; }
   .node-relay { border-top: 1px solid rgba(255,255,255,0.08); padding-top: 0.75rem; display: flex; flex-direction: column; gap: 0.75rem; }
