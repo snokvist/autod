@@ -39,6 +39,8 @@ static int rssi_hist[3]={-1,-1,-1}, rssi2_hist[3]={-1,-1,-1};
 #define DEF_BAR_WIDTH       37
 #define DEF_TOP             80
 #define DEF_BOTTOM          20
+#define DEF_TOP2            DEF_TOP
+#define DEF_BOTTOM2         DEF_BOTTOM
 #define DEF_OSD_HDR         " &F34&L20"
 #define DEF_OSD_HDR2        ""
 #define DEF_SYS_MSG_HDR     ""
@@ -53,6 +55,9 @@ static int rssi_hist[3]={-1,-1,-1}, rssi2_hist[3]={-1,-1,-1};
 #define DEF_START           "["
 #define DEF_END             "]"
 #define DEF_EMPTY           "."
+#define DEF_START2          "["
+#define DEF_END2            "]"
+#define DEF_EMPTY2          "."
 #define DEF_SHOW_STATS      3
 #define SYS_MSG_FILE        "/tmp/osd_system.msg"
 #define DEF_RSSI_KEY        "rssi"
@@ -77,6 +82,8 @@ typedef struct {
     int         bar_width;
     int         top;
     int         bottom;
+    int         top2;
+    int         bottom2;
     const char *osd_hdr;
     const char *osd_hdr2;
     const char *sys_msg_hdr;
@@ -84,10 +91,14 @@ typedef struct {
     int         show_stats_line;
     int         sys_msg_timeout;
     bool        rssi_control;
+    bool        rssi2_scale_custom;
     const char *rssi_hdr[6];
     const char *start_sym;
     const char *end_sym;
     const char *empty_sym;
+    const char *start_sym2;
+    const char *end_sym2;
+    const char *empty_sym2;
     const char *rssi_key;
     const char *curr_tx_rate_key;
     const char *curr_tx_bw_key;
@@ -97,10 +108,11 @@ typedef struct {
 } cfg_t;
 
 static const cfg_t cfg_default = {
-    .info_files={DEF_INFO_FILE,NULL}, .out_file=DEF_OUT_FILE, .interval=DEF_INTERVAL, .bar_width=DEF_BAR_WIDTH, .top=DEF_TOP, .bottom=DEF_BOTTOM,
+    .info_files={DEF_INFO_FILE,NULL}, .out_file=DEF_OUT_FILE, .interval=DEF_INTERVAL, .bar_width=DEF_BAR_WIDTH, .top=DEF_TOP, .bottom=DEF_BOTTOM, .top2=DEF_TOP2, .bottom2=DEF_BOTTOM2,
     .osd_hdr=DEF_OSD_HDR, .osd_hdr2=DEF_OSD_HDR2, .sys_msg_hdr=DEF_SYS_MSG_HDR, .system_msg="", .show_stats_line=DEF_SHOW_STATS, .sys_msg_timeout=DEF_SYS_MSG_TIMEOUT,
-    .rssi_control=DEF_RSSI_CONTROL, .rssi_hdr={DEF_RSSI_RANGE0,DEF_RSSI_RANGE1,DEF_RSSI_RANGE2,DEF_RSSI_RANGE3,DEF_RSSI_RANGE4,DEF_RSSI_RANGE5},
-    .start_sym=DEF_START, .end_sym=DEF_END, .empty_sym=DEF_EMPTY, .rssi_key=DEF_RSSI_KEY,
+    .rssi_control=DEF_RSSI_CONTROL, .rssi2_scale_custom=false, .rssi_hdr={DEF_RSSI_RANGE0,DEF_RSSI_RANGE1,DEF_RSSI_RANGE2,DEF_RSSI_RANGE3,DEF_RSSI_RANGE4,DEF_RSSI_RANGE5},
+    .start_sym=DEF_START, .end_sym=DEF_END, .empty_sym=DEF_EMPTY,
+    .start_sym2=DEF_START2, .end_sym2=DEF_END2, .empty_sym2=DEF_EMPTY2, .rssi_key=DEF_RSSI_KEY,
     .curr_tx_rate_key=DEF_CURR_TX_RATE_KEY, .curr_tx_bw_key=DEF_CURR_TX_BW_KEY, .rssi2_enable=DEF_RSSI_2_ENABLE, .rssi2_key=DEF_RSSI_2_KEY, .tx_power_key=DEF_TX_POWER_KEY
 };
 
@@ -133,6 +145,9 @@ static void free_config_strings(void)
     if (cfg.start_sym && cfg.start_sym != cfg_default.start_sym) free((void *)cfg.start_sym);
     if (cfg.end_sym && cfg.end_sym != cfg_default.end_sym) free((void *)cfg.end_sym);
     if (cfg.empty_sym && cfg.empty_sym != cfg_default.empty_sym) free((void *)cfg.empty_sym);
+    if (cfg.start_sym2 && cfg.start_sym2 != cfg_default.start_sym2) free((void *)cfg.start_sym2);
+    if (cfg.end_sym2 && cfg.end_sym2 != cfg_default.end_sym2) free((void *)cfg.end_sym2);
+    if (cfg.empty_sym2 && cfg.empty_sym2 != cfg_default.empty_sym2) free((void *)cfg.empty_sym2);
     for (int i = 0; i < 6; ++i) {
         if (cfg.rssi_hdr[i] && cfg.rssi_hdr[i] != cfg_default.rssi_hdr[i]) {
             free((void *)cfg.rssi_hdr[i]);
@@ -167,17 +182,19 @@ static void set_cfg_string(const char **field, const char *value, const char *de
 static void set_cfg_field(const char *k, const char *v)
 {
 #define EQ(a,b) (strcmp((a),(b))==0)
-    if (EQ(k, "info_file")) { set_cfg_string(&cfg.info_files[0], v, cfg_default.info_files[0]); info_buf_valid[0] = false; last_info_attempt[0] = 0; }
-    else if (EQ(k, "info_file2") || EQ(k, "info_file_alt") || EQ(k, "info_file_secondary")) { set_cfg_string(&cfg.info_files[1], v, cfg_default.info_files[1]); info_buf_valid[1] = false; last_info_attempt[1] = 0; }
+    if (EQ(k, "info_file") || EQ(k, "telemetry_file") || EQ(k, "telemetry_primary")) { set_cfg_string(&cfg.info_files[0], v, cfg_default.info_files[0]); info_buf_valid[0] = false; last_info_attempt[0] = 0; }
+    else if (EQ(k, "info_file2") || EQ(k, "info_file_alt") || EQ(k, "info_file_secondary") || EQ(k, "telemetry_file2") || EQ(k, "telemetry_secondary") || EQ(k, "telemetry_alt")) { set_cfg_string(&cfg.info_files[1], v, cfg_default.info_files[1]); info_buf_valid[1] = false; last_info_attempt[1] = 0; }
     else if (EQ(k, "out_file")) set_cfg_string(&cfg.out_file, v, cfg_default.out_file);
     else if (EQ(k, "interval")) cfg.interval = atof(v);
     else if (EQ(k, "bar_width")) cfg.bar_width = atoi(v);
-    else if (EQ(k, "top")) cfg.top = atoi(v);
-    else if (EQ(k, "bottom")) cfg.bottom = atoi(v);
+    else if (EQ(k, "top")) { cfg.top = atoi(v); if (!cfg.rssi2_scale_custom) cfg.top2 = cfg.top; }
+    else if (EQ(k, "bottom")) { cfg.bottom = atoi(v); if (!cfg.rssi2_scale_custom) cfg.bottom2 = cfg.bottom; }
+    else if (EQ(k, "top2") || EQ(k, "secondary_top") || EQ(k, "rssi2_top")) { cfg.top2 = atoi(v); cfg.rssi2_scale_custom = true; }
+    else if (EQ(k, "bottom2") || EQ(k, "secondary_bottom") || EQ(k, "rssi2_bottom")) { cfg.bottom2 = atoi(v); cfg.rssi2_scale_custom = true; }
     else if (EQ(k, "osd_hdr")) set_cfg_string(&cfg.osd_hdr, v, cfg_default.osd_hdr);
     else if (EQ(k, "osd_hdr2")) set_cfg_string(&cfg.osd_hdr2, v, cfg_default.osd_hdr2);
     else if (EQ(k, "sys_msg_hdr")) set_cfg_string(&cfg.sys_msg_hdr, v, cfg_default.sys_msg_hdr);
-    else if (EQ(k, "show_stats_line")) {
+    else if (EQ(k, "show_stats_line") || EQ(k, "stats_line_mode")) {
         if (!strcasecmp(v, "true")) cfg.show_stats_line = 3;
         else if (!strcasecmp(v, "false")) cfg.show_stats_line = 0;
         else {
@@ -198,12 +215,15 @@ static void set_cfg_field(const char *k, const char *v)
     else if (EQ(k, "start_sym")) set_cfg_string(&cfg.start_sym, v, cfg_default.start_sym);
     else if (EQ(k, "end_sym")) set_cfg_string(&cfg.end_sym, v, cfg_default.end_sym);
     else if (EQ(k, "empty_sym")) set_cfg_string(&cfg.empty_sym, v, cfg_default.empty_sym);
-    else if (EQ(k, "rssi_key")) set_cfg_string(&cfg.rssi_key, v, cfg_default.rssi_key);
-    else if (EQ(k, "curr_tx_rate_key")) set_cfg_string(&cfg.curr_tx_rate_key, v, cfg_default.curr_tx_rate_key);
-    else if (EQ(k, "curr_tx_bw_key")) set_cfg_string(&cfg.curr_tx_bw_key, v, cfg_default.curr_tx_bw_key);
-    else if (EQ(k, "rssi_2_enable")) cfg.rssi2_enable = atoi(v) != 0;
-    else if (EQ(k, "rssi_2_key")) set_cfg_string(&cfg.rssi2_key, v, cfg_default.rssi2_key);
-    else if (EQ(k, "tx_power_key")) set_cfg_string(&cfg.tx_power_key, v, cfg_default.tx_power_key);
+    else if (EQ(k, "start_sym2") || EQ(k, "secondary_start_sym")) set_cfg_string(&cfg.start_sym2, v, cfg_default.start_sym2);
+    else if (EQ(k, "end_sym2") || EQ(k, "secondary_end_sym")) set_cfg_string(&cfg.end_sym2, v, cfg_default.end_sym2);
+    else if (EQ(k, "empty_sym2") || EQ(k, "secondary_empty_sym")) set_cfg_string(&cfg.empty_sym2, v, cfg_default.empty_sym2);
+    else if (EQ(k, "rssi_key") || EQ(k, "signal_key") || EQ(k, "signal_strength_key")) set_cfg_string(&cfg.rssi_key, v, cfg_default.rssi_key);
+    else if (EQ(k, "curr_tx_rate_key") || EQ(k, "stats_mcs_key") || EQ(k, "stats_rate_key")) set_cfg_string(&cfg.curr_tx_rate_key, v, cfg_default.curr_tx_rate_key);
+    else if (EQ(k, "curr_tx_bw_key") || EQ(k, "stats_bw_key") || EQ(k, "stats_bandwidth_key")) set_cfg_string(&cfg.curr_tx_bw_key, v, cfg_default.curr_tx_bw_key);
+    else if (EQ(k, "rssi_2_enable") || EQ(k, "secondary_rssi_enable") || EQ(k, "alt_rssi_enable")) cfg.rssi2_enable = atoi(v) != 0;
+    else if (EQ(k, "rssi_2_key") || EQ(k, "secondary_rssi_key") || EQ(k, "alt_rssi_key")) set_cfg_string(&cfg.rssi2_key, v, cfg_default.rssi2_key);
+    else if (EQ(k, "tx_power_key") || EQ(k, "stats_tx_power_key") || EQ(k, "stats_txpwr_key")) set_cfg_string(&cfg.tx_power_key, v, cfg_default.tx_power_key);
 #undef EQ
 }
 
@@ -387,13 +407,13 @@ static void parse_value_from_spec(const char *spec,const bool have_info[],char *
     parse_value_from_buf(info_buf[idx],key,out,outlen);
 }
 
-static void build_bar(char *o,size_t sz,int pct){
+static void build_bar(char *o,size_t sz,int pct,const char *empty_sym){
     if(pct<0)pct=0; else if(pct>100)pct=100;
     int total=pct*cfg.bar_width*8/100; int full=total/8; int rem=total%8;
     if(full>cfg.bar_width){full=cfg.bar_width; rem=0;}
     size_t pos=0;
     for(int i=0;i<cfg.bar_width;++i){
-        const char *sym=cfg.empty_sym;
+        const char *sym=empty_sym;
         if(i<full) sym=FULL; else if(i==full && rem>0) sym=PART[rem-1];
         size_t L=strlen(sym); if(pos+L<sz){memcpy(o+pos,sym,L); pos+=L;}
     }
@@ -407,16 +427,16 @@ static inline const char *choose_rssi_hdr(int pct){
 
 static void write_osd(int rssi,int rssi2,const char *mcs_str,const char *bw_str,const char *tx_str){
     int pct; if(rssi<0)pct=0; else if(rssi<=cfg.bottom)pct=0; else if(rssi>=cfg.top)pct=100; else pct=(rssi-cfg.bottom)*100/(cfg.top-cfg.bottom);
-    char bar[cfg.bar_width*3+1]; build_bar(bar,sizeof(bar),pct); const char *hdr=choose_rssi_hdr(pct);
+    char bar[cfg.bar_width*3+1]; build_bar(bar,sizeof(bar),pct,cfg.empty_sym); const char *hdr=choose_rssi_hdr(pct);
     int pct_rssi2=0; char bar_rssi2[cfg.bar_width*3+1]; const char *hdr_rssi2=NULL;
     if(cfg.rssi2_enable){
         int disp_rssi2=rssi2;
-        if(disp_rssi2<0)pct_rssi2=0; else if(disp_rssi2<=cfg.bottom)pct_rssi2=0; else if(disp_rssi2>=cfg.top)pct_rssi2=100; else pct_rssi2=(disp_rssi2-cfg.bottom)*100/(cfg.top-cfg.bottom);
-        build_bar(bar_rssi2,sizeof(bar_rssi2),pct_rssi2); hdr_rssi2=choose_rssi_hdr(pct_rssi2);
+        if(disp_rssi2<0)pct_rssi2=0; else if(disp_rssi2<=cfg.bottom2)pct_rssi2=0; else if(disp_rssi2>=cfg.top2)pct_rssi2=100; else pct_rssi2=(disp_rssi2-cfg.bottom2)*100/(cfg.top2-cfg.bottom2);
+        build_bar(bar_rssi2,sizeof(bar_rssi2),pct_rssi2,cfg.empty_sym2); hdr_rssi2=choose_rssi_hdr(pct_rssi2);
     }
     char filebuf[2048]; int flen=0;
     flen+=snprintf(filebuf+flen,sizeof(filebuf)-flen,"%s %3d%% %s%s%s\n",hdr,pct,cfg.start_sym,bar,cfg.end_sym);
-    if(cfg.rssi2_enable) flen+=snprintf(filebuf+flen,sizeof(filebuf)-flen,"%s %3d%% %s%s%s\n",hdr_rssi2,pct_rssi2,cfg.start_sym,bar_rssi2,cfg.end_sym);
+    if(cfg.rssi2_enable) flen+=snprintf(filebuf+flen,sizeof(filebuf)-flen,"%s %3d%% %s%s%s\n",hdr_rssi2,pct_rssi2,cfg.start_sym2,bar_rssi2,cfg.end_sym2);
     if (cfg.show_stats_line > 0) {
         int lvl = cfg.show_stats_line;
         if (lvl == 1) {
