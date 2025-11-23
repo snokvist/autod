@@ -130,6 +130,8 @@ typedef struct {
 
 typedef struct {
     bool enabled;
+    bool recognized_types[256];
+    bool unknown_reported[256];
     crsf_stream_t streams[CRSF_SRC_MAX];
     uint64_t type_counts[CRSF_SRC_MAX][256];
     uint64_t invalid_frames[CRSF_SRC_MAX];
@@ -463,6 +465,39 @@ static void crsf_monitor_init(crsf_monitor_t *m, bool enabled)
 {
     memset(m, 0, sizeof(*m));
     m->enabled = enabled;
+
+    static const uint8_t known_types[] = {
+        0x02, /* GPS */
+        0x07, /* Vario */
+        0x08, /* Battery sensor */
+        0x09, /* Baro altitude */
+        0x0B, /* Heartbeat */
+        0x0F, /* Video transmitter */
+        0x10, /* OpenTX sync */
+        0x14, /* Link statistics */
+        0x16, /* RC channels packed */
+        0x1C, /* Link RX ID */
+        0x1D, /* Link TX ID */
+        0x1E, /* Attitude */
+        0x21, /* Flight mode */
+        0x28, /* Device ping */
+        0x29, /* Device info */
+        0x2B, /* Parameter settings entry */
+        0x2C, /* Parameter read */
+        0x2D, /* Parameter write */
+        0x32, /* Command */
+        0x3A, /* Radio ID */
+        0x78, /* KISS request */
+        0x79, /* KISS response */
+        0x7A, /* MSP request */
+        0x7B, /* MSP response */
+        0x7C, /* MSP write */
+        0x80, /* Ardupilot response */
+    };
+
+    for (size_t i = 0; i < sizeof(known_types); i++) {
+        m->recognized_types[known_types[i]] = true;
+    }
 }
 
 static void crsf_monitor_set_enabled(crsf_monitor_t *m, bool enabled)
@@ -498,6 +533,11 @@ static void crsf_monitor_handle_frame(crsf_monitor_t *m, crsf_source_t src, crsf
 
     uint8_t type = s->frame[2];
     m->type_counts[src][type] += 1;
+
+    if (!m->recognized_types[type] && !m->unknown_reported[type]) {
+        vlog(1, "CRSF: unrecognized frame type 0x%02X (len=%zu)", type, s->len);
+        m->unknown_reported[type] = true;
+    }
 }
 
 static void crsf_monitor_feed(crsf_monitor_t *m, crsf_source_t src, const uint8_t *data, size_t n)
@@ -564,6 +604,7 @@ static void crsf_monitor_maybe_report(crsf_monitor_t *m)
     uint64_t attitude[CRSF_SRC_MAX] = {0};
     uint64_t flight_mode[CRSF_SRC_MAX] = {0};
     uint64_t other[CRSF_SRC_MAX] = {0};
+    uint64_t unknown[CRSF_SRC_MAX] = {0};
     uint64_t total_all[CRSF_SRC_MAX] = {0};
 
     for (int s = 0; s < CRSF_SRC_MAX; s++) {
@@ -578,14 +619,26 @@ static void crsf_monitor_maybe_report(crsf_monitor_t *m)
         attitude[s]   = m->type_counts[s][0x1E];
         flight_mode[s]= m->type_counts[s][0x21];
 
-        uint64_t known_sum = rc_channels[s] + gps[s] + battery[s] + link_stats[s] + attitude[s] + flight_mode[s];
-        other[s] = (totals_valid[s] >= known_sum) ? (totals_valid[s] - known_sum) : 0;
+        uint64_t recognized_sum = 0;
+        for (int t = 0; t < 256; t++) {
+            if (m->recognized_types[t]) {
+                recognized_sum += m->type_counts[s][t];
+            }
+        }
+
+        uint64_t named_sum = rc_channels[s] + gps[s] + battery[s] + link_stats[s] + attitude[s] + flight_mode[s];
+        if (recognized_sum >= named_sum) {
+            other[s] = recognized_sum - named_sum;
+        }
+        if (totals_valid[s] >= recognized_sum) {
+            unknown[s] = totals_valid[s] - recognized_sum;
+        }
         total_all[s] = totals_valid[s] + m->invalid_frames[s];
     }
 
     fprintf(stderr,
-            "[crsf] uart rc=%llu gps=%llu bat=%llu lnk=%llu att=%llu mode=%llu oth=%llu inv=%llu tot=%llu\n"
-            "       udp  rc=%llu gps=%llu bat=%llu lnk=%llu att=%llu mode=%llu oth=%llu inv=%llu tot=%llu\n",
+            "[crsf] uart rc=%llu gps=%llu bat=%llu lnk=%llu att=%llu mode=%llu oth=%llu unk=%llu inv=%llu tot=%llu\n"
+            "       udp  rc=%llu gps=%llu bat=%llu lnk=%llu att=%llu mode=%llu oth=%llu unk=%llu inv=%llu tot=%llu\n",
             (unsigned long long)rc_channels[CRSF_FROM_UART],
             (unsigned long long)gps[CRSF_FROM_UART],
             (unsigned long long)battery[CRSF_FROM_UART],
@@ -593,6 +646,7 @@ static void crsf_monitor_maybe_report(crsf_monitor_t *m)
             (unsigned long long)attitude[CRSF_FROM_UART],
             (unsigned long long)flight_mode[CRSF_FROM_UART],
             (unsigned long long)other[CRSF_FROM_UART],
+            (unsigned long long)unknown[CRSF_FROM_UART],
             (unsigned long long)m->invalid_frames[CRSF_FROM_UART],
             (unsigned long long)total_all[CRSF_FROM_UART],
             (unsigned long long)rc_channels[CRSF_FROM_UDP],
@@ -602,6 +656,7 @@ static void crsf_monitor_maybe_report(crsf_monitor_t *m)
             (unsigned long long)attitude[CRSF_FROM_UDP],
             (unsigned long long)flight_mode[CRSF_FROM_UDP],
             (unsigned long long)other[CRSF_FROM_UDP],
+            (unsigned long long)unknown[CRSF_FROM_UDP],
             (unsigned long long)m->invalid_frames[CRSF_FROM_UDP],
             (unsigned long long)total_all[CRSF_FROM_UDP]);
     fflush(stderr);
