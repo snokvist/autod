@@ -167,8 +167,8 @@ static void set_cfg_string(const char **field, const char *value, const char *de
 static void set_cfg_field(const char *k, const char *v)
 {
 #define EQ(a,b) (strcmp((a),(b))==0)
-    if (EQ(k, "info_file")) { set_cfg_string(&cfg.info_files[0], v, cfg_default.info_files[0]); info_buf_valid[0] = false; last_info_attempt[0] = 0; }
-    else if (EQ(k, "info_file2") || EQ(k, "info_file_alt") || EQ(k, "info_file_secondary")) { set_cfg_string(&cfg.info_files[1], v, cfg_default.info_files[1]); info_buf_valid[1] = false; last_info_attempt[1] = 0; }
+    if (EQ(k, "info_file") || EQ(k, "telemetry_file") || EQ(k, "telemetry_primary")) { set_cfg_string(&cfg.info_files[0], v, cfg_default.info_files[0]); info_buf_valid[0] = false; last_info_attempt[0] = 0; }
+    else if (EQ(k, "info_file2") || EQ(k, "info_file_alt") || EQ(k, "info_file_secondary") || EQ(k, "telemetry_file2") || EQ(k, "telemetry_secondary") || EQ(k, "telemetry_alt")) { set_cfg_string(&cfg.info_files[1], v, cfg_default.info_files[1]); info_buf_valid[1] = false; last_info_attempt[1] = 0; }
     else if (EQ(k, "out_file")) set_cfg_string(&cfg.out_file, v, cfg_default.out_file);
     else if (EQ(k, "interval")) cfg.interval = atof(v);
     else if (EQ(k, "bar_width")) cfg.bar_width = atoi(v);
@@ -177,7 +177,7 @@ static void set_cfg_field(const char *k, const char *v)
     else if (EQ(k, "osd_hdr")) set_cfg_string(&cfg.osd_hdr, v, cfg_default.osd_hdr);
     else if (EQ(k, "osd_hdr2")) set_cfg_string(&cfg.osd_hdr2, v, cfg_default.osd_hdr2);
     else if (EQ(k, "sys_msg_hdr")) set_cfg_string(&cfg.sys_msg_hdr, v, cfg_default.sys_msg_hdr);
-    else if (EQ(k, "show_stats_line")) {
+    else if (EQ(k, "show_stats_line") || EQ(k, "stats_line_mode")) {
         if (!strcasecmp(v, "true")) cfg.show_stats_line = 3;
         else if (!strcasecmp(v, "false")) cfg.show_stats_line = 0;
         else {
@@ -198,12 +198,12 @@ static void set_cfg_field(const char *k, const char *v)
     else if (EQ(k, "start_sym")) set_cfg_string(&cfg.start_sym, v, cfg_default.start_sym);
     else if (EQ(k, "end_sym")) set_cfg_string(&cfg.end_sym, v, cfg_default.end_sym);
     else if (EQ(k, "empty_sym")) set_cfg_string(&cfg.empty_sym, v, cfg_default.empty_sym);
-    else if (EQ(k, "rssi_key")) set_cfg_string(&cfg.rssi_key, v, cfg_default.rssi_key);
-    else if (EQ(k, "curr_tx_rate_key")) set_cfg_string(&cfg.curr_tx_rate_key, v, cfg_default.curr_tx_rate_key);
-    else if (EQ(k, "curr_tx_bw_key")) set_cfg_string(&cfg.curr_tx_bw_key, v, cfg_default.curr_tx_bw_key);
-    else if (EQ(k, "rssi_2_enable")) cfg.rssi2_enable = atoi(v) != 0;
-    else if (EQ(k, "rssi_2_key")) set_cfg_string(&cfg.rssi2_key, v, cfg_default.rssi2_key);
-    else if (EQ(k, "tx_power_key")) set_cfg_string(&cfg.tx_power_key, v, cfg_default.tx_power_key);
+    else if (EQ(k, "rssi_key") || EQ(k, "signal_key") || EQ(k, "signal_strength_key")) set_cfg_string(&cfg.rssi_key, v, cfg_default.rssi_key);
+    else if (EQ(k, "curr_tx_rate_key") || EQ(k, "stats_mcs_key") || EQ(k, "stats_rate_key")) set_cfg_string(&cfg.curr_tx_rate_key, v, cfg_default.curr_tx_rate_key);
+    else if (EQ(k, "curr_tx_bw_key") || EQ(k, "stats_bw_key") || EQ(k, "stats_bandwidth_key")) set_cfg_string(&cfg.curr_tx_bw_key, v, cfg_default.curr_tx_bw_key);
+    else if (EQ(k, "rssi_2_enable") || EQ(k, "secondary_rssi_enable") || EQ(k, "alt_rssi_enable")) cfg.rssi2_enable = atoi(v) != 0;
+    else if (EQ(k, "rssi_2_key") || EQ(k, "secondary_rssi_key") || EQ(k, "alt_rssi_key")) set_cfg_string(&cfg.rssi2_key, v, cfg_default.rssi2_key);
+    else if (EQ(k, "tx_power_key") || EQ(k, "stats_tx_power_key") || EQ(k, "stats_txpwr_key")) set_cfg_string(&cfg.tx_power_key, v, cfg_default.tx_power_key);
 #undef EQ
 }
 
