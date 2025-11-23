@@ -119,6 +119,25 @@ typedef struct {
     size_t tx_buf; // ring buffer capacity
 } config_t;
 
+/* ------------------------------ CRSF monitor ------------------------------- */
+typedef enum { CRSF_FROM_UART = 0, CRSF_FROM_UDP = 1, CRSF_SRC_MAX = 2 } crsf_source_t;
+
+typedef struct {
+    uint8_t frame[256];
+    size_t len;
+    size_t expected;
+} crsf_stream_t;
+
+typedef struct {
+    bool enabled;
+    bool recognized_types[256];
+    bool unknown_reported[256];
+    crsf_stream_t streams[CRSF_SRC_MAX];
+    uint64_t type_counts[CRSF_SRC_MAX][256];
+    uint64_t invalid_frames[CRSF_SRC_MAX];
+    struct timespec last_report;
+} crsf_monitor_t;
+
 /* --------------------------------- State ------------------------------------ */
 typedef struct {
     // fds
@@ -133,10 +152,15 @@ typedef struct {
     struct sockaddr_in udp_peer;
     bool udp_peer_set;
 
+    bool udp_wait_writable;
+
     // UDP coalesce buffer
     uint8_t *udp_out;
     size_t   udp_out_len;
     size_t   udp_out_cap;
+
+    // CRSF forwarding
+    crsf_stream_t crsf_uart_out;
 
     // stats
     uint64_t bytes_uart_to_net, bytes_net_to_uart;
@@ -156,23 +180,6 @@ typedef struct {
 
     bool running;
 } state_t;
-
-/* ------------------------------ CRSF monitor ------------------------------- */
-typedef enum { CRSF_FROM_UART = 0, CRSF_FROM_UDP = 1, CRSF_SRC_MAX = 2 } crsf_source_t;
-
-typedef struct {
-    uint8_t frame[256];
-    size_t len;
-    size_t expected;
-} crsf_stream_t;
-
-typedef struct {
-    bool enabled;
-    crsf_stream_t streams[CRSF_SRC_MAX];
-    uint64_t type_counts[CRSF_SRC_MAX][256];
-    uint64_t invalid_frames[CRSF_SRC_MAX];
-    struct timespec last_report;
-} crsf_monitor_t;
 
 /* ------------------------------- Signals ------------------------------------ */
 static volatile sig_atomic_t g_reload = 0, g_stop = 0;
@@ -378,6 +385,7 @@ static int reopen_everything(const config_t *cfg, state_t *st){
 
     st->udp_peer_set=false;
     st->udp_out_len=0;
+    st->udp_wait_writable=false;
 
     ring_free(&st->uart_out);
     if(ring_init(&st->uart_out,cfg->tx_buf)<0){
@@ -419,7 +427,7 @@ static int reopen_everything(const config_t *cfg, state_t *st){
 
 /* ----------------------------- UDP coalescing ------------------------------- */
 static void udp_flush_if_ready(const config_t *cfg, state_t *st, bool force, const char *reason){
-    if(!st->udp_peer_set){ st->udp_out_len=0; return; }
+    if(!st->udp_peer_set){ st->udp_out_len=0; st->udp_wait_writable=false; return; }
     if(st->udp_out_len==0) return;
 
     bool size_ready = (int)st->udp_out_len >= cfg->udp_coalesce_bytes;
@@ -432,12 +440,15 @@ static void udp_flush_if_ready(const config_t *cfg, state_t *st, bool force, con
         st->bytes_uart_to_net += (uint64_t)w; st->pkts_uart_to_net += 1;
         vlog(3, "UDP: sent datagram bytes=%zd reason=%s", w, reason?reason:"(unknown)");
         st->udp_out_len=0;
+        st->udp_wait_writable=false;
     } else if(w<0 && (errno==EAGAIN||errno==EWOULDBLOCK||errno==ENOBUFS)){
+        st->udp_wait_writable=true;
         vlog(2, "UDP: EAGAIN/ENOBUFS (reason=%s), will retry", reason?reason:"(unknown)");
     } else {
         st->drops_uart_to_net += st->udp_out_len;
         vlog(1, "UDP: send error (%d) dropping datagram reason=%s", errno, reason?reason:"(unknown)");
         st->udp_out_len=0;
+        st->udp_wait_writable=false;
     }
 }
 
@@ -450,10 +461,87 @@ static void reset_stats_window(state_t *st){
     st->last_report_bytes_net_to_uart = st->bytes_net_to_uart;
 }
 
+static void maybe_print_stats(state_t *st){
+    if(!g_verbosity) return;
+    struct timespec now;
+    get_mono(&now);
+    if(st->last_stats_report.tv_sec==0 && st->last_stats_report.tv_nsec==0){
+        st->last_stats_report = now;
+        st->last_report_pkts_uart_to_net = st->pkts_uart_to_net;
+        st->last_report_pkts_net_to_uart = st->pkts_net_to_uart;
+        st->last_report_bytes_uart_to_net = st->bytes_uart_to_net;
+        st->last_report_bytes_net_to_uart = st->bytes_net_to_uart;
+        return;
+    }
+
+    long long elapsed_ms = diff_ms(&now, &st->last_stats_report);
+    if(elapsed_ms < 1000) return;
+
+    double secs = (double)elapsed_ms / 1000.0;
+    uint64_t tx_pkts_delta = st->pkts_uart_to_net - st->last_report_pkts_uart_to_net;
+    uint64_t rx_pkts_delta = st->pkts_net_to_uart - st->last_report_pkts_net_to_uart;
+    uint64_t tx_bytes_delta = st->bytes_uart_to_net - st->last_report_bytes_uart_to_net;
+    uint64_t rx_bytes_delta = st->bytes_net_to_uart - st->last_report_bytes_net_to_uart;
+
+    double tx_pps = secs>0.0 ? (double)tx_pkts_delta / secs : 0.0;
+    double rx_pps = secs>0.0 ? (double)rx_pkts_delta / secs : 0.0;
+    double tx_bps = secs>0.0 ? (double)tx_bytes_delta / secs : 0.0;
+    double rx_bps = secs>0.0 ? (double)rx_bytes_delta / secs : 0.0;
+
+    fprintf(stderr,
+            "[stats] tx %.1f pkts/s (%.0f B/s) rx %.1f pkts/s (%.0f B/s) drops tx=%llu rx=%llu totals tx=%llu rx=%llu\n",
+            tx_pps, tx_bps, rx_pps, rx_bps,
+            (unsigned long long)st->drops_uart_to_net,
+            (unsigned long long)st->drops_net_to_uart,
+            (unsigned long long)st->pkts_uart_to_net,
+            (unsigned long long)st->pkts_net_to_uart);
+
+    st->last_stats_report = now;
+    st->last_report_pkts_uart_to_net = st->pkts_uart_to_net;
+    st->last_report_pkts_net_to_uart = st->pkts_net_to_uart;
+    st->last_report_bytes_uart_to_net = st->bytes_uart_to_net;
+    st->last_report_bytes_net_to_uart = st->bytes_net_to_uart;
+}
+
+/* ------------------------------ CRSF support -------------------------------- */
+/* CRSF monitor */
 static void crsf_monitor_init(crsf_monitor_t *m, bool enabled)
 {
     memset(m, 0, sizeof(*m));
     m->enabled = enabled;
+
+    static const uint8_t known_types[] = {
+        0x02, /* GPS */
+        0x07, /* Vario */
+        0x08, /* Battery sensor */
+        0x09, /* Baro altitude */
+        0x0B, /* Heartbeat */
+        0x0F, /* Video transmitter */
+        0x10, /* OpenTX sync */
+        0x14, /* Link statistics */
+        0x16, /* RC channels packed */
+        0x1C, /* Link RX ID */
+        0x1D, /* Link TX ID */
+        0x1E, /* Attitude */
+        0x21, /* Flight mode */
+        0x28, /* Device ping */
+        0x29, /* Device info */
+        0x2B, /* Parameter settings entry */
+        0x2C, /* Parameter read */
+        0x2D, /* Parameter write */
+        0x32, /* Command */
+        0x3A, /* Radio ID */
+        0x78, /* KISS request */
+        0x79, /* KISS response */
+        0x7A, /* MSP request */
+        0x7B, /* MSP response */
+        0x7C, /* MSP write */
+        0x80, /* Ardupilot response */
+    };
+
+    for (size_t i = 0; i < sizeof(known_types); i++) {
+        m->recognized_types[known_types[i]] = true;
+    }
 }
 
 static void crsf_monitor_set_enabled(crsf_monitor_t *m, bool enabled)
@@ -489,6 +577,11 @@ static void crsf_monitor_handle_frame(crsf_monitor_t *m, crsf_source_t src, crsf
 
     uint8_t type = s->frame[2];
     m->type_counts[src][type] += 1;
+
+    if (!m->recognized_types[type] && !m->unknown_reported[type]) {
+        vlog(1, "CRSF: unrecognized frame type 0x%02X (len=%zu)", type, s->len);
+        m->unknown_reported[type] = true;
+    }
 }
 
 static void crsf_monitor_feed(crsf_monitor_t *m, crsf_source_t src, const uint8_t *data, size_t n)
@@ -555,6 +648,7 @@ static void crsf_monitor_maybe_report(crsf_monitor_t *m)
     uint64_t attitude[CRSF_SRC_MAX] = {0};
     uint64_t flight_mode[CRSF_SRC_MAX] = {0};
     uint64_t other[CRSF_SRC_MAX] = {0};
+    uint64_t unknown[CRSF_SRC_MAX] = {0};
     uint64_t total_all[CRSF_SRC_MAX] = {0};
 
     for (int s = 0; s < CRSF_SRC_MAX; s++) {
@@ -569,14 +663,26 @@ static void crsf_monitor_maybe_report(crsf_monitor_t *m)
         attitude[s]   = m->type_counts[s][0x1E];
         flight_mode[s]= m->type_counts[s][0x21];
 
-        uint64_t known_sum = rc_channels[s] + gps[s] + battery[s] + link_stats[s] + attitude[s] + flight_mode[s];
-        other[s] = (totals_valid[s] >= known_sum) ? (totals_valid[s] - known_sum) : 0;
+        uint64_t recognized_sum = 0;
+        for (int t = 0; t < 256; t++) {
+            if (m->recognized_types[t]) {
+                recognized_sum += m->type_counts[s][t];
+            }
+        }
+
+        uint64_t named_sum = rc_channels[s] + gps[s] + battery[s] + link_stats[s] + attitude[s] + flight_mode[s];
+        if (recognized_sum >= named_sum) {
+            other[s] = recognized_sum - named_sum;
+        }
+        if (totals_valid[s] >= recognized_sum) {
+            unknown[s] = totals_valid[s] - recognized_sum;
+        }
         total_all[s] = totals_valid[s] + m->invalid_frames[s];
     }
 
     fprintf(stderr,
-            "[crsf] uart rc=%llu gps=%llu bat=%llu lnk=%llu att=%llu mode=%llu oth=%llu inv=%llu tot=%llu\n"
-            "       udp  rc=%llu gps=%llu bat=%llu lnk=%llu att=%llu mode=%llu oth=%llu inv=%llu tot=%llu\n",
+            "[crsf] uart rc=%llu gps=%llu bat=%llu lnk=%llu att=%llu mode=%llu oth=%llu unk=%llu inv=%llu tot=%llu\n"
+            "       udp  rc=%llu gps=%llu bat=%llu lnk=%llu att=%llu mode=%llu oth=%llu unk=%llu inv=%llu tot=%llu\n",
             (unsigned long long)rc_channels[CRSF_FROM_UART],
             (unsigned long long)gps[CRSF_FROM_UART],
             (unsigned long long)battery[CRSF_FROM_UART],
@@ -584,6 +690,7 @@ static void crsf_monitor_maybe_report(crsf_monitor_t *m)
             (unsigned long long)attitude[CRSF_FROM_UART],
             (unsigned long long)flight_mode[CRSF_FROM_UART],
             (unsigned long long)other[CRSF_FROM_UART],
+            (unsigned long long)unknown[CRSF_FROM_UART],
             (unsigned long long)m->invalid_frames[CRSF_FROM_UART],
             (unsigned long long)total_all[CRSF_FROM_UART],
             (unsigned long long)rc_channels[CRSF_FROM_UDP],
@@ -593,6 +700,7 @@ static void crsf_monitor_maybe_report(crsf_monitor_t *m)
             (unsigned long long)attitude[CRSF_FROM_UDP],
             (unsigned long long)flight_mode[CRSF_FROM_UDP],
             (unsigned long long)other[CRSF_FROM_UDP],
+            (unsigned long long)unknown[CRSF_FROM_UDP],
             (unsigned long long)m->invalid_frames[CRSF_FROM_UDP],
             (unsigned long long)total_all[CRSF_FROM_UDP]);
     fflush(stderr);
@@ -605,46 +713,122 @@ static void crsf_monitor_maybe_report(crsf_monitor_t *m)
     }
 }
 
-static void maybe_print_stats(state_t *st){
-    if(!g_verbosity) return;
-    struct timespec now;
-    get_mono(&now);
-    if(st->last_stats_report.tv_sec==0 && st->last_stats_report.tv_nsec==0){
-        st->last_stats_report = now;
-        st->last_report_pkts_uart_to_net = st->pkts_uart_to_net;
-        st->last_report_pkts_net_to_uart = st->pkts_net_to_uart;
-        st->last_report_bytes_uart_to_net = st->bytes_uart_to_net;
-        st->last_report_bytes_net_to_uart = st->bytes_net_to_uart;
+/* CRSF forwarding */
+static void crsf_forward_reset(state_t *st)
+{
+    crsf_stream_reset(&st->crsf_uart_out);
+}
+
+static void crsf_forward_send(const config_t *cfg, state_t *st, const crsf_stream_t *s)
+{
+    uint8_t len_field = s->frame[1];
+    size_t total = (size_t)len_field + 2;
+
+    if (len_field < 2 || total != s->len || total < 4 || total > sizeof(s->frame)) {
+        st->drops_uart_to_net += (uint64_t)s->len;
+        vlog(2, "CRSF: invalid length field len=%u frame_len=%zu, dropping", len_field, s->len);
         return;
     }
 
-    long long elapsed_ms = diff_ms(&now, &st->last_stats_report);
-    if(elapsed_ms < 1000) return;
+    size_t crc_off = total - 1;
+    uint8_t expected_crc = s->frame[crc_off];
+    uint8_t calc_crc = crc8_d5(s->frame + 2, (size_t)len_field - 1);
+    if (calc_crc != expected_crc) {
+        st->drops_uart_to_net += (uint64_t)s->len;
+        vlog(2, "CRSF: CRC mismatch calc=0x%02X expected=0x%02X, dropping", calc_crc, expected_crc);
+        return;
+    }
 
-    double secs = (double)elapsed_ms / 1000.0;
-    uint64_t tx_pkts_delta = st->pkts_uart_to_net - st->last_report_pkts_uart_to_net;
-    uint64_t rx_pkts_delta = st->pkts_net_to_uart - st->last_report_pkts_net_to_uart;
-    uint64_t tx_bytes_delta = st->bytes_uart_to_net - st->last_report_bytes_uart_to_net;
-    uint64_t rx_bytes_delta = st->bytes_net_to_uart - st->last_report_bytes_net_to_uart;
+    if (!st->udp_peer_set) {
+        st->drops_uart_to_net += (uint64_t)s->len;
+        return;
+    }
 
-    double tx_pps = secs>0.0 ? (double)tx_pkts_delta / secs : 0.0;
-    double rx_pps = secs>0.0 ? (double)rx_pkts_delta / secs : 0.0;
-    double tx_bps = secs>0.0 ? (double)tx_bytes_delta / secs : 0.0;
-    double rx_bps = secs>0.0 ? (double)rx_bytes_delta / secs : 0.0;
+    if (s->len > st->udp_out_cap) {
+        st->drops_uart_to_net += (uint64_t)s->len;
+        vlog(2, "CRSF: frame too large (%zu > %zu), dropping", s->len, st->udp_out_cap);
+        return;
+    }
 
-    fprintf(stderr,
-            "[stats] tx %.1f pkts/s (%.0f B/s) rx %.1f pkts/s (%.0f B/s) drops tx=%llu rx=%llu totals tx=%llu rx=%llu\n",
-            tx_pps, tx_bps, rx_pps, rx_bps,
-            (unsigned long long)st->drops_uart_to_net,
-            (unsigned long long)st->drops_net_to_uart,
-            (unsigned long long)st->pkts_uart_to_net,
-            (unsigned long long)st->pkts_net_to_uart);
+    if (st->udp_out_len > 0) {
+        udp_flush_if_ready(cfg, st, true, "crsf_waiting_flush");
+        if (st->udp_out_len > 0) {
+            st->drops_uart_to_net += (uint64_t)s->len;
+            vlog(2, "CRSF: pending datagram not sent, dropping frame");
+            return;
+        }
+    }
 
-    st->last_stats_report = now;
-    st->last_report_pkts_uart_to_net = st->pkts_uart_to_net;
-    st->last_report_pkts_net_to_uart = st->pkts_net_to_uart;
-    st->last_report_bytes_uart_to_net = st->bytes_uart_to_net;
-    st->last_report_bytes_net_to_uart = st->bytes_net_to_uart;
+    memcpy(st->udp_out, s->frame, s->len);
+    st->udp_out_len = s->len;
+    udp_flush_if_ready(cfg, st, true, "crsf_frame");
+}
+
+static void crsf_forward_feed(const config_t *cfg, state_t *st, const uint8_t *data, size_t n)
+{
+    for (size_t i = 0; i < n; i++) {
+        uint8_t b = data[i];
+        crsf_stream_t *s = &st->crsf_uart_out;
+
+        if (s->len == 0) {
+            s->frame[0] = b;
+            s->len = 1;
+            s->expected = 0;
+            continue;
+        }
+
+        if (s->len == 1) {
+            s->frame[1] = b;
+            s->len = 2;
+            size_t total = (size_t)b + 2;
+            if (total < 4 || total > sizeof(s->frame)) {
+                crsf_forward_reset(st);
+            } else {
+                s->expected = total;
+            }
+            continue;
+        }
+
+        if (s->len < sizeof(s->frame)) {
+            s->frame[s->len] = b;
+        }
+        s->len++;
+
+        if (s->expected && s->len == s->expected) {
+            crsf_forward_send(cfg, st, s);
+            crsf_forward_reset(st);
+        } else if (s->len >= sizeof(s->frame)) {
+            crsf_forward_reset(st);
+        }
+    }
+}
+
+static void uart_forward_with_coalesce(const config_t *cfg, state_t *st,
+                                       const uint8_t *data, size_t n)
+{
+    size_t remaining = n;
+    size_t offset = 0;
+
+    while (remaining > 0) {
+        size_t available = st->udp_out_cap - st->udp_out_len;
+        if (available == 0) {
+            udp_flush_if_ready(cfg, st, true, "buffer_full");
+            available = st->udp_out_cap - st->udp_out_len;
+            if (available == 0) {
+                st->drops_uart_to_net += (uint64_t)remaining;
+                break;
+            }
+        }
+
+        size_t chunk = remaining < available ? remaining : available;
+        memcpy(st->udp_out + st->udp_out_len, data + offset, chunk);
+        st->udp_out_len += chunk;
+        remaining -= chunk;
+        offset += chunk;
+    }
+
+    udp_flush_if_ready(cfg, st, false,
+        st->udp_out_len >= (size_t)cfg->udp_coalesce_bytes ? "size_threshold" : "pending");
 }
 
 /* --------------------------------- main ------------------------------------- */
@@ -694,6 +878,8 @@ int main(int argc, char **argv){
         free(st.udp_out); st.udp_out=NULL;
         return 1;
     }
+
+    crsf_forward_reset(&st);
 
     struct sigaction sa={0}; sa.sa_handler=on_sighup; sigaction(SIGHUP,&sa,NULL);
     sa.sa_handler=on_sigterm; sigaction(SIGINT,&sa,NULL); sigaction(SIGTERM,&sa,NULL);
@@ -780,11 +966,15 @@ int main(int argc, char **argv){
                     st.udp_out = new_udp_out;
                     st.udp_out_cap = desired_udp_cap;
                     st.udp_out_len = 0;
+                    st.udp_wait_writable = false;
                     free(old_udp);
                 } else {
                     st.udp_out_cap = desired_udp_cap;
                     st.udp_out_len = 0;
+                    st.udp_wait_writable = false;
                 }
+
+                crsf_forward_reset(&st);
 
                 get_mono(&st.last_uart_rx);
                 reset_stats_window(&st);
@@ -817,7 +1007,7 @@ int main(int argc, char **argv){
         }
 
         if(st.fd_net>=0){
-            uint32_t net_events = EPOLLIN | (st.udp_out_len>0 ? EPOLLOUT : 0);
+            uint32_t net_events = EPOLLIN | (st.udp_wait_writable ? EPOLLOUT : 0);
             mod_ep(st.epfd, st.fd_net, net_events);
         }
 
@@ -845,28 +1035,18 @@ int main(int argc, char **argv){
             if(fd==st.fd_uart && (ev&EPOLLIN)){
                 ssize_t r=read(st.fd_uart,(void*)buf_uart,cfg.rx_buf);
                 if(r>0){
+                    bool crsf_mode = cfg.crsf_detect != 0;
+
                     get_mono(&st.last_uart_rx);
-                    crsf_monitor_feed(&crsf, CRSF_FROM_UART, buf_uart, (size_t)r);
-                    size_t remaining=(size_t)r;
-                    size_t offset=0;
-                    while(remaining>0){
-                        size_t available = st.udp_out_cap - st.udp_out_len;
-                        if(available==0){
-                            udp_flush_if_ready(&cfg,&st,true,"buffer_full");
-                            available = st.udp_out_cap - st.udp_out_len;
-                            if(available==0){
-                                st.drops_uart_to_net += (uint64_t)remaining;
-                                break;
-                            }
-                        }
-                        size_t chunk = remaining<available?remaining:available;
-                        memcpy(st.udp_out+st.udp_out_len, buf_uart+offset, chunk);
-                        st.udp_out_len += chunk;
-                        remaining -= chunk;
-                        offset += chunk;
+                    if (crsf.enabled) {
+                        crsf_monitor_feed(&crsf, CRSF_FROM_UART, buf_uart, (size_t)r);
                     }
-                    udp_flush_if_ready(&cfg,&st,false,
-                        st.udp_out_len >= (size_t)cfg.udp_coalesce_bytes ? "size_threshold" : "pending");
+
+                    if (crsf_mode) {
+                        crsf_forward_feed(&cfg, &st, buf_uart, (size_t)r);
+                    } else {
+                        uart_forward_with_coalesce(&cfg, &st, buf_uart, (size_t)r);
+                    }
                 }
             }
 
@@ -874,7 +1054,9 @@ int main(int argc, char **argv){
                 struct sockaddr_in from; socklen_t flen=sizeof(from);
                 ssize_t r=recvfrom(st.fd_net, buf_net, cfg.rx_buf, 0,(struct sockaddr*)&from,&flen);
                 if(r>0){
-                    crsf_monitor_feed(&crsf, CRSF_FROM_UDP, buf_net, (size_t)r);
+                    if (crsf.enabled) {
+                        crsf_monitor_feed(&crsf, CRSF_FROM_UDP, buf_net, (size_t)r);
+                    }
                     if(!cfg.udp_peer_addr[0]){
                         bool changed = !st.udp_peer_set ||
                             st.udp_peer.sin_addr.s_addr!=from.sin_addr.s_addr ||
