@@ -94,6 +94,10 @@ typedef struct {
 
     // CRSF parser
     int  crsf_detect;              // 0 | 1
+    int  crsf_log;                 // 0 | 1
+    char crsf_log_path[256];
+    int  crsf_log_rate_ms;         // >= 0
+    int  crsf_coalesce;            // 0 | 1
 
     // UART
     char uart_device[128];
@@ -138,6 +142,25 @@ typedef struct {
     struct timespec last_report;
 } crsf_monitor_t;
 
+typedef struct {
+    bool enabled;
+    bool has_battery;
+    bool has_gps;
+    struct timespec last_write;
+
+    double voltage_v;
+    double current_raw;
+    uint32_t capacity_mah;
+    uint8_t remaining_pct;
+
+    double latitude_deg;
+    double longitude_deg;
+    double groundspeed_raw;
+    double heading_deg;
+    double altitude_m;
+    uint8_t sats;
+} crsf_log_state_t;
+
 /* --------------------------------- State ------------------------------------ */
 typedef struct {
     // fds
@@ -161,6 +184,7 @@ typedef struct {
 
     // CRSF forwarding
     crsf_stream_t crsf_uart_out;
+    crsf_log_state_t crsf_log;
 
     // stats
     uint64_t bytes_uart_to_net, bytes_net_to_uart;
@@ -180,6 +204,10 @@ typedef struct {
 
     bool running;
 } state_t;
+
+/* Forward declarations */
+static void uart_forward_with_coalesce(const config_t *cfg, state_t *st,
+                                       const uint8_t *data, size_t n);
 
 /* ------------------------------- Signals ------------------------------------ */
 static volatile sig_atomic_t g_reload = 0, g_stop = 0;
@@ -245,6 +273,10 @@ static int parse_config(const char *path, config_t *cfg){
     // Defaults
     cfg->uart_backend = UART_TTY;
     cfg->crsf_detect = 0;
+    cfg->crsf_log = 0;
+    strcpy(cfg->crsf_log_path, "/tmp/crsf_log.msg");
+    cfg->crsf_log_rate_ms = 100;
+    cfg->crsf_coalesce = 0;
 
     strcpy(cfg->uart_device, "/dev/ttyS1");
     cfg->uart_baud=115200; cfg->uart_databits=8; strcpy(cfg->uart_parity,"none"); cfg->uart_stopbits=1; strcpy(cfg->uart_flow,"none");
@@ -293,6 +325,13 @@ static int parse_config(const char *path, config_t *cfg){
         else if(!strcmp(key,"rx_buf")) cfg->rx_buf=(size_t)strtoul(val,NULL,10);
         else if(!strcmp(key,"tx_buf")) cfg->tx_buf=(size_t)strtoul(val,NULL,10);
         else if(!strcmp(key,"crsf_detect")) cfg->crsf_detect=atoi(val);
+        else if(!strcmp(key,"crsf_log")) cfg->crsf_log=atoi(val);
+        else if(!strcmp(key,"crsf_log_path")){
+            strncpy(cfg->crsf_log_path, val, sizeof(cfg->crsf_log_path) - 1);
+            cfg->crsf_log_path[sizeof(cfg->crsf_log_path) - 1] = 0;
+        }
+        else if(!strcmp(key,"crsf_log_rate_ms")) cfg->crsf_log_rate_ms=atoi(val);
+        else if(!strcmp(key,"crsf_coalesce")) cfg->crsf_coalesce=atoi(val);
     }
     fclose(f);
 
@@ -302,6 +341,9 @@ static int parse_config(const char *path, config_t *cfg){
     if (cfg->udp_coalesce_idle_ms < 0) cfg->udp_coalesce_idle_ms = 0;
     if (cfg->rx_buf == 0) cfg->rx_buf = 1024;
     if (cfg->tx_buf == 0) cfg->tx_buf = 65536;
+    if (cfg->crsf_log_rate_ms <= 0) cfg->crsf_log_rate_ms = 100;
+    if (!cfg->crsf_log_path[0]) strcpy(cfg->crsf_log_path, "/tmp/crsf_log.msg");
+    cfg->crsf_coalesce = cfg->crsf_coalesce ? 1 : 0;
 
     return 0;
 }
@@ -713,6 +755,107 @@ static void crsf_monitor_maybe_report(crsf_monitor_t *m)
     }
 }
 
+/* CRSF logging */
+static void crsf_log_reset(crsf_log_state_t *log)
+{
+    memset(log, 0, sizeof(*log));
+}
+
+static void crsf_log_apply_config(crsf_log_state_t *log, const config_t *cfg)
+{
+    bool new_enabled = cfg->crsf_detect && cfg->crsf_log && cfg->crsf_log_path[0];
+
+    if (!new_enabled) {
+        crsf_log_reset(log);
+        return;
+    }
+
+    if (!log->enabled) {
+        log->has_battery = false;
+        log->has_gps = false;
+        log->last_write.tv_sec = 0;
+        log->last_write.tv_nsec = 0;
+    }
+
+    log->enabled = true;
+}
+
+static void crsf_log_maybe_write(const config_t *cfg, crsf_log_state_t *log)
+{
+    if (!log->enabled) return;
+    if (!log->has_battery && !log->has_gps) return;
+
+    struct timespec now;
+    get_mono(&now);
+    if (log->last_write.tv_sec || log->last_write.tv_nsec) {
+        if (diff_ms(&now, &log->last_write) < cfg->crsf_log_rate_ms) return;
+    }
+
+    FILE *f = fopen(cfg->crsf_log_path, "w");
+    if (!f) {
+        vlog(2, "CRSF log: failed to open %s (%s)", cfg->crsf_log_path, strerror(errno));
+        return;
+    }
+
+    if (log->has_battery) {
+        fprintf(f, "voltage=%.1f\n", log->voltage_v);
+        fprintf(f, "current=%.0f\n", log->current_raw);
+        fprintf(f, "capacity=%u\n", log->capacity_mah);
+        fprintf(f, "remaining=%u\n", (unsigned)log->remaining_pct);
+    }
+
+    if (log->has_gps) {
+        fprintf(f, "latitude=%.7f\n", log->latitude_deg);
+        fprintf(f, "longitude=%.7f\n", log->longitude_deg);
+        fprintf(f, "groundspeed=%.0f\n", log->groundspeed_raw);
+        fprintf(f, "heading=%.2f\n", log->heading_deg);
+        fprintf(f, "altitude=%.2f\n", log->altitude_m);
+        fprintf(f, "sats=%u\n", (unsigned)log->sats);
+    }
+
+    fclose(f);
+    log->last_write = now;
+}
+
+static void crsf_log_update(const config_t *cfg, state_t *st, uint8_t type, const uint8_t *payload, size_t payload_len)
+{
+    if (!st->crsf_log.enabled) return;
+
+    if (type == 0x08 && payload_len >= 8) {
+        uint16_t voltage_raw = ((uint16_t)payload[0] << 8) | (uint16_t)payload[1];
+        uint16_t current_raw = ((uint16_t)payload[2] << 8) | (uint16_t)payload[3];
+        uint32_t capacity = ((uint32_t)payload[4] << 16) | ((uint32_t)payload[5] << 8) | (uint32_t)payload[6];
+        uint8_t remaining = payload[7];
+
+        st->crsf_log.voltage_v = (double)voltage_raw / 10.0;
+        st->crsf_log.current_raw = (double)current_raw;
+        st->crsf_log.capacity_mah = capacity;
+        st->crsf_log.remaining_pct = remaining;
+        st->crsf_log.has_battery = true;
+    } else if (type == 0x02 && payload_len >= 15) {
+        int32_t lat_raw = (int32_t)((uint32_t)payload[0] << 24 | (uint32_t)payload[1] << 16 |
+                                    (uint32_t)payload[2] << 8 | (uint32_t)payload[3]);
+        int32_t lon_raw = (int32_t)((uint32_t)payload[4] << 24 | (uint32_t)payload[5] << 16 |
+                                    (uint32_t)payload[6] << 8 | (uint32_t)payload[7]);
+        uint16_t groundspeed = ((uint16_t)payload[8] << 8) | (uint16_t)payload[9];
+        uint16_t heading = ((uint16_t)payload[10] << 8) | (uint16_t)payload[11];
+        uint16_t altitude = ((uint16_t)payload[12] << 8) | (uint16_t)payload[13];
+        uint8_t sats = payload[14];
+
+        st->crsf_log.latitude_deg = (double)lat_raw / 1e7;
+        st->crsf_log.longitude_deg = (double)lon_raw / 1e7;
+        st->crsf_log.groundspeed_raw = (double)groundspeed;
+        st->crsf_log.heading_deg = (double)heading / 100.0;
+        st->crsf_log.altitude_m = (double)((int)altitude - 1000);
+        st->crsf_log.sats = sats;
+        st->crsf_log.has_gps = true;
+    } else {
+        return;
+    }
+
+    crsf_log_maybe_write(cfg, &st->crsf_log);
+}
+
 /* CRSF forwarding */
 static void crsf_forward_reset(state_t *st)
 {
@@ -723,6 +866,7 @@ static void crsf_forward_send(const config_t *cfg, state_t *st, const crsf_strea
 {
     uint8_t len_field = s->frame[1];
     size_t total = (size_t)len_field + 2;
+    size_t payload_len = (size_t)len_field >= 2 ? (size_t)len_field - 2 : 0;
 
     if (len_field < 2 || total != s->len || total < 4 || total > sizeof(s->frame)) {
         st->drops_uart_to_net += (uint64_t)s->len;
@@ -739,8 +883,15 @@ static void crsf_forward_send(const config_t *cfg, state_t *st, const crsf_strea
         return;
     }
 
+    crsf_log_update(cfg, st, s->frame[2], s->frame + 3, payload_len);
+
     if (!st->udp_peer_set) {
         st->drops_uart_to_net += (uint64_t)s->len;
+        return;
+    }
+
+    if (cfg->crsf_coalesce) {
+        uart_forward_with_coalesce(cfg, st, s->frame, s->len);
         return;
     }
 
@@ -864,6 +1015,8 @@ int main(int argc, char **argv){
     st.fd_uart=st.fd_net=-1; st.fd_stdout=-1;
     st.epfd=epoll_create1(0); if(st.epfd<0){ perror("epoll_create1"); return 1; }
 
+    crsf_log_apply_config(&st.crsf_log, &cfg);
+
     size_t udp_out_cap = cfg.udp_max_datagram>0?(size_t)cfg.udp_max_datagram:1200;
     st.udp_out=(uint8_t*)malloc(udp_out_cap);
     st.udp_out_len=0;
@@ -952,6 +1105,7 @@ int main(int argc, char **argv){
                 cfg = newcfg;
 
                 crsf_monitor_set_enabled(&crsf, cfg.crsf_detect && g_verbosity);
+                crsf_log_apply_config(&st.crsf_log, &cfg);
 
                 if(rx_resize){
                     free(buf_uart);
