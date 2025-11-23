@@ -430,7 +430,7 @@ static void write_osd(int rssi,int rssi2,const char *mcs_str,const char *bw_str,
                             cfg.osd_hdr2);
         } else {
             flen += snprintf(filebuf+flen, sizeof(filebuf)-flen,
-                            "TEMP: &TC/&WC | CPU: &C | %s / %s / %s | &B%s\n",
+                            "TEMP: &TC | CPU: &C | %s / %s / %s | &B%s\n",
                             mcs_str, bw_str, tx_str,
                             cfg.osd_hdr2);
         }
