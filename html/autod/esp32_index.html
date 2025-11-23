@@ -271,7 +271,11 @@
   .tabs button.slot-primary { border: 1px solid var(--ok); color: var(--ok); background: rgba(46,155,75,0.12); box-shadow: 0 0 0 1px rgba(46,155,75,0.2); }
   .tabs button.slot-primary.active { background: var(--accent-strong); color: #fff; box-shadow: none; border-color: var(--accent-strong); }
   .status-pill { background: #e4edff; border: 1px solid var(--border-strong); border-radius: 999px; padding: 0.35rem 0.75rem; font-size: 0.9rem; box-shadow: 0 6px 14px rgba(14,76,149,0.12); }
-  .status-strip { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; justify-content: flex-end; }
+  .runtime-status-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; align-items: start; }
+  .runtime-scan { display: grid; gap: 8px; align-items: start; }
+  .runtime-scan .button { justify-content: flex-start; }
+  .runtime-pill-stack { display: grid; gap: 6px; }
+  .runtime-pill-stack .status-pill { width: 100%; justify-content: flex-start; }
   .tab-panel { display: none; flex-direction: column; gap: 1.5rem; }
   .tab-panel.active { display: flex; }
   :root { --card-pad: 1.1rem 1.25rem; }
@@ -549,7 +553,6 @@
     .tabs { padding: 0; }
     .tabs .tab-row { flex-direction: column; align-items: stretch; }
     .tabs button { width: 100%; text-align: center; }
-    .status-strip { width: 100%; justify-content: flex-start; }
     .slot-actions, .slot-waiting { flex-direction: column; align-items: stretch; }
     .slot-actions button, .slot-waiting button, .slot-actions select, .slot-waiting select { width: 100%; }
     .slot-actions label, .slot-waiting label { width: 100%; }
@@ -599,14 +602,18 @@
           <div class="toolbar primary">
             <button class="button primary" id="capsRefreshBtn">Refresh /caps</button>
           </div>
-          <div class="status-strip">
-            <button class="button danger" id="nodesScanBtn">POST /nodes (scan)</button>
-            <div class="status-pill" id="nodesSummary">Nodes: waiting…</div>
-            <div class="status-pill" id="syncSummary">Sync: waiting…</div>
-          </div>
         </div>
       </div>
       <div class="body grid">
+        <div class="runtime-status-grid">
+          <div class="runtime-scan">
+            <button class="button danger" id="nodesScanBtn">POST /nodes (scan)</button>
+            <div class="runtime-pill-stack">
+              <div class="status-pill" id="nodesSummary">Nodes: waiting…</div>
+              <div class="status-pill" id="syncSummary">Sync: waiting…</div>
+            </div>
+          </div>
+        </div>
         <div class="kv"><div class="mut">Device</div><div id="dev_device">—</div></div>
         <div class="kv"><div class="mut">Role</div><div id="dev_role">—</div></div>
         <div class="kv"><div class="mut">Version</div><div id="dev_version">—</div></div>
@@ -719,7 +726,6 @@
               </div>
               <div class="slot-meta-inline">
                 <span class="badge" id="slot1LastSeen">Last seen —</span>
-                <span class="badge" id="slot1Generation">Generation: —</span>
               </div>
             </div>
             <div class="slot-line" id="slot1Meta">—</div>
@@ -787,7 +793,6 @@
               </div>
               <div class="slot-meta-inline">
                 <span class="badge" id="slot2LastSeen">Last seen —</span>
-                <span class="badge" id="slot2Generation">Generation: —</span>
               </div>
             </div>
             <div class="slot-line" id="slot2Meta">—</div>
@@ -855,7 +860,6 @@
               </div>
               <div class="slot-meta-inline">
                 <span class="badge" id="slot3LastSeen">Last seen —</span>
-                <span class="badge" id="slot3Generation">Generation: —</span>
               </div>
             </div>
             <div class="slot-line" id="slot3Meta">—</div>
@@ -1316,7 +1320,6 @@ function updateSlotSummary(slotNumber, rec){
   const summaryEl = document.getElementById(`slot${slotNumber}Summary`);
   const metaEl = document.getElementById(`slot${slotNumber}Meta`);
   const lastSeenEl = document.getElementById(`slot${slotNumber}LastSeen`);
-  const genEl = document.getElementById(`slot${slotNumber}Generation`);
   const slotMetaEl = document.getElementById(`slot${slotNumber}SlotMeta`);
   const slotMeta = syncState.meta.get(slotNumber) || null;
   if (summaryEl){
@@ -1327,11 +1330,6 @@ function updateSlotSummary(slotNumber, rec){
   }
   if (lastSeenEl){
     lastSeenEl.textContent = rec ? `Last seen ${formatAgoMs(rec.last_seen_ms, syncState.refMs)}` : 'Last seen —';
-  }
-  if (genEl){
-    genEl.textContent = rec
-      ? `Generation ack ${rec.last_ack_generation ?? '—'} / slot ${rec.slot_generation ?? '—'}`
-      : 'Generation: —';
   }
   if (slotMetaEl){
     slotMetaEl.textContent = `Slot config: ${formatSlotConfig(slotMeta)}`;
