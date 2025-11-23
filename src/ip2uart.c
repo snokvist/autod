@@ -133,10 +133,15 @@ typedef struct {
     struct sockaddr_in udp_peer;
     bool udp_peer_set;
 
+    bool udp_wait_writable;
+
     // UDP coalesce buffer
     uint8_t *udp_out;
     size_t   udp_out_len;
     size_t   udp_out_cap;
+
+    // CRSF forwarding
+    crsf_stream_t crsf_uart_out;
 
     // stats
     uint64_t bytes_uart_to_net, bytes_net_to_uart;
@@ -378,6 +383,7 @@ static int reopen_everything(const config_t *cfg, state_t *st){
 
     st->udp_peer_set=false;
     st->udp_out_len=0;
+    st->udp_wait_writable=false;
 
     ring_free(&st->uart_out);
     if(ring_init(&st->uart_out,cfg->tx_buf)<0){
@@ -419,7 +425,7 @@ static int reopen_everything(const config_t *cfg, state_t *st){
 
 /* ----------------------------- UDP coalescing ------------------------------- */
 static void udp_flush_if_ready(const config_t *cfg, state_t *st, bool force, const char *reason){
-    if(!st->udp_peer_set){ st->udp_out_len=0; return; }
+    if(!st->udp_peer_set){ st->udp_out_len=0; st->udp_wait_writable=false; return; }
     if(st->udp_out_len==0) return;
 
     bool size_ready = (int)st->udp_out_len >= cfg->udp_coalesce_bytes;
@@ -432,12 +438,15 @@ static void udp_flush_if_ready(const config_t *cfg, state_t *st, bool force, con
         st->bytes_uart_to_net += (uint64_t)w; st->pkts_uart_to_net += 1;
         vlog(3, "UDP: sent datagram bytes=%zd reason=%s", w, reason?reason:"(unknown)");
         st->udp_out_len=0;
+        st->udp_wait_writable=false;
     } else if(w<0 && (errno==EAGAIN||errno==EWOULDBLOCK||errno==ENOBUFS)){
+        st->udp_wait_writable=true;
         vlog(2, "UDP: EAGAIN/ENOBUFS (reason=%s), will retry", reason?reason:"(unknown)");
     } else {
         st->drops_uart_to_net += st->udp_out_len;
         vlog(1, "UDP: send error (%d) dropping datagram reason=%s", errno, reason?reason:"(unknown)");
         st->udp_out_len=0;
+        st->udp_wait_writable=false;
     }
 }
 
@@ -605,6 +614,77 @@ static void crsf_monitor_maybe_report(crsf_monitor_t *m)
     }
 }
 
+static void crsf_forward_reset(state_t *st)
+{
+    crsf_stream_reset(&st->crsf_uart_out);
+}
+
+static void crsf_forward_send(const config_t *cfg, state_t *st, const crsf_stream_t *s)
+{
+    if (!st->udp_peer_set) {
+        st->drops_uart_to_net += (uint64_t)s->len;
+        return;
+    }
+
+    if (s->len > st->udp_out_cap) {
+        st->drops_uart_to_net += (uint64_t)s->len;
+        vlog(2, "CRSF: frame too large (%zu > %zu), dropping", s->len, st->udp_out_cap);
+        return;
+    }
+
+    if (st->udp_out_len > 0) {
+        udp_flush_if_ready(cfg, st, true, "crsf_waiting_flush");
+        if (st->udp_out_len > 0) {
+            st->drops_uart_to_net += (uint64_t)s->len;
+            vlog(2, "CRSF: pending datagram not sent, dropping frame");
+            return;
+        }
+    }
+
+    memcpy(st->udp_out, s->frame, s->len);
+    st->udp_out_len = s->len;
+    udp_flush_if_ready(cfg, st, true, "crsf_frame");
+}
+
+static void crsf_forward_feed(const config_t *cfg, state_t *st, const uint8_t *data, size_t n)
+{
+    for (size_t i = 0; i < n; i++) {
+        uint8_t b = data[i];
+        crsf_stream_t *s = &st->crsf_uart_out;
+
+        if (s->len == 0) {
+            s->frame[0] = b;
+            s->len = 1;
+            s->expected = 0;
+            continue;
+        }
+
+        if (s->len == 1) {
+            s->frame[1] = b;
+            s->len = 2;
+            size_t total = (size_t)b + 2;
+            if (total < 4 || total > sizeof(s->frame)) {
+                crsf_forward_reset(st);
+            } else {
+                s->expected = total;
+            }
+            continue;
+        }
+
+        if (s->len < sizeof(s->frame)) {
+            s->frame[s->len] = b;
+        }
+        s->len++;
+
+        if (s->expected && s->len == s->expected) {
+            crsf_forward_send(cfg, st, s);
+            crsf_forward_reset(st);
+        } else if (s->len >= sizeof(s->frame)) {
+            crsf_forward_reset(st);
+        }
+    }
+}
+
 static void maybe_print_stats(state_t *st){
     if(!g_verbosity) return;
     struct timespec now;
@@ -695,6 +775,8 @@ int main(int argc, char **argv){
         return 1;
     }
 
+    crsf_forward_reset(&st);
+
     struct sigaction sa={0}; sa.sa_handler=on_sighup; sigaction(SIGHUP,&sa,NULL);
     sa.sa_handler=on_sigterm; sigaction(SIGINT,&sa,NULL); sigaction(SIGTERM,&sa,NULL);
 
@@ -780,11 +862,15 @@ int main(int argc, char **argv){
                     st.udp_out = new_udp_out;
                     st.udp_out_cap = desired_udp_cap;
                     st.udp_out_len = 0;
+                    st.udp_wait_writable = false;
                     free(old_udp);
                 } else {
                     st.udp_out_cap = desired_udp_cap;
                     st.udp_out_len = 0;
+                    st.udp_wait_writable = false;
                 }
+
+                crsf_forward_reset(&st);
 
                 get_mono(&st.last_uart_rx);
                 reset_stats_window(&st);
@@ -817,7 +903,7 @@ int main(int argc, char **argv){
         }
 
         if(st.fd_net>=0){
-            uint32_t net_events = EPOLLIN | (st.udp_out_len>0 ? EPOLLOUT : 0);
+            uint32_t net_events = EPOLLIN | (st.udp_wait_writable ? EPOLLOUT : 0);
             mod_ep(st.epfd, st.fd_net, net_events);
         }
 
@@ -847,26 +933,30 @@ int main(int argc, char **argv){
                 if(r>0){
                     get_mono(&st.last_uart_rx);
                     crsf_monitor_feed(&crsf, CRSF_FROM_UART, buf_uart, (size_t)r);
-                    size_t remaining=(size_t)r;
-                    size_t offset=0;
-                    while(remaining>0){
-                        size_t available = st.udp_out_cap - st.udp_out_len;
-                        if(available==0){
-                            udp_flush_if_ready(&cfg,&st,true,"buffer_full");
-                            available = st.udp_out_cap - st.udp_out_len;
+                    if (cfg.crsf_detect) {
+                        crsf_forward_feed(&cfg, &st, buf_uart, (size_t)r);
+                    } else {
+                        size_t remaining=(size_t)r;
+                        size_t offset=0;
+                        while(remaining>0){
+                            size_t available = st.udp_out_cap - st.udp_out_len;
                             if(available==0){
-                                st.drops_uart_to_net += (uint64_t)remaining;
-                                break;
+                                udp_flush_if_ready(&cfg,&st,true,"buffer_full");
+                                available = st.udp_out_cap - st.udp_out_len;
+                                if(available==0){
+                                    st.drops_uart_to_net += (uint64_t)remaining;
+                                    break;
+                                }
                             }
+                            size_t chunk = remaining<available?remaining:available;
+                            memcpy(st.udp_out+st.udp_out_len, buf_uart+offset, chunk);
+                            st.udp_out_len += chunk;
+                            remaining -= chunk;
+                            offset += chunk;
                         }
-                        size_t chunk = remaining<available?remaining:available;
-                        memcpy(st.udp_out+st.udp_out_len, buf_uart+offset, chunk);
-                        st.udp_out_len += chunk;
-                        remaining -= chunk;
-                        offset += chunk;
+                        udp_flush_if_ready(&cfg,&st,false,
+                            st.udp_out_len >= (size_t)cfg.udp_coalesce_bytes ? "size_threshold" : "pending");
                     }
-                    udp_flush_if_ready(&cfg,&st,false,
-                        st.udp_out_len >= (size_t)cfg.udp_coalesce_bytes ? "size_threshold" : "pending");
                 }
             }
 
