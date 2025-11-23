@@ -621,6 +621,24 @@ static void crsf_forward_reset(state_t *st)
 
 static void crsf_forward_send(const config_t *cfg, state_t *st, const crsf_stream_t *s)
 {
+    uint8_t len_field = s->frame[1];
+    size_t total = (size_t)len_field + 2;
+
+    if (len_field < 2 || total != s->len || total < 4 || total > sizeof(s->frame)) {
+        st->drops_uart_to_net += (uint64_t)s->len;
+        vlog(2, "CRSF: invalid length field len=%u frame_len=%zu, dropping", len_field, s->len);
+        return;
+    }
+
+    size_t crc_off = total - 1;
+    uint8_t expected_crc = s->frame[crc_off];
+    uint8_t calc_crc = crc8_d5(s->frame + 2, (size_t)len_field - 1);
+    if (calc_crc != expected_crc) {
+        st->drops_uart_to_net += (uint64_t)s->len;
+        vlog(2, "CRSF: CRC mismatch calc=0x%02X expected=0x%02X, dropping", calc_crc, expected_crc);
+        return;
+    }
+
     if (!st->udp_peer_set) {
         st->drops_uart_to_net += (uint64_t)s->len;
         return;
