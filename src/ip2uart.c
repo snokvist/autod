@@ -461,6 +461,50 @@ static void reset_stats_window(state_t *st){
     st->last_report_bytes_net_to_uart = st->bytes_net_to_uart;
 }
 
+static void maybe_print_stats(state_t *st){
+    if(!g_verbosity) return;
+    struct timespec now;
+    get_mono(&now);
+    if(st->last_stats_report.tv_sec==0 && st->last_stats_report.tv_nsec==0){
+        st->last_stats_report = now;
+        st->last_report_pkts_uart_to_net = st->pkts_uart_to_net;
+        st->last_report_pkts_net_to_uart = st->pkts_net_to_uart;
+        st->last_report_bytes_uart_to_net = st->bytes_uart_to_net;
+        st->last_report_bytes_net_to_uart = st->bytes_net_to_uart;
+        return;
+    }
+
+    long long elapsed_ms = diff_ms(&now, &st->last_stats_report);
+    if(elapsed_ms < 1000) return;
+
+    double secs = (double)elapsed_ms / 1000.0;
+    uint64_t tx_pkts_delta = st->pkts_uart_to_net - st->last_report_pkts_uart_to_net;
+    uint64_t rx_pkts_delta = st->pkts_net_to_uart - st->last_report_pkts_net_to_uart;
+    uint64_t tx_bytes_delta = st->bytes_uart_to_net - st->last_report_bytes_uart_to_net;
+    uint64_t rx_bytes_delta = st->bytes_net_to_uart - st->last_report_bytes_net_to_uart;
+
+    double tx_pps = secs>0.0 ? (double)tx_pkts_delta / secs : 0.0;
+    double rx_pps = secs>0.0 ? (double)rx_pkts_delta / secs : 0.0;
+    double tx_bps = secs>0.0 ? (double)tx_bytes_delta / secs : 0.0;
+    double rx_bps = secs>0.0 ? (double)rx_bytes_delta / secs : 0.0;
+
+    fprintf(stderr,
+            "[stats] tx %.1f pkts/s (%.0f B/s) rx %.1f pkts/s (%.0f B/s) drops tx=%llu rx=%llu totals tx=%llu rx=%llu\n",
+            tx_pps, tx_bps, rx_pps, rx_bps,
+            (unsigned long long)st->drops_uart_to_net,
+            (unsigned long long)st->drops_net_to_uart,
+            (unsigned long long)st->pkts_uart_to_net,
+            (unsigned long long)st->pkts_net_to_uart);
+
+    st->last_stats_report = now;
+    st->last_report_pkts_uart_to_net = st->pkts_uart_to_net;
+    st->last_report_pkts_net_to_uart = st->pkts_net_to_uart;
+    st->last_report_bytes_uart_to_net = st->bytes_uart_to_net;
+    st->last_report_bytes_net_to_uart = st->bytes_net_to_uart;
+}
+
+/* ------------------------------ CRSF support -------------------------------- */
+/* CRSF monitor */
 static void crsf_monitor_init(crsf_monitor_t *m, bool enabled)
 {
     memset(m, 0, sizeof(*m));
@@ -669,6 +713,7 @@ static void crsf_monitor_maybe_report(crsf_monitor_t *m)
     }
 }
 
+/* CRSF forwarding */
 static void crsf_forward_reset(state_t *st)
 {
     crsf_stream_reset(&st->crsf_uart_out);
@@ -784,48 +829,6 @@ static void uart_forward_with_coalesce(const config_t *cfg, state_t *st,
 
     udp_flush_if_ready(cfg, st, false,
         st->udp_out_len >= (size_t)cfg->udp_coalesce_bytes ? "size_threshold" : "pending");
-}
-
-static void maybe_print_stats(state_t *st){
-    if(!g_verbosity) return;
-    struct timespec now;
-    get_mono(&now);
-    if(st->last_stats_report.tv_sec==0 && st->last_stats_report.tv_nsec==0){
-        st->last_stats_report = now;
-        st->last_report_pkts_uart_to_net = st->pkts_uart_to_net;
-        st->last_report_pkts_net_to_uart = st->pkts_net_to_uart;
-        st->last_report_bytes_uart_to_net = st->bytes_uart_to_net;
-        st->last_report_bytes_net_to_uart = st->bytes_net_to_uart;
-        return;
-    }
-
-    long long elapsed_ms = diff_ms(&now, &st->last_stats_report);
-    if(elapsed_ms < 1000) return;
-
-    double secs = (double)elapsed_ms / 1000.0;
-    uint64_t tx_pkts_delta = st->pkts_uart_to_net - st->last_report_pkts_uart_to_net;
-    uint64_t rx_pkts_delta = st->pkts_net_to_uart - st->last_report_pkts_net_to_uart;
-    uint64_t tx_bytes_delta = st->bytes_uart_to_net - st->last_report_bytes_uart_to_net;
-    uint64_t rx_bytes_delta = st->bytes_net_to_uart - st->last_report_bytes_net_to_uart;
-
-    double tx_pps = secs>0.0 ? (double)tx_pkts_delta / secs : 0.0;
-    double rx_pps = secs>0.0 ? (double)rx_pkts_delta / secs : 0.0;
-    double tx_bps = secs>0.0 ? (double)tx_bytes_delta / secs : 0.0;
-    double rx_bps = secs>0.0 ? (double)rx_bytes_delta / secs : 0.0;
-
-    fprintf(stderr,
-            "[stats] tx %.1f pkts/s (%.0f B/s) rx %.1f pkts/s (%.0f B/s) drops tx=%llu rx=%llu totals tx=%llu rx=%llu\n",
-            tx_pps, tx_bps, rx_pps, rx_bps,
-            (unsigned long long)st->drops_uart_to_net,
-            (unsigned long long)st->drops_net_to_uart,
-            (unsigned long long)st->pkts_uart_to_net,
-            (unsigned long long)st->pkts_net_to_uart);
-
-    st->last_stats_report = now;
-    st->last_report_pkts_uart_to_net = st->pkts_uart_to_net;
-    st->last_report_pkts_net_to_uart = st->pkts_net_to_uart;
-    st->last_report_bytes_uart_to_net = st->bytes_uart_to_net;
-    st->last_report_bytes_net_to_uart = st->bytes_net_to_uart;
 }
 
 /* --------------------------------- main ------------------------------------- */
