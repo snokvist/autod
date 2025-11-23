@@ -1,23 +1,251 @@
 <!doctype html>
 <meta charset="utf-8">
 <title>autod — ESP32 console</title>
-<link rel="stylesheet" href="./assets/console-theme.css">
-<link rel="stylesheet" href="./assets/vrx/vrx.css">
 <style>
-  body { margin: 0; }
-  header { padding: 1.5rem; display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; flex-wrap: wrap; }
+  /* Inline console theme (from assets/console-theme.css) */
+  :root {
+    --bg: #e7eef9;
+    --fg: #142033;
+    --mut: #3f516b;
+    --ok: #23853f;
+    --err: #b83228;
+    --panel: #0f6cd1;
+    --card: #ffffff;
+    --line: #c5d4ea;
+    --scroll-track: #d7e3f5;
+    --scroll-thumb: #87a5d5;
+    --scroll-thumb-hover: #6b8ac3;
+  }
+
+  * {
+    box-sizing: border-box;
+    min-width: 0;
+    scrollbar-width: thin;
+    scrollbar-color: var(--scroll-thumb) var(--scroll-track);
+  }
+
+  *::-webkit-scrollbar { width: 10px; height: 10px; }
+  *::-webkit-scrollbar-track { background: var(--scroll-track); }
+  *::-webkit-scrollbar-thumb {
+    background: var(--scroll-thumb);
+    border-radius: 999px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background: var(--scroll-thumb-hover);
+    background-clip: content-box;
+  }
+
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: var(--bg);
+    color: var(--fg);
+    font: 14px/1.4 system-ui, Segoe UI, Roboto, Inter, sans-serif;
+    -webkit-tap-highlight-color: transparent;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    overscroll-behavior: contain;
+  }
+
+  main {
+    padding: 14px;
+    display: grid;
+    gap: 12px;
+    grid-template-columns: 1fr;
+  }
+
+  .card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    overflow: hidden;
+    box-shadow: 0 10px 28px rgba(13, 55, 109, 0.12);
+  }
+
+  .card h2 {
+    margin: 0;
+    font-size: 14px;
+    padding: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .card .body {
+    padding: 12px 14px;
+    display: grid;
+    gap: 10px;
+  }
+
+  .card h2 .card-toggle {
+    width: 100%;
+    background: transparent;
+    border: 0;
+    color: inherit;
+    font: inherit;
+    padding: 14px 16px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    cursor: pointer;
+    min-height: 44px;
+    text-align: left;
+    touch-action: manipulation;
+    border-radius: 12px;
+  }
+
+  .card h2 .card-toggle:focus-visible {
+    outline: 2px solid var(--mut);
+    outline-offset: 2px;
+    border-radius: 12px;
+  }
+
+  .card h2 .card-toggle-label { flex: 1; font-weight: 600; }
+
+  .card h2 .card-toggle-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 999px;
+    border: 1px solid #264775;
+    background: #154274;
+    color: #e9f1fb;
+    transition: background 0.2s ease, border-color 0.2s ease;
+  }
+
+  .card h2 .card-toggle-icon::before {
+    content: "";
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-right: 2px solid currentColor;
+    border-bottom: 2px solid currentColor;
+    transform: rotate(45deg);
+    transition: transform 0.2s ease;
+  }
+
+  .collapsible-card:not(.collapsed) .card-toggle-icon {
+    background: rgba(35, 133, 63, 0.18);
+    border-color: rgba(35, 133, 63, 0.5);
+  }
+
+  .collapsible-card:not(.collapsed) .card-toggle-icon::before { transform: rotate(-135deg); }
+
+  @media (hover: hover) {
+    .card h2 .card-toggle:hover { background: rgba(255, 255, 255, 0.02); }
+  }
+
+  .collapsible-card.collapsed > .body { display: none; }
+  .collapsible-card > .body[hidden] { display: none !important; }
+
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .row > label { display: flex; align-items: center; gap: 8px; flex: 1 1 180px; }
+
+  input, button, textarea, select {
+    background: #fff;
+    color: var(--fg);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 8px 10px;
+    font: inherit;
+    max-width: 100%;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6);
+  }
+
+  input[type="text"], input:not([type]) { width: clamp(140px, 100%, 280px); }
+
+  textarea {
+    width: 100%;
+    min-height: 100px;
+    resize: vertical;
+    border-radius: 12px;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
+  button { cursor: pointer; }
+
+  code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+
+  .inline {
+    display: block;
+    max-width: 100%;
+    overflow: auto;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    padding: 8px 10px;
+    background: #0f1620;
+    color: #eaf1fb;
+    border: 1px solid #1f3148;
+    border-radius: 10px;
+  }
+
+  .kv { display: grid; grid-template-columns: minmax(90px, 160px) 1fr; gap: 6px; align-items: center; }
+
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 8px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    color: var(--mut);
+    font-size: 12px;
+  }
+
+  .ok { color: var(--ok); }
+  .err { color: var(--err); }
+
+  .grid { display: grid; gap: 8px; }
+  .caps { display: flex; flex-wrap: wrap; gap: 6px; }
+  .mut { color: var(--mut); }
+
+  .sse a { color: inherit; text-decoration: underline dotted; word-break: break-all; }
+
+  .spacer { flex: 1; }
+
+  :root {
+    --page-bg: #e5ecf9;
+    --panel-top: #d2e1f8;
+    --panel-bottom: #f0f5ff;
+    --accent: #1a6adf;
+    --accent-strong: #0f56c3;
+    --accent-soft: rgba(26, 106, 223, 0.18);
+    --border-strong: #b7cbea;
+    --shadow-soft: 0 14px 34px rgba(13, 55, 109, 0.16);
+  }
+
+  body { margin: 0; background: linear-gradient(180deg, var(--panel-top), var(--panel-bottom)); }
+  header {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    padding: 1rem 1.5rem 1.25rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    background: linear-gradient(135deg, #f2f6ff, #deebff 45%, #cddfff);
+    color: var(--fg);
+    border-bottom: 1px solid var(--border-strong);
+    box-shadow: var(--shadow-soft);
+  }
+  .header-bar { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; flex-wrap: wrap; }
   .title-stack { display: flex; flex-direction: column; gap: 0.15rem; }
   .subline { display: flex; align-items: center; gap: 0.5rem; color: var(--mut); font-size: 0.95rem; }
   .connection-note { padding: 0.15rem 0.55rem; border: 1px solid var(--line); border-radius: 999px; font-size: 0.9rem; color: var(--mut); }
-  .header-actions { display: flex; justify-content: flex-end; gap: 0.5rem; flex-wrap: wrap; align-items: stretch; width: 100%; }
-  .header-actions .button { min-width: 150px; }
-  .header-actions .danger-action { margin-left: auto; }
+
   .card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
   .card-title-group { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
   .card-title-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .card-subtitle { display: flex; align-items: center; gap: 6px; color: var(--mut); font-size: 14px; }
-  .badge { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 999px; border: 1px solid var(--line); background: rgba(255,255,255,0.06); color: var(--mut); font-size: 13px; line-height: 1; }
-  .badge.status-badge { color: var(--fg); border-color: rgba(255,255,255,0.18); }
+  .card-actions { display: flex; flex-direction: column; gap: 8px; align-items: flex-end; }
+  .badge { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 999px; border: 1px solid var(--border-strong); background: #e6eeff; color: var(--fg); font-size: 13px; line-height: 1; }
+  .badge.status-badge { color: var(--fg); border-color: #afc4e7; background: #d9e7ff; }
   .card-summary { display: none; color: var(--mut); font-size: 14px; padding: 4px 0; }
   .card.card-collapsed .card-summary { display: block; }
   .card.card-collapsed .card-collapsible { display: none; }
@@ -28,49 +256,53 @@
   .toolbar .spacer { flex: 1; }
   .optional-card .card-actions { justify-content: flex-end; }
   .optional-card.card-collapsed .card-collapsible { display: none; }
-  .button.primary { background: #e8e8ea; color: #000; border-color: #e8e8ea; box-shadow: 0 8px 18px rgba(0,0,0,0.25); }
-  .button.primary:hover { background: #fff; border-color: #fff; }
-  .button.ghost { background: transparent; color: var(--fg); border-color: var(--line); }
-  .button.ghost:hover { border-color: var(--mut); background: rgba(255,255,255,0.04); }
-  .button.danger { background: rgba(255,107,107,0.16); color: var(--err); border-color: var(--err); }
-  .button.danger:hover { background: rgba(255,107,107,0.28); color: #fff; }
-  .secondary-actions { display: flex; align-items: center; gap: 0.5rem; position: relative; }
-  .secondary-actions .action-list { display: flex; gap: 0.5rem; align-items: stretch; }
-  .secondary-actions .action-toggle { display: none; min-width: auto; }
-  .secondary-actions.menu-mode .action-toggle { display: flex; }
-  .secondary-actions.menu-mode .action-list { display: none; position: absolute; right: 0; top: calc(100% + 6px); background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 0.5rem; flex-direction: column; min-width: 220px; box-shadow: 0 12px 30px rgba(0,0,0,0.35); }
-  .secondary-actions.menu-mode.open .action-list { display: flex; }
-  .secondary-actions .action-list .button { min-width: 180px; }
+  .button.primary { background: linear-gradient(135deg, var(--accent), var(--accent-strong)); color: #fff; border-color: var(--accent-strong); box-shadow: 0 8px 18px rgba(14,76,149,0.24); }
+  .button.primary:hover { background: linear-gradient(135deg, #2a7ff0, #1b6dd8); border-color: #1b6dd8; }
+  .button.ghost { background: #f6f9ff; color: var(--fg); border-color: var(--border-strong); }
+  .button.ghost:hover { border-color: #9dbbea; background: #eaf1fb; }
+  .button.danger { background: rgba(192,57,43,0.12); color: var(--err); border-color: var(--err); }
+  .button.danger:hover { background: rgba(192,57,43,0.22); color: #fff; }
   main { padding: 1.5rem; }
-  .tabs { display: flex; flex-direction: column; gap: 0.5rem; padding: 0 1.5rem 1rem; border-bottom: 1px solid rgba(255,255,255,0.08); }
+  .tabs { display: flex; flex-direction: column; gap: 0.5rem; padding: 0; border-bottom: 1px solid var(--border-strong); }
   .tabs .tab-row { display: flex; column-gap: 0.5rem; row-gap: 0.35rem; flex-wrap: wrap; align-items: center; }
-  .tabs button { border: 1px solid transparent; background: rgba(255,255,255,0.08); color: inherit; padding: 0.5rem 1rem; border-radius: 999px; cursor: pointer; transition: background 120ms ease, border-color 120ms ease, box-shadow 120ms ease; }
-  .tabs button:hover { background: rgba(255,255,255,0.14); border-color: rgba(255,255,255,0.18); }
-  .tabs button:focus-visible { outline: none; border-color: rgba(255,255,255,0.35); box-shadow: 0 0 0 2px rgba(255,255,255,0.15); }
-  .tabs button.slot-primary { border: 1px solid var(--ok); color: var(--ok); background: rgba(54,194,117,0.14); box-shadow: 0 0 0 1px rgba(54,194,117,0.25); }
-  .tabs button.slot-primary.active { background: #fff; color: #000; box-shadow: none; }
-  .status-row { display: flex; column-gap: 1rem; row-gap: 0.35rem; flex-wrap: wrap; align-items: center; }
-  .status-pill { background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.08); border-radius: 999px; padding: 0.35rem 0.75rem; font-size: 0.9rem; }
+  .tabs button { border: 1px solid var(--border-strong); background: #f6f9ff; color: inherit; padding: 0.5rem 1rem; border-radius: 999px; cursor: pointer; transition: background 120ms ease, border-color 120ms ease, box-shadow 120ms ease; box-shadow: 0 6px 14px rgba(14,76,149,0.08); }
+  .tabs button:hover { background: #e7f0ff; border-color: #adc8f0; }
+  .tabs button:focus-visible { outline: none; border-color: #9dbbea; box-shadow: 0 0 0 2px rgba(29,115,232,0.2); }
+  .tabs button.slot-primary { border: 1px solid var(--ok); color: var(--ok); background: rgba(46,155,75,0.12); box-shadow: 0 0 0 1px rgba(46,155,75,0.2); }
+  .tabs button.slot-primary.active { background: var(--accent-strong); color: #fff; box-shadow: none; border-color: var(--accent-strong); }
+  .status-pill { background: #e4edff; border: 1px solid var(--border-strong); border-radius: 999px; padding: 0.35rem 0.75rem; font-size: 0.9rem; box-shadow: 0 6px 14px rgba(14,76,149,0.12); }
+  .runtime-status-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; align-items: start; }
+  .runtime-scan { display: grid; gap: 8px; align-items: start; }
+  .runtime-scan .button { justify-content: flex-start; }
+  .runtime-pill-stack { display: grid; gap: 6px; }
+  .runtime-pill-stack .status-pill { width: 100%; justify-content: flex-start; }
   .tab-panel { display: none; flex-direction: column; gap: 1.5rem; }
   .tab-panel.active { display: flex; }
+  :root { --card-pad: 1.1rem 1.25rem; }
   .card h2, .card h3 { margin: 0 0 0.25rem; }
+  .card-head, .card-summary, .card > .body { padding: var(--card-pad); }
   .slot-layout { display: grid; gap: 1.5rem; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
   .slot-card .body { display: flex; flex-direction: column; gap: 0.75rem; }
+  .slot-card > h2,
+  .slot-node-card > h3 {
+    padding: var(--card-pad);
+    border-bottom: 1px solid var(--line);
+  }
   .slot-summary-block { display: flex; flex-direction: column; gap: 0.5rem; }
   .slot-summary-head { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap; }
   .slot-summary-title { display: flex; align-items: center; gap: 0.4rem; font-size: 1.05rem; }
   .slot-summary-title strong { font-size: 1.1rem; }
   .slot-meta-inline { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
-  .slot-meta-inline .badge { background: rgba(255,255,255,0.04); border-color: rgba(255,255,255,0.12); }
+  .slot-meta-inline .badge { background: #edf3ff; border-color: var(--border-strong); }
   .slot-meta-inline .badge.critical { border-color: var(--err); color: var(--err); }
   .slot-line { color: var(--mut); }
   .slot-line strong { font-size: 1.05rem; color: var(--fg); }
-  .slot-actions { display: flex; flex-direction: column; gap: 0.75rem; border: 1px solid var(--line); border-radius: 12px; padding: 0.75rem; background: rgba(255,255,255,0.02); }
+  .slot-actions { display: flex; flex-direction: column; gap: 0.75rem; border: 1px solid var(--line); border-radius: 12px; padding: 0.75rem; background: linear-gradient(135deg, rgba(255,255,255,0.9), rgba(241,246,255,0.9)); box-shadow: 0 8px 18px rgba(14, 76, 149, 0.1); }
   .slot-action-switch { display: inline-flex; align-items: stretch; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
   .slot-action-switch button { border: none; background: transparent; color: var(--mut); padding: 0.45rem 0.9rem; cursor: pointer; transition: background 120ms ease, color 120ms ease; font-weight: 600; flex: 1; text-align: center; }
   .slot-action-switch button + button { border-left: 1px solid var(--line); }
-  .slot-action-switch button.active { background: rgba(255,255,255,0.12); color: var(--fg); }
-  .slot-action-switch button:disabled { cursor: not-allowed; color: rgba(255,255,255,0.28); background: rgba(255,255,255,0.04); }
+  .slot-action-switch button.active { background: rgba(26, 106, 223, 0.12); color: var(--fg); }
+  .slot-action-switch button:disabled { cursor: not-allowed; color: rgba(20, 32, 51, 0.35); background: rgba(26, 106, 223, 0.06); }
   .slot-action-panels { width: 100%; }
   .slot-action-panel { display: none; }
   .slot-action-panel.active { display: block; }
@@ -80,9 +312,28 @@
   .slot-action-row { display: flex; flex-direction: column; gap: 0.35rem; align-items: flex-start; }
   .slot-action-row .mut { line-height: 1.4; }
   .slot-waiting .mut { color: var(--mut); }
-  .slot-node-card .body { padding: 1rem; display: flex; flex-direction: column; gap: 0.75rem; }
-  .slot-node-empty { border: 1px dashed var(--line); background: rgba(255,255,255,0.02); border-radius: 10px; padding: 0.75rem 0.9rem; color: var(--mut); display: flex; align-items: center; gap: 0.5rem; }
-  .slot-node-empty.loading::before { content: ''; width: 10px; height: 10px; border-radius: 999px; border: 2px solid rgba(255,255,255,0.35); border-top-color: transparent; display: inline-block; animation: spin 0.8s linear infinite; }
+  .slot-node-card .body { padding: var(--card-pad); display: flex; flex-direction: column; gap: 0.75rem; }
+  .slot-node-empty {
+    border: 1px dashed var(--border-strong);
+    background: linear-gradient(135deg, rgba(26, 106, 223, 0.12), rgba(26, 106, 223, 0.05));
+    border-radius: 12px;
+    padding: 0.95rem 1.1rem;
+    color: var(--fg);
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    box-shadow: 0 8px 18px rgba(14, 76, 149, 0.12);
+  }
+  .slot-node-empty.loading::before {
+    content: '';
+    width: 10px;
+    height: 10px;
+    border-radius: 999px;
+    border: 2px solid rgba(26, 115, 232, 0.3);
+    border-top-color: transparent;
+    display: inline-block;
+    animation: spin 0.8s linear infinite;
+  }
   @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
   .node-controls { gap: 1rem; }
   .node-relay { border-top: 1px solid rgba(255,255,255,0.08); padding-top: 0.75rem; display: flex; flex-direction: column; gap: 0.75rem; }
@@ -94,18 +345,214 @@
   .node-relay select { min-width: 160px; }
   textarea { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
 
+  /* Inline VRX styles */
+  .joy-row { align-items: center; }
+  .joy-row .mut { font-size: 12px; }
+  #joystickEndpoint { word-break: break-all; }
+  .joy-grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); justify-items: stretch; }
+  .joy-item { background: #0f1620; color: #e6effb; border: 1px solid #1f3148; border-radius: 12px; padding: 12px; display: grid; gap: 10px; justify-items: center; transition: border-color 0.2s ease, box-shadow 0.2s ease; min-width: 0; box-shadow: 0 8px 18px rgba(7, 24, 48, 0.4); }
+  .joy-item .joy-idx { color: #b7c6df; font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; text-align: center; }
+  .joy-bar { position: relative; width: 20px; height: 120px; border-radius: 10px; border: 1px solid rgba(154, 161, 166, 0.35); background: linear-gradient(180deg, rgba(54, 194, 117, 0.08), rgba(54, 194, 117, 0.02)); overflow: hidden; }
+  .joy-bar::after { content: ""; position: absolute; inset: 0; border-radius: 10px; border: 1px solid rgba(11, 13, 16, 0.45); pointer-events: none; }
+  .joy-bar-fill { position: absolute; left: 0; right: 0; bottom: 0; height: 0%; background: linear-gradient(180deg, var(--ok), #1a7d45); transition: height 0.2s ease; }
+  .joy-values { display: grid; gap: 2px; justify-items: center; width: 100%; text-align: center; font-size: 12px; }
+  .joy-values > div { display: flex; align-items: center; justify-content: center; width: 100%; white-space: nowrap; }
+  .joy-item .joy-val { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-weight: 600; font-size: 12px; font-variant-numeric: tabular-nums; }
+  .joy-item .joy-raw { color: #b7c6df; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 10px; font-variant-numeric: tabular-nums; }
+  .joy-item.joy-bump { border-color: rgba(54, 194, 117, 0.45); box-shadow: 0 0 0 1px rgba(54, 194, 117, 0.25); }
+  .joy-meta { display: grid; gap: 4px; justify-items: center; width: 100%; text-align: center; font-size: 11px; color: #c6d2e8; margin-top: 4px; }
+  .joy-meta-map { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-weight: 600; font-size: 12px; color: #f0f4fb; }
+  .joy-meta-map.joy-meta-map-unmapped { color: var(--err); }
+  .joy-meta-tags { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; }
+  .joy-meta-tag { font-size: 10px; cursor: pointer; transition: color 0.2s ease, border-color 0.2s ease, background 0.2s ease; }
+  .joy-meta-tag[aria-disabled="true"] { cursor: not-allowed; opacity: 0.55; }
+  .joy-meta-tag-normal { color: #c6d2e8; border-color: #2b4160; background: rgba(255, 255, 255, 0.05); }
+  .joy-meta-tag-invert { color: var(--err); border-color: rgba(255, 107, 107, 0.45); background: rgba(255, 107, 107, 0.15); }
+  .joy-meta-dead { font-size: 11px; color: #b7c6df; }
+  .joy-meta-dead.joy-meta-dead-active { color: #f0f4fb; }
+  .joy-controls { display: grid; gap: 6px; justify-items: center; width: 100%; }
+  .joy-move { display: flex; gap: 6px; }
+  .joy-move-btn { padding: 4px 8px; font-size: 11px; line-height: 1; border-radius: 999px; background: rgba(255, 255, 255, 0.02); border: 1px solid var(--line); color: var(--fg); min-width: 0; }
+  .joy-move-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .joy-move-btn:not(:disabled):hover { background: rgba(255, 255, 255, 0.05); }
+  .joy-deadband-control { display: grid; gap: 4px; width: 100%; font-size: 10px; color: var(--mut); justify-items: center; }
+  .joy-deadband-slider { width: 100%; }
+  .joy-item.joy-item-inverted { border-color: rgba(255, 107, 107, 0.35); }
+  .joy-item.joy-item-unmapped .joy-meta-map { color: var(--err); }
+
+  .dvr-body { display: grid; grid-template-rows: auto 1fr; gap: 10px; height: 360px; min-height: 0; }
+  .dvr-scroll { display: grid; gap: 6px; overflow: auto; padding-right: 4px; min-height: 0; }
+  .dvr-list { display: grid; gap: 6px; }
+  .dvr-item {
+    display: grid;
+    gap: 4px;
+    padding: 12px 14px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: linear-gradient(135deg, rgba(15, 108, 209, 0.06), rgba(15, 108, 209, 0.02));
+    box-shadow: 0 6px 16px rgba(14, 76, 149, 0.08);
+  }
+  .dvr-item a { color: inherit; text-decoration: none; font-weight: 600; word-break: break-all; }
+  .dvr-item a:hover { text-decoration: underline; }
+  .dvr-meta { color: var(--mut); font-size: 12px; }
+  .dvr-message { font-size: 12px; }
+  .dvr-message.ok { color: var(--ok); }
+  .dvr-message.err { color: var(--err); }
+  .dvr-empty {
+    color: var(--mut);
+    font-size: 12px;
+    padding: 10px 12px;
+    border: 1px dashed var(--line);
+    border-radius: 10px;
+    background: linear-gradient(135deg, rgba(15, 108, 209, 0.04), rgba(15, 108, 209, 0.015));
+  }
+
+  .nodes-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; }
+  .node {
+    border: 1px solid var(--line);
+    background: linear-gradient(145deg, rgba(15, 108, 209, 0.05), rgba(15, 108, 209, 0.02));
+    border-radius: 12px;
+    padding: 12px 14px;
+    display: grid;
+    gap: 8px;
+    box-shadow: 0 6px 16px rgba(14, 76, 149, 0.08);
+  }
+  .node .top { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+  .node .ip { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: var(--mut); }
+  .node .meta { font-size: 12px; color: var(--mut); }
+  .node .role { border-color: #2d333b; }
+  .node-head { cursor: pointer; display: grid; gap: 6px; position: relative; padding-right: 16px; }
+  .node-head::after { content: '\25B8'; position: absolute; right: 0; top: 12px; font-size: 12px; color: var(--mut); transition: transform 0.2s ease; }
+  .node.expanded .node-head::after { transform: rotate(90deg); }
+  .node-head:focus-visible { outline: 2px solid var(--mut); outline-offset: 2px; border-radius: 10px; }
+  .node-controls { display: none; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); gap: 10px; }
+  .node.expanded .node-controls { display: grid; }
+  .node-control-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .node-control-toolbar .spacer { flex: 1; }
+  .node-control-stats { font-size: 12px; color: var(--mut); }
+  .node-target { font-size: 12px; color: var(--mut); }
+  .progress { height: 10px; border: 1px solid var(--line); border-radius: 999px; overflow: hidden; background: rgba(15, 108, 209, 0.06); }
+  .progress > div { height: 100%; background: linear-gradient(90deg, var(--ok), #64d38f); width: 0%; }
+  .nodes-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .nodes-toolbar .mut { font-size: 12px; }
+  .nodes-stats { display: flex; flex-wrap: wrap; gap: 8px; font-size: 12px; color: var(--mut); }
+
+  .mini-rk-body { display: grid; gap: 12px; }
+  .mini-rk-section {
+    display: grid;
+    gap: 10px;
+    padding: 12px 14px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: linear-gradient(145deg, rgba(15, 108, 209, 0.06), rgba(15, 108, 209, 0.02));
+    box-shadow: 0 6px 16px rgba(14, 76, 149, 0.08);
+  }
+  .mini-rk-section-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .mini-rk-section-title { font-weight: 700; }
+  .mini-rk-section-note { font-size: 12px; color: var(--mut); }
+  .mini-rk-button-stack { display: grid; gap: 8px; }
+  .mini-rk-button-stack button { width: 100%; justify-content: center; }
+  .mini-rk-gamma-grid { display: grid; gap: 8px; }
+  .mini-rk-field { display: grid; gap: 4px; font-weight: 600; font-size: 13px; color: var(--fg); }
+  .mini-rk-field select { margin-top: 2px; width: 100%; }
+  .mini-rk-gamma-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .mini-rk-gamma-actions .mut { flex: 1 1 100%; }
+
+  .ctl {
+    display: grid;
+    gap: 8px;
+    padding: 12px 14px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: linear-gradient(145deg, rgba(15, 108, 209, 0.05), rgba(15, 108, 209, 0.02));
+    box-shadow: 0 6px 16px rgba(14, 76, 149, 0.08);
+  }
+  .ctl .lbl { display: flex; justify-content: space-between; gap: 8px; align-items: center; }
+  .ctl .lbl .name { font-weight: 600; }
+  .ctl .lbl .val { color: var(--mut); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; transition: color 0.35s ease; }
+  .ctl .desc { color: var(--mut); font-size: 12px; }
+  .ctl .errtxt { color: var(--err); font-size: 12px; }
+  .switch { position: relative; width: 46px; height: 26px; }
+  .switch input { appearance: none; width: 46px; height: 26px; background: #12161a; border: 1px solid var(--line); border-radius: 999px; outline: none; transition: 0.15s; display: block; }
+  .switch input:checked { background: #1b2d22; border-color: #254a35; }
+  .switch input::after { content: ""; position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: #cfd6dd; transition: 0.15s; }
+  .switch input:checked::after { left: 23px; background: #e8f6ee; }
+
+  .embed-wrap { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: #0f1317; min-height: 320px; display: grid; gap: 0; }
+  .embed-frame { width: 100%; min-height: 320px; border: 0; background: #0f1317; }
+  .embed-note { padding: 10px 12px; font-size: 12px; }
+
+  .mini-status { display: flex; justify-content: flex-end; align-items: center; min-height: 26px; }
+  .status-indicator { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; padding: 2px 10px; border-radius: 999px; border: 1px solid var(--line); color: var(--mut); background: #0f1317; transition: color 0.3s ease, border-color 0.3s ease, background 0.3s ease; }
+  .status-indicator::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--mut); transition: background 0.3s ease; }
+  .status-indicator.running { color: var(--mut); }
+  .status-indicator.running::before { background: var(--mut); }
+  .status-indicator.ok { color: var(--ok); border-color: rgba(54, 194, 117, 0.4); background: rgba(54, 194, 117, 0.08); }
+  .status-indicator.ok::before { background: var(--ok); }
+  .status-indicator.err { color: var(--err); border-color: rgba(255, 107, 107, 0.4); background: rgba(255, 107, 107, 0.08); }
+  .status-indicator.err::before { background: var(--err); }
+  .status-indicator.flash { animation: statusBlink 0.7s ease-out; }
+  .status-indicator.err.flash { animation: statusBlinkErr 0.7s ease-out; }
+  @keyframes statusBlink { 0% { box-shadow: 0 0 0 0 rgba(54, 194, 117, 0.35); } 100% { box-shadow: 0 0 0 10px rgba(54, 194, 117, 0); } }
+  @keyframes statusBlinkErr { 0% { box-shadow: 0 0 0 0 rgba(255, 107, 107, 0.35); } 100% { box-shadow: 0 0 0 10px rgba(255, 107, 107, 0); } }
+  @media (prefers-reduced-motion: reduce) {
+    .status-indicator.flash, .status-indicator.err.flash { animation: none; }
+  }
+  .ctl.flash-ok { border-color: rgba(54, 194, 117, 0.4); box-shadow: 0 0 0 1px rgba(54, 194, 117, 0.3); }
+  .ctl.flash-err { border-color: rgba(255, 107, 107, 0.45); box-shadow: 0 0 0 1px rgba(255, 107, 107, 0.3); }
+
+  .udp-viewport { display: grid; gap: 6px; }
+  .udp-screen { position: relative; width: 100%; aspect-ratio: 16/9; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; cursor: crosshair; }
+  .udp-screen-image { position: absolute; inset: 0; background-color: #0f1317; pointer-events: none; overflow: hidden; }
+  .udp-screen-image::after { content: ""; position: absolute; inset: 0; background: radial-gradient(circle at 50% 50%, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0)); pointer-events: none; }
+  .udp-screen-image img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity 0.25s ease; }
+  .udp-screen-image img[data-active="true"] { opacity: 1; }
+  .udp-screen::after { content: ""; position: absolute; inset: 0; border: 1px dashed rgba(154, 161, 166, 0.25); pointer-events: none; }
+  .udp-roi { position: absolute; border: 2px solid rgba(54, 194, 117, 0.8); background: rgba(54, 194, 117, 0.18); border-radius: 10px; box-shadow: 0 0 0 1px rgba(54, 194, 117, 0.45); min-width: 0; min-height: 0; transition: background 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease; }
+  .udp-screen-hint { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); padding: 8px 12px; border-radius: 999px; border: 1px solid var(--line); background: rgba(15, 19, 23, 0.8); font-size: 12px; color: var(--mut); pointer-events: none; transition: opacity 0.2s ease, visibility 0.2s ease; }
+  .udp-screen-hint.hidden { opacity: 0; visibility: hidden; }
+  .udp-roi-meta { display: grid; gap: 4px; font-size: 12px; color: var(--mut); }
+  .udp-roi-meta strong { color: var(--fg); }
+  .udp-roi-meta .udp-value { color: var(--fg); font-weight: 600; }
+
+  :root { --udp-embed-height: 800px; }
+  #card-udp-relay #udpRelayEmbedContainer.embed-wrap { height: auto; min-height: 0; }
+  #card-udp-relay #udpRelayEmbedContainer .embed-frame { display: block; width: 100%; height: var(--udp-embed-height) !important; border: 0; }
+  #card-udp-relay .embed-note { margin-top: 8px; }
+
+  .sync-body { gap: 12px; }
+  .sync-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; }
+  .sync-slot { border: 1px solid var(--line); border-radius: 12px; padding: 12px; background: #0f1317; display: grid; gap: 8px; }
+  .sync-slot-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; }
+  .sync-slot-title { font-weight: 600; }
+  .sync-slot-label { font-size: 12px; color: var(--mut); }
+  .sync-slot-gen { font-size: 12px; color: var(--mut); }
+  .sync-slot-id { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-weight: 600; word-break: break-all; }
+  .sync-slot-meta { font-size: 12px; color: var(--mut); }
+  .sync-slot-last { font-size: 12px; color: var(--mut); }
+  .sync-slot-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .sync-slot-empty { color: var(--mut); font-size: 12px; }
+  .sync-slot-prefer { font-size: 12px; color: var(--mut); margin-top: 4px; }
+  .sync-slot-prefer[data-status="matched"] { color: #34d399; }
+  .sync-slot-prefer[data-status="waiting"] { color: #f97316; }
+  .sync-slot-prefer[data-status="open"] { color: #93c5fd; }
+  .sync-move-select { min-width: 140px; }
+  .sync-slot-replay { font-size: 12px; padding: 4px 8px; }
+  .sync-delete-btn { font-size: 12px; padding: 4px 8px; background: #2a1717; color: #fff; border: 1px solid rgba(255, 107, 107, 0.4); border-radius: 6px; }
+  .sync-delete-btn:disabled { opacity: 0.6; }
+  .sync-waiting { display: grid; gap: 8px; }
+  .sync-waiting-entry { border: 1px dashed var(--line); border-radius: 10px; padding: 10px; display: grid; gap: 6px; }
+  .sync-pending { border: 1px solid var(--line); border-radius: 10px; padding: 10px; display: grid; gap: 6px; }
+  .sync-pending ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; font-size: 12px; }
+  .sync-pending li { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .sync-remove-pending { font-size: 11px; padding: 2px 6px; }
+
   @media (max-width: 960px){
-    header { flex-direction: column; align-items: stretch; gap: 0.75rem; }
-    .header-actions { width: 100%; justify-content: flex-start; }
-    .header-actions .button { width: 100%; }
-    .secondary-actions { width: 100%; }
-    .secondary-actions.menu-mode .action-list { position: static; width: 100%; box-shadow: none; }
-    .secondary-actions.menu-mode .action-list .button { width: 100%; }
-    .header-actions .danger-action { margin-left: 0; }
-    .tabs { padding: 0 1rem 1rem; }
+    header { flex-direction: column; align-items: stretch; gap: 0.75rem; padding: 1rem 1rem 1.25rem; }
+    .tab-row { width: 100%; }
+    .tabs { padding: 0; }
     .tabs .tab-row { flex-direction: column; align-items: stretch; }
     .tabs button { width: 100%; text-align: center; }
-    .status-row { flex-direction: column; align-items: stretch; }
     .slot-actions, .slot-waiting { flex-direction: column; align-items: stretch; }
     .slot-actions button, .slot-waiting button, .slot-actions select, .slot-waiting select { width: 100%; }
     .slot-actions label, .slot-waiting label { width: 100%; }
@@ -119,37 +566,24 @@
 </style>
 
 <header>
-  <div class="title-stack">
-    <div class="title">autod — ESP32 console</div>
-    <div class="subline">
-      <span class="sub" id="subtitle">nodes + sync overview</span>
-      <span class="connection-note" id="headerStatus">Waiting for /caps…</span>
-    </div>
-  </div>
-  <div class="row header-actions">
-    <button class="button primary" id="refreshNodesBtn">Refresh /nodes</button>
-    <div class="secondary-actions" id="secondaryActions">
-      <button class="button ghost action-toggle" id="secondaryActionsToggle" aria-expanded="false" aria-controls="secondaryActionList">More actions</button>
-      <div class="action-list" id="secondaryActionList">
-        <button class="button ghost" id="syncRefreshBtn">Refresh /sync/slaves</button>
+  <div class="header-bar">
+    <div class="title-stack">
+      <div class="title">autod — ESP32 console</div>
+      <div class="subline">
+        <span class="sub" id="subtitle">nodes + sync overview</span>
+        <span class="connection-note" id="headerStatus">Waiting for /caps…</span>
       </div>
     </div>
-    <button class="button danger danger-action" id="nodesScanBtn">POST /nodes (scan)</button>
+  </div>
+  <div class="tabs" role="tablist">
+    <div class="tab-row">
+      <button class="active" data-tab="groundstation" aria-controls="panel-groundstation" title="Groundstation overview">Groundstation</button>
+      <button data-tab="slot1" aria-controls="panel-slot1" class="slot-primary" title="Slot 1 slave assignment">Slot 1</button>
+      <button data-tab="slot2" aria-controls="panel-slot2" title="Slot 2 slave assignment">Slot 2</button>
+      <button data-tab="slot3" aria-controls="panel-slot3" title="Slot 3 slave assignment">Slot 3</button>
+    </div>
   </div>
 </header>
-
-<nav class="tabs" role="tablist">
-  <div class="tab-row">
-    <button class="active" data-tab="groundstation" aria-controls="panel-groundstation" title="Groundstation overview">Groundstation</button>
-    <button data-tab="slot1" aria-controls="panel-slot1" class="slot-primary" title="Slot 1 slave assignment">Slot 1</button>
-    <button data-tab="slot2" aria-controls="panel-slot2" title="Slot 2 slave assignment">Slot 2</button>
-    <button data-tab="slot3" aria-controls="panel-slot3" title="Slot 3 slave assignment">Slot 3</button>
-  </div>
-  <div class="status-row">
-    <div class="status-pill" id="nodesSummary">Nodes: waiting…</div>
-    <div class="status-pill" id="syncSummary">Sync: waiting…</div>
-  </div>
-</nav>
 
 <main>
   <section class="tab-panel active" data-panel="groundstation" id="panel-groundstation">
@@ -171,6 +605,15 @@
         </div>
       </div>
       <div class="body grid">
+        <div class="runtime-status-grid">
+          <div class="runtime-scan">
+            <button class="button danger" id="nodesScanBtn">POST /nodes (scan)</button>
+            <div class="runtime-pill-stack">
+              <div class="status-pill" id="nodesSummary">Nodes: waiting…</div>
+              <div class="status-pill" id="syncSummary">Sync: waiting…</div>
+            </div>
+          </div>
+        </div>
         <div class="kv"><div class="mut">Device</div><div id="dev_device">—</div></div>
         <div class="kv"><div class="mut">Role</div><div id="dev_role">—</div></div>
         <div class="kv"><div class="mut">Version</div><div id="dev_version">—</div></div>
@@ -205,22 +648,34 @@
         </div>
       </div>
       <div class="card-summary" id="pixelpilotMiniRkSummary" data-card-summary>Waiting for capabilities…</div>
-      <div class="body grid card-collapsible" data-card-body hidden>
-        <div class="cap-toolbar">
-          <div class="toolbar" id="pixelpilotMiniRkActions">
+      <div class="body mini-rk-body card-collapsible" data-card-body hidden>
+        <div class="mini-rk-section">
+          <div class="mini-rk-section-head">
+            <div class="mini-rk-section-title">Service controls</div>
+            <div class="mini-rk-section-note">Manage overlay and service state.</div>
+          </div>
+          <div class="mini-rk-button-stack" id="pixelpilotMiniRkActions">
             <button id="pixelpilotMiniRkToggleOsdBtn">Toggle OSD</button>
             <button id="pixelpilotMiniRkRestartServiceBtn">Restart pixelpilot_mini_rk</button>
             <button id="pixelpilotMiniRkStopServiceBtn">Stop pixelpilot_mini_rk</button>
             <button id="pixelpilotMiniRkStartServiceBtn">Start pixelpilot_mini_rk</button>
           </div>
-          <div class="toolbar mini-rk-gamma-row">
-            <label for="pixelpilotMiniRkGammaSelect">Gamma preset</label>
-            <select id="pixelpilotMiniRkGammaSelect" disabled>
-              <option>Loading presets…</option>
-            </select>
-            <button id="pixelpilotMiniRkApplyGammaBtn" type="button" disabled>Apply preset</button>
-            <button id="pixelpilotMiniRkReloadGammaBtn" type="button">Reload presets</button>
-            <div class="mut" id="pixelpilotMiniRkGammaNotice">Loading presets…</div>
+        </div>
+        <div class="mini-rk-section mini-rk-gamma-section">
+          <div class="mini-rk-section-head">
+            <div class="mini-rk-section-title">Gamma preset</div>
+            <div class="mini-rk-section-note mut" id="pixelpilotMiniRkGammaNotice">Loading presets…</div>
+          </div>
+          <div class="mini-rk-gamma-grid">
+            <label class="mini-rk-field" for="pixelpilotMiniRkGammaSelect">Select preset
+              <select id="pixelpilotMiniRkGammaSelect" disabled>
+                <option>Loading presets…</option>
+              </select>
+            </label>
+            <div class="mini-rk-gamma-actions">
+              <button id="pixelpilotMiniRkApplyGammaBtn" type="button" disabled>Apply preset</button>
+              <button id="pixelpilotMiniRkReloadGammaBtn" type="button">Reload presets</button>
+            </div>
           </div>
         </div>
       </div>
@@ -271,7 +726,6 @@
               </div>
               <div class="slot-meta-inline">
                 <span class="badge" id="slot1LastSeen">Last seen —</span>
-                <span class="badge" id="slot1Generation">Generation: —</span>
               </div>
             </div>
             <div class="slot-line" id="slot1Meta">—</div>
@@ -339,7 +793,6 @@
               </div>
               <div class="slot-meta-inline">
                 <span class="badge" id="slot2LastSeen">Last seen —</span>
-                <span class="badge" id="slot2Generation">Generation: —</span>
               </div>
             </div>
             <div class="slot-line" id="slot2Meta">—</div>
@@ -407,7 +860,6 @@
               </div>
               <div class="slot-meta-inline">
                 <span class="badge" id="slot3LastSeen">Last seen —</span>
-                <span class="badge" id="slot3Generation">Generation: —</span>
               </div>
             </div>
             <div class="slot-line" id="slot3Meta">—</div>
@@ -466,16 +918,29 @@
 
 <script type="module">
 const $ = (sel, root = document) => root.querySelector(sel);
-const nodesState = { expanded: new Set(), pollTimer: null, loading: false, list: [], scanning: false };
+const nodesState = {
+  expanded: new Set(),
+  pollTimer: null,
+  loading: false,
+  list: [],
+  listSignature: '',
+  version: 0,
+  scanning: false,
+  pendingRefresh: false
+};
+const NODES_POLL_MS = 7000;
+const NODES_SCAN_POLL_MS = 1000;
 const MAX_SYNC_SLOTS = 3;
-const syncState = { slots: Array.from({ length: MAX_SYNC_SLOTS }, () => null), meta: new Map(), waiting: [], refMs: 0 };
-const syncUiState = { busy: false };
+const syncState = { slots: Array.from({ length: MAX_SYNC_SLOTS }, () => null), meta: new Map(), waiting: [], refMs: 0, signature: '' };
+const syncUiState = { busy: false, pollTimer: null, loading: false, pendingRefresh: false };
+const SYNC_POLL_MS = 7000;
 const slotActionState = new Map();
 const tabState = { active: 'groundstation' };
 const DEFAULT_CMD_TIMEOUT_MS = 6000;
 const capsState = { capList: new Set(), hasExec: false };
 const dvrState = { initialized: false, hasExec: false, loading: false, enabled: false };
 const miniRkState = { initialized: false, gamma: { presets: [], loading: false } };
+const slotRenderCache = new Map();
 
 function cardElements(cardId){
   const card = document.getElementById(cardId);
@@ -683,6 +1148,74 @@ function formatSlotConfig(meta){
   return parts.join(' • ') || '—';
 }
 
+function normalizeSlaveRecord(rec){
+  if (!rec) return null;
+  return {
+    id: rec.id ?? null,
+    device: rec.device ?? null,
+    role: rec.role ?? null,
+    version: rec.version ?? null,
+    remote_ip: rec.remote_ip ?? rec.address ?? null,
+    remote_port: Number.isFinite(rec.remote_port) ? rec.remote_port : null,
+    slot: Number.isFinite(rec.slot) ? Number(rec.slot) : null,
+    last_seen_ms: Number.isFinite(rec.last_seen_ms) ? Number(rec.last_seen_ms) : null,
+    slot_generation: Number.isFinite(rec.slot_generation) ? Number(rec.slot_generation) : null,
+    last_ack_generation: Number.isFinite(rec.last_ack_generation) ? Number(rec.last_ack_generation) : null
+  };
+}
+
+function buildSlotSignature(slotNumber, rec){
+  const normalizedRec = normalizeSlaveRecord(rec);
+  const slotMeta = syncState.meta.get(slotNumber) || null;
+  const waiting = syncState.waiting.map(normalizeSlaveRecord).filter(Boolean);
+  const node = rec ? findNodeForSlave(rec) : null;
+  const nodeSignature = node
+    ? { key: nodeKey(node, slotNumber), data: node }
+    : { missing: true, target: rec ? (rec.remote_ip || rec.address || 'unknown') : null, loading: nodesState.loading };
+  return JSON.stringify({
+    rec: normalizedRec,
+    slotMeta,
+    waiting,
+    busy: syncUiState.busy,
+    nodesVersion: nodesState.version,
+    nodeSignature
+  });
+}
+
+function syncSelectOptions(select, items, preserveValue = true){
+  if (!select) return;
+  const prevValue = preserveValue ? select.value : null;
+  let changed = select.options.length !== items.length;
+  if (!changed){
+    for (let i = 0; i < items.length; i += 1){
+      const opt = select.options[i];
+      const item = items[i];
+      if (!opt || opt.value !== item.value || opt.textContent !== item.label || opt.disabled !== !!item.disabled){
+        changed = true;
+        break;
+      }
+    }
+  }
+  if (!changed) return;
+  select.innerHTML = '';
+  items.forEach(item => {
+    const opt = document.createElement('option');
+    opt.value = item.value ?? '';
+    opt.textContent = item.label ?? '';
+    opt.disabled = !!item.disabled;
+    if (item.selected) opt.selected = true;
+    select.append(opt);
+  });
+  if (preserveValue && prevValue){
+    const match = Array.from(select.options).find(opt => opt.value === prevValue && !opt.disabled);
+    if (match) select.value = prevValue;
+  }
+  if (!select.value && items.some(item => item.selected)){
+    const selectedItem = items.find(item => item.selected);
+    if (selectedItem) select.value = selectedItem.value ?? '';
+  }
+}
+
 function slotActionSection(slotNumber){
   return document.querySelector(`.slot-actions[data-slot="${slotNumber}"]`);
 }
@@ -787,7 +1320,6 @@ function updateSlotSummary(slotNumber, rec){
   const summaryEl = document.getElementById(`slot${slotNumber}Summary`);
   const metaEl = document.getElementById(`slot${slotNumber}Meta`);
   const lastSeenEl = document.getElementById(`slot${slotNumber}LastSeen`);
-  const genEl = document.getElementById(`slot${slotNumber}Generation`);
   const slotMetaEl = document.getElementById(`slot${slotNumber}SlotMeta`);
   const slotMeta = syncState.meta.get(slotNumber) || null;
   if (summaryEl){
@@ -798,11 +1330,6 @@ function updateSlotSummary(slotNumber, rec){
   }
   if (lastSeenEl){
     lastSeenEl.textContent = rec ? `Last seen ${formatAgoMs(rec.last_seen_ms, syncState.refMs)}` : 'Last seen —';
-  }
-  if (genEl){
-    genEl.textContent = rec
-      ? `Generation ack ${rec.last_ack_generation ?? '—'} / slot ${rec.slot_generation ?? '—'}`
-      : 'Generation: —';
   }
   if (slotMetaEl){
     slotMetaEl.textContent = `Slot config: ${formatSlotConfig(slotMeta)}`;
@@ -822,29 +1349,18 @@ function updateSlotWaiting(slotNumber){
 
 function populateWaitingSelect(select){
   if (!select) return;
-  select.innerHTML = '';
   const waiting = syncState.waiting.filter(item => item && item.id);
-  if (!waiting.length){
-    const opt = document.createElement('option');
-    opt.value = '';
-    opt.textContent = 'No waiting slaves';
-    select.append(opt);
-    select.disabled = true;
-    return;
-  }
-  const placeholder = document.createElement('option');
-  placeholder.value = '';
-  placeholder.textContent = 'Select slave…';
-  placeholder.selected = true;
-  select.append(placeholder);
-  waiting.forEach(rec => {
-    const opt = document.createElement('option');
-    opt.value = rec.id;
-    const last = formatAgoMs(rec.last_seen_ms, syncState.refMs);
-    opt.textContent = `${rec.id} (${last})`;
-    select.append(opt);
-  });
-  select.disabled = syncUiState.busy;
+  const items = waiting.length
+    ? [
+        { value: '', label: 'Select slave…', selected: true },
+        ...waiting.map(rec => ({
+          value: rec.id,
+          label: `${rec.id} (${formatAgoMs(rec.last_seen_ms, syncState.refMs)})`
+        }))
+      ]
+    : [{ value: '', label: 'No waiting slaves', selected: true }];
+  syncSelectOptions(select, items, true);
+  select.disabled = syncUiState.busy || !waiting.length;
 }
 
 function updateSlotControls(slotNumber, rec){
@@ -853,32 +1369,17 @@ function updateSlotControls(slotNumber, rec){
   const actionSection = slotActionSection(slotNumber);
   const hasWaiting = syncState.waiting.some(entry => entry && entry.id);
   if (moveSelect){
-    moveSelect.innerHTML = '';
-    if (!rec){
-      const opt = document.createElement('option');
-      opt.value = '';
-      opt.textContent = 'No assigned slave';
-      moveSelect.append(opt);
-      moveSelect.disabled = true;
-    } else {
-      const placeholder = document.createElement('option');
-      placeholder.value = '';
-      placeholder.textContent = 'Select target…';
-      placeholder.selected = true;
-      moveSelect.append(placeholder);
-      for (let i = 1; i <= MAX_SYNC_SLOTS; i += 1){
-        if (i === slotNumber) continue;
-        const opt = document.createElement('option');
-        opt.value = String(i);
-        opt.textContent = `Slot ${i}`;
-        moveSelect.append(opt);
-      }
-      const unassignOpt = document.createElement('option');
-      unassignOpt.value = '__unassign__';
-      unassignOpt.textContent = 'Unassign';
-      moveSelect.append(unassignOpt);
-      moveSelect.disabled = syncUiState.busy;
-    }
+    const items = !rec
+      ? [{ value: '', label: 'No assigned slave', selected: true }]
+      : [
+          { value: '', label: 'Select target…', selected: true },
+          ...Array.from({ length: MAX_SYNC_SLOTS }, (_v, i) => i + 1)
+            .filter(slot => slot !== slotNumber)
+            .map(slot => ({ value: String(slot), label: `Slot ${slot}` })),
+          { value: '__unassign__', label: 'Unassign' }
+        ];
+    syncSelectOptions(moveSelect, items, true);
+    moveSelect.disabled = syncUiState.busy || !rec;
   }
   if (moveBtn){
     moveBtn.disabled = syncUiState.busy || !rec;
@@ -909,6 +1410,10 @@ function updateSlotControls(slotNumber, rec){
 function updateSlotPanels(){
   for (let slot = 1; slot <= MAX_SYNC_SLOTS; slot += 1){
     const rec = syncState.slots[slot - 1] || null;
+    const signature = buildSlotSignature(slot, rec);
+    const cached = slotRenderCache.get(slot);
+    if (cached && cached.signature === signature) continue;
+    slotRenderCache.set(slot, { signature });
     updateSlotSummary(slot, rec);
     renderSlotNode(slot, rec);
     updateSlotControls(slot, rec);
@@ -1583,7 +2088,13 @@ function buildNodeCard(node, idx){
 
 function renderNodes(data){
   const nodes = Array.isArray(data?.nodes) ? data.nodes : [];
-  nodesState.list = nodes;
+  const nextListSignature = JSON.stringify(nodes);
+  const listChanged = nodesState.listSignature !== nextListSignature;
+  if (listChanged){
+    nodesState.list = nodes;
+    nodesState.listSignature = nextListSignature;
+    nodesState.version += 1;
+  }
   nodesState.scanning = !!data?.scanning;
   const scanEnabled = data?.scan_feature_enabled !== false;
   const parts = [];
@@ -1599,45 +2110,56 @@ function renderNodes(data){
   setNodesSummary(`Nodes: ${parts.filter(Boolean).join(' • ')}`);
   const scanBtn = document.getElementById('nodesScanBtn');
   if (scanBtn) scanBtn.disabled = !scanEnabled || !!data?.scanning;
-  scheduleNodesPoll(nodesState.scanning);
-  updateSlotPanels();
+  if (listChanged) updateSlotPanels();
 }
 
 async function fetchNodes(){
-  if (nodesState.loading) return;
+  if (nodesState.loading){
+    nodesState.pendingRefresh = true;
+    return;
+  }
   nodesState.loading = true;
   try {
     const res = await fetch('/nodes', { cache: 'no-store' });
     if (!res.ok){
       const detail = await res.text().catch(() => '');
       setNodesSummary(`Nodes: Failed (${res.status} ${detail.trim()})`);
+      const wasEmpty = nodesState.listSignature === '[]';
       nodesState.list = [];
+      nodesState.listSignature = '[]';
+      if (!wasEmpty) nodesState.version += 1;
       nodesState.scanning = false;
-      scheduleNodesPoll(false);
-      updateSlotPanels();
+      if (!wasEmpty) updateSlotPanels();
     } else {
       const data = await res.json();
       renderNodes(data);
     }
   } catch (err) {
     setNodesSummary(`Nodes: Failed (${err.message})`);
+    const wasEmpty = nodesState.listSignature === '[]';
     nodesState.list = [];
+    nodesState.listSignature = '[]';
+    if (!wasEmpty) nodesState.version += 1;
     nodesState.scanning = false;
-    scheduleNodesPoll(false);
-    updateSlotPanels();
+    if (!wasEmpty) updateSlotPanels();
   } finally {
     nodesState.loading = false;
+    if (nodesState.pendingRefresh){
+      nodesState.pendingRefresh = false;
+      fetchNodes();
+      return;
+    }
+    scheduleNodesPoll();
   }
 }
 
-function scheduleNodesPoll(keepPolling){
+function scheduleNodesPoll(){
   if (nodesState.pollTimer){
     clearTimeout(nodesState.pollTimer);
     nodesState.pollTimer = null;
   }
-  if (keepPolling){
-    nodesState.pollTimer = setTimeout(() => { nodesState.pollTimer = null; fetchNodes(); }, 1000);
-  }
+  const delay = nodesState.scanning ? NODES_SCAN_POLL_MS : NODES_POLL_MS;
+  nodesState.pollTimer = setTimeout(() => { nodesState.pollTimer = null; fetchNodes(); }, delay);
 }
 
 async function triggerNodesScan(){
@@ -1657,8 +2179,11 @@ function renderSync(data){
     syncState.meta = new Map();
     syncState.waiting = [];
     syncState.refMs = 0;
+    const signature = JSON.stringify({ slots: [], waiting: [], meta: [], refMs: 0 });
+    const changed = syncState.signature !== signature;
+    syncState.signature = signature;
     setSyncSummary('Sync: No data');
-    updateSlotPanels();
+    if (changed) updateSlotPanels();
     return;
   }
   const slotsMeta = new Map();
@@ -1685,8 +2210,16 @@ function renderSync(data){
   syncState.meta = slotsMeta;
   syncState.waiting = waiting;
   syncState.refMs = refMs;
+  const signature = JSON.stringify({
+    slots: slots.map(normalizeSlaveRecord),
+    waiting: waiting.map(normalizeSlaveRecord).filter(Boolean),
+    meta: Array.from(slotsMeta.entries()),
+    refMs
+  });
+  const changed = syncState.signature !== signature;
+  syncState.signature = signature;
   setSyncSummary(`Sync: Updated ${new Date().toLocaleTimeString()} • ${ (data.slaves?.length) || 0 } known`);
-  updateSlotPanels();
+  if (changed) updateSlotPanels();
 }
 
 async function sendMoveRequest(slaveId, slotTarget){
@@ -1715,6 +2248,11 @@ async function sendMoveRequest(slaveId, slotTarget){
 }
 
 async function fetchSync(){
+  if (syncUiState.loading){
+    syncUiState.pendingRefresh = true;
+    return;
+  }
+  syncUiState.loading = true;
   setSyncSummary('Sync: Loading /sync/slaves…');
   try {
     const res = await fetch('/sync/slaves', { cache: 'no-store' });
@@ -1724,7 +2262,10 @@ async function fetchSync(){
       syncState.slots = Array.from({ length: MAX_SYNC_SLOTS }, () => null);
       syncState.meta = new Map();
       syncState.waiting = [];
-      updateSlotPanels();
+      const signature = JSON.stringify({ slots: [], waiting: [], meta: [], refMs: 0 });
+      const changed = syncState.signature !== signature;
+      syncState.signature = signature;
+      if (changed) updateSlotPanels();
       return;
     }
     const data = await res.json();
@@ -1734,8 +2275,27 @@ async function fetchSync(){
     syncState.slots = Array.from({ length: MAX_SYNC_SLOTS }, () => null);
     syncState.meta = new Map();
     syncState.waiting = [];
-    updateSlotPanels();
+    const signature = JSON.stringify({ slots: [], waiting: [], meta: [], refMs: 0 });
+    const changed = syncState.signature !== signature;
+    syncState.signature = signature;
+    if (changed) updateSlotPanels();
+  } finally {
+    syncUiState.loading = false;
+    if (syncUiState.pendingRefresh){
+      syncUiState.pendingRefresh = false;
+      fetchSync();
+      return;
+    }
+    scheduleSyncPoll();
   }
+}
+
+function scheduleSyncPoll(){
+  if (syncUiState.pollTimer){
+    clearTimeout(syncUiState.pollTimer);
+    syncUiState.pollTimer = null;
+  }
+  syncUiState.pollTimer = setTimeout(() => { syncUiState.pollTimer = null; fetchSync(); }, SYNC_POLL_MS);
 }
 
 async function requestReplay(slotNumber){
@@ -1801,31 +2361,6 @@ function attachSlotHandlers(){
   });
 }
 
-function initSecondaryActionsMenu(){
-  const container = document.getElementById('secondaryActions');
-  const toggle = document.getElementById('secondaryActionsToggle');
-  if (!container || !toggle) return;
-  const mediaQuery = window.matchMedia('(max-width: 720px)');
-
-  const syncMode = () => {
-    const isNarrow = mediaQuery.matches;
-    container.classList.toggle('menu-mode', isNarrow);
-    if (!isNarrow){
-      container.classList.remove('open');
-      toggle.setAttribute('aria-expanded', 'false');
-    }
-  };
-
-  toggle.addEventListener('click', () => {
-    if (!container.classList.contains('menu-mode')) return;
-    const isOpen = container.classList.toggle('open');
-    toggle.setAttribute('aria-expanded', String(isOpen));
-  });
-
-  mediaQuery.addEventListener('change', syncMode);
-  syncMode();
-}
-
 initCardToggle('pixelpilotMiniRkCard');
 initCardToggle('dvrCard');
 const capsRefreshBtn = document.getElementById('capsRefreshBtn');
@@ -1834,10 +2369,7 @@ ensureDvrHandlers();
 initTabs();
 attachSlotHandlers();
 initSlotActionSegments();
-initSecondaryActionsMenu();
-$('#refreshNodesBtn').addEventListener('click', fetchNodes);
 $('#nodesScanBtn').addEventListener('click', triggerNodesScan);
-$('#syncRefreshBtn').addEventListener('click', fetchSync);
 void fetchCaps();
 fetchNodes();
 fetchSync();
