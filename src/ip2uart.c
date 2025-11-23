@@ -97,6 +97,7 @@ typedef struct {
     int  crsf_log;                 // 0 | 1
     char crsf_log_path[256];
     int  crsf_log_rate_ms;         // >= 0
+    int  crsf_coalesce;            // 0 | 1
 
     // UART
     char uart_device[128];
@@ -204,6 +205,10 @@ typedef struct {
     bool running;
 } state_t;
 
+/* Forward declarations */
+static void uart_forward_with_coalesce(const config_t *cfg, state_t *st,
+                                       const uint8_t *data, size_t n);
+
 /* ------------------------------- Signals ------------------------------------ */
 static volatile sig_atomic_t g_reload = 0, g_stop = 0;
 static void on_sighup(int sig){ (void)sig; g_reload = 1; }
@@ -271,6 +276,7 @@ static int parse_config(const char *path, config_t *cfg){
     cfg->crsf_log = 0;
     strcpy(cfg->crsf_log_path, "/tmp/crsf_log.msg");
     cfg->crsf_log_rate_ms = 100;
+    cfg->crsf_coalesce = 0;
 
     strcpy(cfg->uart_device, "/dev/ttyS1");
     cfg->uart_baud=115200; cfg->uart_databits=8; strcpy(cfg->uart_parity,"none"); cfg->uart_stopbits=1; strcpy(cfg->uart_flow,"none");
@@ -325,6 +331,7 @@ static int parse_config(const char *path, config_t *cfg){
             cfg->crsf_log_path[sizeof(cfg->crsf_log_path) - 1] = 0;
         }
         else if(!strcmp(key,"crsf_log_rate_ms")) cfg->crsf_log_rate_ms=atoi(val);
+        else if(!strcmp(key,"crsf_coalesce")) cfg->crsf_coalesce=atoi(val);
     }
     fclose(f);
 
@@ -336,6 +343,7 @@ static int parse_config(const char *path, config_t *cfg){
     if (cfg->tx_buf == 0) cfg->tx_buf = 65536;
     if (cfg->crsf_log_rate_ms <= 0) cfg->crsf_log_rate_ms = 100;
     if (!cfg->crsf_log_path[0]) strcpy(cfg->crsf_log_path, "/tmp/crsf_log.msg");
+    cfg->crsf_coalesce = cfg->crsf_coalesce ? 1 : 0;
 
     return 0;
 }
@@ -879,6 +887,11 @@ static void crsf_forward_send(const config_t *cfg, state_t *st, const crsf_strea
 
     if (!st->udp_peer_set) {
         st->drops_uart_to_net += (uint64_t)s->len;
+        return;
+    }
+
+    if (cfg->crsf_coalesce) {
+        uart_forward_with_coalesce(cfg, st, s->frame, s->len);
         return;
     }
 
