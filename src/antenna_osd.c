@@ -39,6 +39,8 @@ static int rssi_hist[3]={-1,-1,-1}, rssi2_hist[3]={-1,-1,-1};
 #define DEF_BAR_WIDTH       37
 #define DEF_TOP             80
 #define DEF_BOTTOM          20
+#define DEF_TOP2            DEF_TOP
+#define DEF_BOTTOM2         DEF_BOTTOM
 #define DEF_OSD_HDR         " &F34&L20"
 #define DEF_OSD_HDR2        ""
 #define DEF_SYS_MSG_HDR     ""
@@ -80,6 +82,8 @@ typedef struct {
     int         bar_width;
     int         top;
     int         bottom;
+    int         top2;
+    int         bottom2;
     const char *osd_hdr;
     const char *osd_hdr2;
     const char *sys_msg_hdr;
@@ -87,6 +91,7 @@ typedef struct {
     int         show_stats_line;
     int         sys_msg_timeout;
     bool        rssi_control;
+    bool        rssi2_scale_custom;
     const char *rssi_hdr[6];
     const char *start_sym;
     const char *end_sym;
@@ -103,9 +108,9 @@ typedef struct {
 } cfg_t;
 
 static const cfg_t cfg_default = {
-    .info_files={DEF_INFO_FILE,NULL}, .out_file=DEF_OUT_FILE, .interval=DEF_INTERVAL, .bar_width=DEF_BAR_WIDTH, .top=DEF_TOP, .bottom=DEF_BOTTOM,
+    .info_files={DEF_INFO_FILE,NULL}, .out_file=DEF_OUT_FILE, .interval=DEF_INTERVAL, .bar_width=DEF_BAR_WIDTH, .top=DEF_TOP, .bottom=DEF_BOTTOM, .top2=DEF_TOP2, .bottom2=DEF_BOTTOM2,
     .osd_hdr=DEF_OSD_HDR, .osd_hdr2=DEF_OSD_HDR2, .sys_msg_hdr=DEF_SYS_MSG_HDR, .system_msg="", .show_stats_line=DEF_SHOW_STATS, .sys_msg_timeout=DEF_SYS_MSG_TIMEOUT,
-    .rssi_control=DEF_RSSI_CONTROL, .rssi_hdr={DEF_RSSI_RANGE0,DEF_RSSI_RANGE1,DEF_RSSI_RANGE2,DEF_RSSI_RANGE3,DEF_RSSI_RANGE4,DEF_RSSI_RANGE5},
+    .rssi_control=DEF_RSSI_CONTROL, .rssi2_scale_custom=false, .rssi_hdr={DEF_RSSI_RANGE0,DEF_RSSI_RANGE1,DEF_RSSI_RANGE2,DEF_RSSI_RANGE3,DEF_RSSI_RANGE4,DEF_RSSI_RANGE5},
     .start_sym=DEF_START, .end_sym=DEF_END, .empty_sym=DEF_EMPTY,
     .start_sym2=DEF_START2, .end_sym2=DEF_END2, .empty_sym2=DEF_EMPTY2, .rssi_key=DEF_RSSI_KEY,
     .curr_tx_rate_key=DEF_CURR_TX_RATE_KEY, .curr_tx_bw_key=DEF_CURR_TX_BW_KEY, .rssi2_enable=DEF_RSSI_2_ENABLE, .rssi2_key=DEF_RSSI_2_KEY, .tx_power_key=DEF_TX_POWER_KEY
@@ -182,8 +187,10 @@ static void set_cfg_field(const char *k, const char *v)
     else if (EQ(k, "out_file")) set_cfg_string(&cfg.out_file, v, cfg_default.out_file);
     else if (EQ(k, "interval")) cfg.interval = atof(v);
     else if (EQ(k, "bar_width")) cfg.bar_width = atoi(v);
-    else if (EQ(k, "top")) cfg.top = atoi(v);
-    else if (EQ(k, "bottom")) cfg.bottom = atoi(v);
+    else if (EQ(k, "top")) { cfg.top = atoi(v); if (!cfg.rssi2_scale_custom) cfg.top2 = cfg.top; }
+    else if (EQ(k, "bottom")) { cfg.bottom = atoi(v); if (!cfg.rssi2_scale_custom) cfg.bottom2 = cfg.bottom; }
+    else if (EQ(k, "top2") || EQ(k, "secondary_top") || EQ(k, "rssi2_top")) { cfg.top2 = atoi(v); cfg.rssi2_scale_custom = true; }
+    else if (EQ(k, "bottom2") || EQ(k, "secondary_bottom") || EQ(k, "rssi2_bottom")) { cfg.bottom2 = atoi(v); cfg.rssi2_scale_custom = true; }
     else if (EQ(k, "osd_hdr")) set_cfg_string(&cfg.osd_hdr, v, cfg_default.osd_hdr);
     else if (EQ(k, "osd_hdr2")) set_cfg_string(&cfg.osd_hdr2, v, cfg_default.osd_hdr2);
     else if (EQ(k, "sys_msg_hdr")) set_cfg_string(&cfg.sys_msg_hdr, v, cfg_default.sys_msg_hdr);
@@ -424,7 +431,7 @@ static void write_osd(int rssi,int rssi2,const char *mcs_str,const char *bw_str,
     int pct_rssi2=0; char bar_rssi2[cfg.bar_width*3+1]; const char *hdr_rssi2=NULL;
     if(cfg.rssi2_enable){
         int disp_rssi2=rssi2;
-        if(disp_rssi2<0)pct_rssi2=0; else if(disp_rssi2<=cfg.bottom)pct_rssi2=0; else if(disp_rssi2>=cfg.top)pct_rssi2=100; else pct_rssi2=(disp_rssi2-cfg.bottom)*100/(cfg.top-cfg.bottom);
+        if(disp_rssi2<0)pct_rssi2=0; else if(disp_rssi2<=cfg.bottom2)pct_rssi2=0; else if(disp_rssi2>=cfg.top2)pct_rssi2=100; else pct_rssi2=(disp_rssi2-cfg.bottom2)*100/(cfg.top2-cfg.bottom2);
         build_bar(bar_rssi2,sizeof(bar_rssi2),pct_rssi2,cfg.empty_sym2); hdr_rssi2=choose_rssi_hdr(pct_rssi2);
     }
     char filebuf[2048]; int flen=0;
