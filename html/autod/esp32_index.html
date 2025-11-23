@@ -433,11 +433,26 @@
   .nodes-toolbar .mut { font-size: 12px; }
   .nodes-stats { display: flex; flex-wrap: wrap; gap: 8px; font-size: 12px; color: var(--mut); }
 
-  .cap-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-  .cap-toolbar .mini-rk-gamma-row { flex: 1 1 100%; }
-  .cap-stats { display: flex; flex-wrap: wrap; gap: 8px; font-size: 12px; color: var(--mut); }
-  .cap-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; }
-  .video-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; }
+  .mini-rk-body { display: grid; gap: 12px; }
+  .mini-rk-section {
+    display: grid;
+    gap: 10px;
+    padding: 12px 14px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: linear-gradient(145deg, rgba(15, 108, 209, 0.06), rgba(15, 108, 209, 0.02));
+    box-shadow: 0 6px 16px rgba(14, 76, 149, 0.08);
+  }
+  .mini-rk-section-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .mini-rk-section-title { font-weight: 700; }
+  .mini-rk-section-note { font-size: 12px; color: var(--mut); }
+  .mini-rk-button-stack { display: grid; gap: 8px; }
+  .mini-rk-button-stack button { width: 100%; justify-content: center; }
+  .mini-rk-gamma-grid { display: grid; gap: 8px; }
+  .mini-rk-field { display: grid; gap: 4px; font-weight: 600; font-size: 13px; color: var(--fg); }
+  .mini-rk-field select { margin-top: 2px; width: 100%; }
+  .mini-rk-gamma-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .mini-rk-gamma-actions .mut { flex: 1 1 100%; }
 
   .ctl {
     display: grid;
@@ -458,9 +473,6 @@
   .switch input:checked { background: #1b2d22; border-color: #254a35; }
   .switch input::after { content: ""; position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: #cfd6dd; transition: 0.15s; }
   .switch input:checked::after { left: 23px; background: #e8f6ee; }
-
-  .freebox { display: none; margin-top: 6px; }
-  .cap-toolbar button + .cap-toolbar button { margin-left: 0; }
 
   .embed-wrap { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: #0f1317; min-height: 320px; display: grid; gap: 0; }
   .embed-frame { width: 100%; min-height: 320px; border: 0; background: #0f1317; }
@@ -629,22 +641,34 @@
         </div>
       </div>
       <div class="card-summary" id="pixelpilotMiniRkSummary" data-card-summary>Waiting for capabilities…</div>
-      <div class="body grid card-collapsible" data-card-body hidden>
-        <div class="cap-toolbar">
-          <div class="toolbar" id="pixelpilotMiniRkActions">
+      <div class="body mini-rk-body card-collapsible" data-card-body hidden>
+        <div class="mini-rk-section">
+          <div class="mini-rk-section-head">
+            <div class="mini-rk-section-title">Service controls</div>
+            <div class="mini-rk-section-note">Manage overlay and service state.</div>
+          </div>
+          <div class="mini-rk-button-stack" id="pixelpilotMiniRkActions">
             <button id="pixelpilotMiniRkToggleOsdBtn">Toggle OSD</button>
             <button id="pixelpilotMiniRkRestartServiceBtn">Restart pixelpilot_mini_rk</button>
             <button id="pixelpilotMiniRkStopServiceBtn">Stop pixelpilot_mini_rk</button>
             <button id="pixelpilotMiniRkStartServiceBtn">Start pixelpilot_mini_rk</button>
           </div>
-          <div class="toolbar mini-rk-gamma-row">
-            <label for="pixelpilotMiniRkGammaSelect">Gamma preset</label>
-            <select id="pixelpilotMiniRkGammaSelect" disabled>
-              <option>Loading presets…</option>
-            </select>
-            <button id="pixelpilotMiniRkApplyGammaBtn" type="button" disabled>Apply preset</button>
-            <button id="pixelpilotMiniRkReloadGammaBtn" type="button">Reload presets</button>
-            <div class="mut" id="pixelpilotMiniRkGammaNotice">Loading presets…</div>
+        </div>
+        <div class="mini-rk-section mini-rk-gamma-section">
+          <div class="mini-rk-section-head">
+            <div class="mini-rk-section-title">Gamma preset</div>
+            <div class="mini-rk-section-note mut" id="pixelpilotMiniRkGammaNotice">Loading presets…</div>
+          </div>
+          <div class="mini-rk-gamma-grid">
+            <label class="mini-rk-field" for="pixelpilotMiniRkGammaSelect">Select preset
+              <select id="pixelpilotMiniRkGammaSelect" disabled>
+                <option>Loading presets…</option>
+              </select>
+            </label>
+            <div class="mini-rk-gamma-actions">
+              <button id="pixelpilotMiniRkApplyGammaBtn" type="button" disabled>Apply preset</button>
+              <button id="pixelpilotMiniRkReloadGammaBtn" type="button">Reload presets</button>
+            </div>
           </div>
         </div>
       </div>
