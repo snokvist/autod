@@ -703,6 +703,34 @@ static void crsf_forward_feed(const config_t *cfg, state_t *st, const uint8_t *d
     }
 }
 
+static void uart_forward_with_coalesce(const config_t *cfg, state_t *st,
+                                       const uint8_t *data, size_t n)
+{
+    size_t remaining = n;
+    size_t offset = 0;
+
+    while (remaining > 0) {
+        size_t available = st->udp_out_cap - st->udp_out_len;
+        if (available == 0) {
+            udp_flush_if_ready(cfg, st, true, "buffer_full");
+            available = st->udp_out_cap - st->udp_out_len;
+            if (available == 0) {
+                st->drops_uart_to_net += (uint64_t)remaining;
+                break;
+            }
+        }
+
+        size_t chunk = remaining < available ? remaining : available;
+        memcpy(st->udp_out + st->udp_out_len, data + offset, chunk);
+        st->udp_out_len += chunk;
+        remaining -= chunk;
+        offset += chunk;
+    }
+
+    udp_flush_if_ready(cfg, st, false,
+        st->udp_out_len >= (size_t)cfg->udp_coalesce_bytes ? "size_threshold" : "pending");
+}
+
 static void maybe_print_stats(state_t *st){
     if(!g_verbosity) return;
     struct timespec now;
@@ -949,31 +977,17 @@ int main(int argc, char **argv){
             if(fd==st.fd_uart && (ev&EPOLLIN)){
                 ssize_t r=read(st.fd_uart,(void*)buf_uart,cfg.rx_buf);
                 if(r>0){
+                    bool crsf_mode = cfg.crsf_detect != 0;
+
                     get_mono(&st.last_uart_rx);
-                    crsf_monitor_feed(&crsf, CRSF_FROM_UART, buf_uart, (size_t)r);
-                    if (cfg.crsf_detect) {
+                    if (crsf.enabled) {
+                        crsf_monitor_feed(&crsf, CRSF_FROM_UART, buf_uart, (size_t)r);
+                    }
+
+                    if (crsf_mode) {
                         crsf_forward_feed(&cfg, &st, buf_uart, (size_t)r);
                     } else {
-                        size_t remaining=(size_t)r;
-                        size_t offset=0;
-                        while(remaining>0){
-                            size_t available = st.udp_out_cap - st.udp_out_len;
-                            if(available==0){
-                                udp_flush_if_ready(&cfg,&st,true,"buffer_full");
-                                available = st.udp_out_cap - st.udp_out_len;
-                                if(available==0){
-                                    st.drops_uart_to_net += (uint64_t)remaining;
-                                    break;
-                                }
-                            }
-                            size_t chunk = remaining<available?remaining:available;
-                            memcpy(st.udp_out+st.udp_out_len, buf_uart+offset, chunk);
-                            st.udp_out_len += chunk;
-                            remaining -= chunk;
-                            offset += chunk;
-                        }
-                        udp_flush_if_ready(&cfg,&st,false,
-                            st.udp_out_len >= (size_t)cfg.udp_coalesce_bytes ? "size_threshold" : "pending");
+                        uart_forward_with_coalesce(&cfg, &st, buf_uart, (size_t)r);
                     }
                 }
             }
@@ -982,7 +996,9 @@ int main(int argc, char **argv){
                 struct sockaddr_in from; socklen_t flen=sizeof(from);
                 ssize_t r=recvfrom(st.fd_net, buf_net, cfg.rx_buf, 0,(struct sockaddr*)&from,&flen);
                 if(r>0){
-                    crsf_monitor_feed(&crsf, CRSF_FROM_UDP, buf_net, (size_t)r);
+                    if (crsf.enabled) {
+                        crsf_monitor_feed(&crsf, CRSF_FROM_UDP, buf_net, (size_t)r);
+                    }
                     if(!cfg.udp_peer_addr[0]){
                         bool changed = !st.udp_peer_set ||
                             st.udp_peer.sin_addr.s_addr!=from.sin_addr.s_addr ||
