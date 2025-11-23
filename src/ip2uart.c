@@ -119,6 +119,23 @@ typedef struct {
     size_t tx_buf; // ring buffer capacity
 } config_t;
 
+/* ------------------------------ CRSF monitor ------------------------------- */
+typedef enum { CRSF_FROM_UART = 0, CRSF_FROM_UDP = 1, CRSF_SRC_MAX = 2 } crsf_source_t;
+
+typedef struct {
+    uint8_t frame[256];
+    size_t len;
+    size_t expected;
+} crsf_stream_t;
+
+typedef struct {
+    bool enabled;
+    crsf_stream_t streams[CRSF_SRC_MAX];
+    uint64_t type_counts[CRSF_SRC_MAX][256];
+    uint64_t invalid_frames[CRSF_SRC_MAX];
+    struct timespec last_report;
+} crsf_monitor_t;
+
 /* --------------------------------- State ------------------------------------ */
 typedef struct {
     // fds
@@ -161,23 +178,6 @@ typedef struct {
 
     bool running;
 } state_t;
-
-/* ------------------------------ CRSF monitor ------------------------------- */
-typedef enum { CRSF_FROM_UART = 0, CRSF_FROM_UDP = 1, CRSF_SRC_MAX = 2 } crsf_source_t;
-
-typedef struct {
-    uint8_t frame[256];
-    size_t len;
-    size_t expected;
-} crsf_stream_t;
-
-typedef struct {
-    bool enabled;
-    crsf_stream_t streams[CRSF_SRC_MAX];
-    uint64_t type_counts[CRSF_SRC_MAX][256];
-    uint64_t invalid_frames[CRSF_SRC_MAX];
-    struct timespec last_report;
-} crsf_monitor_t;
 
 /* ------------------------------- Signals ------------------------------------ */
 static volatile sig_atomic_t g_reload = 0, g_stop = 0;
