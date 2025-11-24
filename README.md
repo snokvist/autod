@@ -257,6 +257,194 @@ Static files under `html/` can be served by the daemon (when `serve_ui=1`) or by
   cap is 20 when this mode is enabled. Use `-t MS` alongside LIFO mode to throttle flushes to at most once every `MS` milliseconds
   (default 1000 ms), which limits outbound bursts to the queue depth even when upstream processes emit thousands of lines per
   second. Supply `-n NAME` to append an identifier to the SSE stream/event names (for example `stdout:worker1`, `stderr:worker1`)
+  ) so clients can distinguish multiple publishers. The cleanest way to capture stdout/stderr from another process is to launch it
+  under `sse_tail` using the `--` separator (for example `./sse_tail -p 8080 -n build -- ./long-job.sh`). `sse_tail` will fork the
+  target as a child, pipe its stdout/stderr separately, and emit SSE frames tagged with `stdout`, `stderr`, and `status` (or their
+  `-n` variants). Clients can then subscribe with `EventSource.addEventListener("stdout", ...)` and
+  `addEventListener("stderr", ...)` without adding textual prefixes; if the target is a pipeline or requires shell expansion, wrap
+  it with `sh -c '...'` after the `--` so the helper still owns the child process and can deliver both streams in SSE form. Each
+  time a client connects (or reconnects) to `/events`, `sse_tail` immediately emits a `status` event describing the helper and
+  child process IDs plus current uptimes and queueing options; send `SIGHUP` to request another snapshot without interrupting the
+  stream. When the child exits, `sse_tail` emits a final `status` SSE line with the exit code and drains any buffered output first.
+  If `sse_tail` itself receives `SIGINT`/`SIGTERM`, it flushes pending output, publishes a `status` message describing the
+  received signal, and then closes client connections; the tracked child inherits the termination signal so it does not keep
+  running.
+- `udp_relay` → `$(PREFIX)/bin/udp_relay`.
+- `joystick2crsf` → `$(PREFIX)/bin/joystick2crsf`.
+- `ip2uart` → build with `make ip2uart` or via the `make tools` aggregate target when you need the UART↔IP bridge.
+- `udp_relay` configuration → `/etc/udp_relay/udp_relay.conf` (overwritten in-place during each install).
+- `joystick2crsf` configuration → `/etc/joystick2crsf.conf` (overwritten in-place during each install).
+- `ip2uart` configuration → `/etc/ip2uart.conf` (not installed automatically; see [Helper Tools](#helper-tools)).
+- `udp_relay` service unit → `/etc/systemd/system/udp_relay.service` which runs the helper as `root` for consistent behaviour with the UI bindings.
+- `joystick2crsf` service unit → `/etc/systemd/system/joystick2crsf.service` (includes an `ExecReload` that delivers `SIGHUP` so the daemon can re-read its config without a full restart).
+- VRX udp_relay UI asset → `$(PREFIX)/share/autod/udp_relay/vrx_udp_relay.html` (the service runs the binary with `--ui` pointing at this file).
+
+During installation on a host with `systemctl` available (and no `DESTDIR`), the recipe stops any running `autod`/`udp_relay`/`joystick2crsf` services, installs the new assets and configuration in place, reloads `systemd`, and starts the services again without enabling them. If you staged into a `DESTDIR`, reload manually once the files land on the target system, then enable the daemon:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now autod
+# Optional helper
+sudo systemctl enable --now udp_relay
+# Optional joystick bridge
+sudo systemctl enable --now joystick2crsf
+```
+
+The service starts in the VRX data directory so the bundled helper scripts can find their message payloads without additional configuration.
+
+Pixelpilot Mini RK actions (`toggle_osd`, `toggle_recording`) signal the `pixelpilot_mini_rk` process directly (`SIGUSR1` for the OSD overlay, `SIGUSR2` for recording), while the `reboot` and `shutdown` commands launch `reboot now`/`shutdown now` in the background. The installed service runs as `root`, and the bundled `exec-handler.sh` now exits with a clear error when invoked without elevated privileges. If you run the daemon manually, mimic that setup so the helper can send the required signals; otherwise the UI will report `failed to signal pixelpilot_mini_rk`.
+
+If you prefer direct compiler invocation, consult the comment at the top of [`src/autod.c`](src/autod.c), but using the provided `Makefile` keeps flags consistent.
+
+---
+
+## 4. Configuration & Runtime
+
+The daemon looks for `./autod.conf` by default. You can provide an alternate path as the sole positional argument:
+
+```bash
+./autod configs/autod.conf
+```
+
+Sample configuration bundles ship with the repository:
+
+- **Master example** – [`configs/autod.conf`](configs/autod.conf)
+- **Slave example** – [`configs/slave/autod.conf`](configs/slave/autod.conf)
+
+Important sections inside the master sample ([`configs/autod.conf`](configs/autod.conf)):
+
+- `[server]` – HTTP bind address/port and whether the LAN scanner starts automatically.
+- `[scan]` – Optional list of additional CIDR blocks that should be probed every sweep.
+- `[exec]` – Interpreter invoked for `/exec` requests, plus timeout and output limits.
+- `[caps]` – Device identity metadata and optional capability list exposed at `/caps`.
+- `[announce]` – List of Server-Sent Event (SSE) streams advertised to clients.
+- `[ui]` – Controls for serving the static UI bundle.
+
+The execution plane contract (`/exec` requests and handler expectations) is documented in [`handler_contract.txt`](handler_contract.txt). Ensure your handler script matches that agreement; a minimal sample lives in [`scripts/simple_exec-handler.sh`](scripts/simple_exec-handler.sh).
+
+### Sending UDP packets via the HTTP API
+
+`autod` exposes a `/udp` endpoint so web clients can emit connectionless UDP datagrams without needing raw socket access. The handler accepts `POST` requests with a JSON payload describing the target host, port, and message body. You may supply either a UTF-8 string via `"payload"` or arbitrary binary content via `"payload_base64"`:
+
+```bash
+curl -X POST http://HOST:PORT/udp \
+  -H 'Content-Type: application/json' \
+  -d '{
+        "host": "192.168.1.55",
+        "port": 5005,
+        "payload": "{\"command\":\"ping\"}"
+      }'
+```
+
+For binary datagrams, encode the bytes in base64 and place them in `"payload_base64"` instead. The response confirms delivery and echoes the number of bytes written.
+
+### Relaying HTTP requests via the HTTP API
+
+`autod` also exposes a `/http` endpoint for simple HTTP relays. Instead of free-form host/port forwarding, the relay resolves its target from the node cache or sync assignments: provide either a discovered `"node_ip"`, a registered slave `"sync_id"`, or a 1-based sync `"slot"` number (when acting as a master). The handler looks up the node in `/nodes` to obtain the IP and port, then returns the upstream status code, headers, and body encoded as base64.
+
+```bash
+curl -X POST http://HOST:PORT/http \
+  -H 'Content-Type: application/json' \
+  -d '{
+        "sync_id": "slave-1",
+        "path": "/status",
+        "method": "GET",
+        "headers": {"Accept": "application/json"},
+        "timeout_ms": 4000
+      }'
+```
+
+To send a body, include either a UTF-8 string in `"body"` or raw bytes in `"body_base64"`; the fields are mutually exclusive. TLS is not supported by this relay—requests with `"tls": true` return an error (`"ssl_disabled"` when `autod` is built with `NO_SSL`). If you need to point at a specific discovered host, supply `"node_ip"` (optionally with `"port"` to assert the cached port matches) instead of `"sync_id"`/`"slot"`.
+
+### Optional LAN Scanner
+
+When `[server] enable_scan = 1`, the daemon seeds itself into the scan database and launches background probing via functions in [`src/scan.c`](src/scan.c). Clients can poll `/nodes` for progress and discovered peers. If you also define one or more `extra_subnet = 10.10.10.0/24` lines inside a `[scan]` section, the scanner will include those CIDR blocks alongside any directly detected interfaces. `/32` entries are treated as single hosts.
+
+### Sync master/slave coordination
+
+`autod` can now coordinate sync slots across a fleet using an HTTP-based control plane. Enable it via the `[sync]` section in `autod.conf`. When slaves register with a master, the master probes the registering IP on its configured port and refreshes the `/nodes` cache so the HTTP relay and node listings stay current:
+
+```ini
+[sync]
+# role can be "master" to accept slave registrations or "slave" to follow a master.
+role = master
+# When acting as a slave, point at the master's sync identifier using sync://.
+# master_url = sync://autod-master/sync/register
+register_interval_s = 30
+allow_bind = 1        ; let POST /sync/bind re-point the slave at runtime
+# id = custom-node-id ; defaults to the system hostname
+# slot_retention_s = 0 ; seconds to keep an idle slot reserved (0 = forever)
+```
+
+Masters can advertise up to ten sync slots via `[sync.slotN]` sections. Each slot lists `/exec` payloads (JSON bodies) that run sequentially on the assigned slave whenever a new sync generation is issued:
+
+```ini
+[sync.slot1]
+name = primary
+prefer_id = alpha
+exec = {"path": "/usr/local/bin/slot1-prepare"}
+exec = {"path": "/usr/local/bin/slot1-finalise", "args": ["--ok"]}
+```
+
+Use `prefer_id` when you need deterministic slot ordering. The master still
+lets any slave occupy that slot while the preferred ID is offline, but the next
+time the matching ID registers it immediately claims the slot. The displaced
+slave is auto-assigned to another free slot or falls back to the waiting queue
+if all ten slots are busy, which lets you pre-plan layouts without giving up
+the dynamic waterfall behavior.
+
+- **Masters** advertise a `sync-master` capability in `/caps`, accept slave registrations at `POST /sync/register`, list known peers via `GET /sync/slaves`, and assign slots with `POST /sync/push`. The handler accepts bodies such as `{"moves": [{"slave_id": "alpha", "slot": 2}]}` to shuffle live assignments. During each heartbeat the master responds with the next slot command sequence (identified by generation) which the slave executes locally via the configured interpreter.
+- **Slaves** (advertising `sync-slave`) maintain a background thread that posts to the configured `master_url` every `register_interval_s` seconds. When the value uses the `sync://` scheme the daemon resolves the identifier through the LAN discovery cache before contacting the master. The response includes the assigned slot, optional slot label, and any commands queued for the next generation; the slave runs each command in order and acknowledges completion on subsequent heartbeats. Slaves also expose `POST /sync/bind` so an operator or master can redirect a running node to a new controller without editing disk config—send either `{ "master_id": "sync-master-id" }` or a `master_url` that already uses the `sync://` format so the daemon persists the identifier.
+
+Slot lifecycle highlights:
+
+- Masters keep each slot assignment and registry record pinned to the registering slave ID until the optional `slot_retention_s` timer elapses. The default of `0` means "retain forever" so a slave that reboots or drops offline can reclaim its previous slot as soon as it reconnects. Set a positive retention window if you want the master to free unused slots and purge idle records automatically.
+- When more than ten slaves register concurrently the extras receive a `status: "waiting"` response from `POST /sync/register`. They keep heartbeating (and logging the waiting status) until a slot frees up or you manually move another slave away. No `/exec` payloads are issued while a node is waiting.
+- `POST /sync/push` accepts slot move requests (`{"moves": [...]}`) to reshuffle assignments. The master increments the affected slot generation whenever an assignment changes, guaranteeing that the slave replays its slot command waterfall the next time it checks in. Moves are processed atomically so swapping or rotating slots across multiple slaves is handled gracefully without race conditions.
+- The same handler accepts `{"delete_ids": ["alpha"]}` (or a single `delete_id`) to flush stale registry entries. Deleting an ID clears its slot assignment immediately and removes the cached metadata so a rebooted device can register from scratch without inheriting old state.
+- The same handler can now trigger a forced replay without changing assignments by sending `{"replay_slots": [2, 4]}` to bump specific slots or `{"replay_ids": ["alpha"]}` to target a slave ID. Each replay increments the slot generation and resets the slave's acknowledgement so the command stack runs again the moment it reports back. Requests referencing empty slots or unknown IDs are rejected so you immediately know when nothing was replayed.
+- `GET /sync/slaves` includes a `slots` array describing each slot's label and
+  optional `prefer_id` reservation so dashboards and CLI helpers can surface
+  the intended ordering even when a placeholder slave is occupying the slot.
+
+See the master ([`configs/autod.conf`](configs/autod.conf)) and slave ([`configs/slave/autod.conf`](configs/slave/autod.conf)) samples for full examples and the sync handlers in [`src/autod.c`](src/autod.c) for the request/response schema.
+
+Operators can manage those assignments without crafting raw HTTP by using the bundled VRX assets:
+
+- The VRX web console exposes a **Sync slots** card (`html/autod/vrx_index.html`) that polls `GET /sync/slaves`, lists the ten slots plus any waiting slaves, and lets you queue multi-move plans. Once you confirm the moves the UI POSTs `{"moves": [...]}` to `/sync/push`, you can trigger per-slot replays from the same view, and every card now includes a **Flush ID** action that calls `delete_ids` to remove stale entries.
+- The `scripts/vrx/exec-handler.sh` wrapper now implements `/sys/sync/status`, `/sys/sync/move`, `/sys/sync/replay`, and `/sys/sync/delete` commands so you can drive the same control plane over `/exec`. The helper proxies those calls to `http://127.0.0.1:55667` by default; override `AUTOD_HTTP_BASE` (or `AUTOD_HTTP_HOST`/`AUTOD_HTTP_PORT`) before launching the daemon if the control plane listens elsewhere.
+
+### Startup execution sequence
+
+The optional `[startup]` section lets you queue `/exec` payloads that should run automatically once the HTTP server and background threads come online. Each `exec = ...` line is a JSON blob matching the body of a `POST /exec` request:
+
+```ini
+[startup]
+exec = {"path": "/bin/echo", "args": ["autod", "ready"]}
+exec = {"path": "/usr/local/bin/bootstrap"}
+```
+
+Entries execute sequentially (waterfall style): the daemon waits for each command to complete before launching the next. Standard output/stderr from each run is logged to stderr alongside the exit code so you can track bootstrap progress without instrumenting the handler script.
+
+### Bundled UI
+
+Static files under `html/` can be served by the daemon (when `serve_ui=1`) or by any external web server. The provided `scripts/minify_html.sh` helps regenerate minified assets if you edit the UI. Most role-specific pages (for example [`html/autod/vrx_index.html`](html/autod/vrx_index.html) and [`html/autod/vtx_index.html`](html/autod/vtx_index.html)) assume the helper wrappers in [`scripts/vrx/`](scripts/vrx/) and [`scripts/vtx/`](scripts/vtx/) are kept in sync; if you change the script inputs, command names, or help text make the parallel update in the corresponding HTML controls so buttons, dropdowns, and embedded consoles continue to match the backend behavior.
+
+### Helper Tools
+
+- `antenna_osd`: build with `make antenna_osd` (or the `musl`/`gnu` variants) to render an MSP/Canvas OSD overlay. It reads `/etc/antenna_osd.conf` by default and accepts an alternate path as its sole positional argument, with a sample config in [`configs/antenna_osd.conf`](configs/antenna_osd.conf). The helper can poll up to two telemetry files, smooth RSSI values across samples, and exposes configurable bar glyphs, headers, and system-message overlays. When both `info_file` and `info_file2` are provided, prefix telemetry keys with `file1:` or `file2:` to choose which source supplies each value. Set `rssi_2_enable=1` with `rssi_2_key=<metric>` to render a second RSSI indicator based on any available telemetry value instead of the previous UDP-only field.
+
+  **Config highlights:**
+
+  - **Telemetry sources.** `info_file`/`info_file2` (or the clearer `telemetry_file`/`telemetry_secondary` aliases) are polled independently; prefix per-metric keys (`signal_strength_key`/`rssi_key`, `stats_mcs_key`/`curr_tx_rate_key`, `stats_bw_key`/`curr_tx_bw_key`, `stats_tx_power_key`/`tx_power_key`, `secondary_rssi_key`/`rssi_2_key`) with `file1:` or `file2:` to pin them to the right file.
+  - **Headers and ranges.** `osd_hdr` prefixes the main RSSI line when `rssi_control=0`; when enabled, `rssi_control` swaps in one of the range-specific headers (`rssi_range0_hdr`…`rssi_range5_hdr`) based on the current percentage. `osd_hdr2` appends to the stats row.
+  - **Stats line clarity.** `show_stats_line` controls a secondary row: `0` disables it, `1` writes the header only (useful for spacing), `2` displays the MCS/bandwidth/tx-power trio, and `3` adds the temp/CPU prefix before those values.
+  - **Layout cues.** `bar_width` sets the bar length; `top`/`bottom` define the thresholds for full/empty bars on the primary indicator, and `top2`/`bottom2` optionally override the scale for the secondary RSSI bar. `start_sym`, `end_sym`, and `empty_sym` customize the glyphs used to bracket and fill the primary bar, while `start_sym2`, `end_sym2`, and `empty_sym2` optionally style the secondary RSSI bar independently.
+- `sse_tail`: build with `make tools` and run `./sse_tail http://host:port/path` to observe SSE streams announced in the config.
+  Pass `-L` (or `-l N`) to drop stale lines and deliver only the latest N entries per stream in newest-first order; the default
+  cap is 20 when this mode is enabled. Use `-t MS` alongside LIFO mode to throttle flushes to at most once every `MS` milliseconds
+  (default 1000 ms), which limits outbound bursts to the queue depth even when upstream processes emit thousands of lines per
+  second. Supply `-n NAME` to append an identifier to the SSE stream/event names (for example `stdout:worker1`, `stderr:worker1`)
   so clients can distinguish multiple publishers. The cleanest way to capture stdout/stderr from another process is to launch it
   under `sse_tail` using the `--` separator (for example `./sse_tail -p 8080 -n build -- ./long-job.sh`). `sse_tail` will fork the
   target as a child, pipe its stdout/stderr separately, and emit SSE frames tagged with `stdout`, `stderr`, and `status` (or their

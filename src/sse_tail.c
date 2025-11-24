@@ -42,7 +42,9 @@
 
 static volatile sig_atomic_t g_stop = 0;
 static volatile sig_atomic_t g_stop_sig = 0;
+static volatile sig_atomic_t g_hup = 0;
 static void on_sig(int sig) { g_stop = 1; g_stop_sig = sig; }
+static void on_hup(int sig) { (void)sig; g_hup = 1; }
 
 static int set_nonblock(int fd) {
     int fl = fcntl(fd, F_GETFL, 0);
@@ -227,7 +229,8 @@ static void drop_client(struct client *clients, int *nclients, int idx) {
     (*nclients)--;
 }
 
-static int accept_http_or_404(int lfd, struct client *clients, int *nclients) {
+static int accept_http_or_404(int lfd, struct client *clients, int *nclients, int *new_idx) {
+    if (new_idx) *new_idx = -1;
     struct sockaddr_in ca; socklen_t cl = (socklen_t)sizeof(ca);
     int cfd = accept(lfd, (struct sockaddr*)&ca, &cl);
     if (cfd < 0) return -1;
@@ -308,10 +311,11 @@ static int accept_http_or_404(int lfd, struct client *clients, int *nclients) {
         if (*nclients < MAX_CLIENTS) {
             clients[*nclients].fd = cfd;
             clients[*nclients].last_send_ms = now_ms();
+            if (new_idx) *new_idx = *nclients;
             (*nclients)++;
-        } else {
-            close(cfd);
+            return 0;
         }
+        close(cfd);
     } else if (is_root) {
         (void)send_str(cfd, HTTP_ROOT);
         close(cfd);
@@ -324,20 +328,24 @@ static int accept_http_or_404(int lfd, struct client *clients, int *nclients) {
 
 
 
+static int send_event_frame(int fd, const char *event, uint64_t id, const char *json) {
+    char frame[OUT_BUFSZ];
+    int fl = snprintf(frame, sizeof(frame),
+                      "event: %s\n"
+                      "id: %llu\n"
+                      "data: %s\n"
+                      "\n",
+                      event, (unsigned long long)id, json);
+    if (fl < 0) fl = 0;
+    if ((size_t)fl >= sizeof(frame)) fl = (int)sizeof(frame) - 1;
+    frame[(size_t)fl] = '\0';
+    return send_str(fd, frame);
+}
+
 static void broadcast(struct client *clients, int *nclients,
                       const char *event, uint64_t id, const char *json) {
     for (int i = 0; i < *nclients; ) {
-        char frame[OUT_BUFSZ];
-        int fl = snprintf(frame, sizeof(frame),
-                          "event: %s\n"
-                          "id: %llu\n"
-                          "data: %s\n"
-                          "\n",
-                          event, (unsigned long long)id, json);
-        if (fl < 0) fl = 0;
-        if ((size_t)fl >= sizeof(frame)) fl = (int)sizeof(frame) - 1;
-        frame[(size_t)fl] = '\0';
-        if (send_str(clients[i].fd, frame) < 0) {
+        if (send_event_frame(clients[i].fd, event, id, json) < 0) {
             drop_client(clients, nclients, i);
             continue;
         }
@@ -374,6 +382,38 @@ static void queue_drain_lifo(struct line_queue *q, const char *stream,
     q->head = 0;
 }
 
+static void build_status_json(char *json, size_t cap, const char *stream_status,
+                              pid_t child_pid, bool child_done, int child_status,
+                              uint64_t parent_start_ms, uint64_t child_start_ms,
+                              bool lifo_mode, size_t lifo_cap,
+                              uint64_t lifo_throttle_ms) {
+    uint64_t now = now_ms();
+    uint64_t uptime = now - parent_start_ms;
+    uint64_t child_uptime = child_start_ms ? (now - child_start_ms) : 0;
+    const char *lifo_state = lifo_mode ? "on" : "off";
+    char line[LINE_BUFSZ];
+
+    if (!child_done) {
+        (void)snprintf(line, sizeof(line),
+                       "pid=%d child=%d uptime_ms=%llu child_uptime_ms=%llu lifo=%s(cap=%zu,throttle_ms=%llu)",
+                       getpid(), child_pid, (unsigned long long)uptime,
+                       (unsigned long long)child_uptime, lifo_state, lifo_cap,
+                       (unsigned long long)lifo_throttle_ms);
+    } else {
+        (void)snprintf(line, sizeof(line),
+                       "pid=%d child=%d(exited=%d) uptime_ms=%llu child_runtime_ms=%llu lifo=%s(cap=%zu,throttle_ms=%llu)",
+                       getpid(), child_pid, child_status, (unsigned long long)uptime,
+                       (unsigned long long)child_uptime, lifo_state, lifo_cap,
+                       (unsigned long long)lifo_throttle_ms);
+    }
+
+    int jl = snprintf(json, cap,
+                      "{\"ts\":%llu,\"stream\":\"%s\",\"line\":\"%s\"}",
+                      (unsigned long long)now, stream_status, line);
+    if (jl < 0) jl = 0;
+    json[(size_t)jl] = '\0';
+}
+
 static void flush_line(const char *stream, char *buf, size_t *len,
                        bool lifo_mode, struct line_queue *q,
                        struct client *clients, int *nclients, uint64_t *msg_id) {
@@ -396,6 +436,28 @@ static void flush_line(const char *stream, char *buf, size_t *len,
     *len = 0;
 }
 
+static void emit_status_snapshot(struct client *clients, int *nclients, int target_idx,
+                                 const char *stream_status, uint64_t *msg_id,
+                                 pid_t child_pid, bool child_done, int child_status,
+                                 uint64_t parent_start_ms, uint64_t child_start_ms,
+                                 bool lifo_mode, size_t lifo_cap,
+                                 uint64_t lifo_throttle_ms) {
+    char json[OUT_BUFSZ];
+    build_status_json(json, sizeof(json), stream_status, child_pid, child_done, child_status,
+                      parent_start_ms, child_start_ms, lifo_mode, lifo_cap, lifo_throttle_ms);
+
+    (*msg_id)++;
+    if (target_idx >= 0 && target_idx < *nclients) {
+        if (send_event_frame(clients[target_idx].fd, stream_status, *msg_id, json) < 0) {
+            drop_client(clients, nclients, target_idx);
+        } else {
+            clients[target_idx].last_send_ms = now_ms();
+        }
+    } else {
+        broadcast(clients, nclients, stream_status, *msg_id, json);
+    }
+}
+
 int main(int argc, char **argv) {
     const char *host = "0.0.0.0";
     uint16_t port = 8080;
@@ -403,6 +465,8 @@ int main(int argc, char **argv) {
     size_t lifo_cap = LIFO_DEFAULT;
     uint64_t lifo_throttle_ms = LIFO_THROTTLE_DEFAULT_MS;
     const char *prog_name = NULL;
+    uint64_t start_ms = now_ms();
+    uint64_t child_start_ms = 0;
 
     int opt;
     while ((opt = getopt(argc, argv, "p:h:l:Lt:n:")) != -1) {
@@ -453,6 +517,10 @@ int main(int argc, char **argv) {
     (void)sigaction(SIGINT, &sa, NULL);
     (void)sigaction(SIGTERM, &sa, NULL);
 
+    struct sigaction sa_hup; memset(&sa_hup, 0, sizeof(sa_hup));
+    sa_hup.sa_handler = on_hup;
+    (void)sigaction(SIGHUP, &sa_hup, NULL);
+
     int outp[2], errp[2];
     if (pipe(outp) < 0 || pipe(errp) < 0) { perror("pipe"); return 1; }
 
@@ -469,6 +537,8 @@ int main(int argc, char **argv) {
         perror("execvp");
         _exit(127);
     }
+
+    child_start_ms = now_ms();
 
     // Parent
     close(outp[1]); close(errp[1]);
@@ -516,7 +586,15 @@ int main(int argc, char **argv) {
         }
 
         if (FD_ISSET(lfd, &rfds)) {
-            while (accept_http_or_404(lfd, clients, &nclients) == 0) {}
+            int added_idx = -1;
+            while (accept_http_or_404(lfd, clients, &nclients, &added_idx) == 0) {
+                if (added_idx >= 0) {
+                    emit_status_snapshot(clients, &nclients, added_idx, stream_status, &msg_id,
+                                         pid, child_done, child_status, start_ms, child_start_ms,
+                                         lifo_mode, lifo_cap, lifo_throttle_ms);
+                }
+                added_idx = -1;
+            }
         }
 
         if (FD_ISSET(outp[0], &rfds)) {
@@ -552,6 +630,13 @@ int main(int argc, char **argv) {
         }
 
         uint64_t now = now_ms();
+
+        if (g_hup) {
+            emit_status_snapshot(clients, &nclients, -1, stream_status, &msg_id,
+                                 pid, child_done, child_status, start_ms, child_start_ms,
+                                 lifo_mode, lifo_cap, lifo_throttle_ms);
+            g_hup = 0;
+        }
 
         if (lifo_mode && now >= next_lifo_flush) {
             queue_drain_lifo(&q_out, stream_out, clients, &nclients, &msg_id);
