@@ -407,6 +407,18 @@
     background: linear-gradient(135deg, rgba(15, 108, 209, 0.04), rgba(15, 108, 209, 0.015));
   }
 
+  .logs-body { display: grid; gap: 10px; }
+  .logs-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .logs-toolbar label { display: flex; flex-direction: column; gap: 4px; min-width: 220px; }
+  .logs-toolbar select { min-height: 38px; }
+  .logs-view { display: grid; gap: 10px; border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; background: linear-gradient(135deg, rgba(15, 108, 209, 0.05), rgba(15, 108, 209, 0.015)); box-shadow: 0 6px 16px rgba(14, 76, 149, 0.08); max-height: 320px; overflow: auto; }
+  .logs-list { display: grid; gap: 8px; }
+  .logs-empty { color: var(--mut); font-size: 12px; }
+  .log-entry { display: grid; gap: 6px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: linear-gradient(135deg, rgba(15, 108, 209, 0.06), rgba(15, 108, 209, 0.02)); box-shadow: 0 4px 12px rgba(14, 76, 149, 0.08); }
+  .log-meta { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 12px; color: var(--mut); }
+  .log-meta .pill { font-size: 11px; }
+  .log-text { margin: 0; background: #0f1620; color: #eaf1fb; border: 1px solid #1f3148; border-radius: 8px; padding: 8px 10px; white-space: pre-wrap; word-break: break-word; }
+
   .nodes-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; }
   .node {
     border: 1px solid var(--line);
@@ -625,6 +637,40 @@
         <div class="toolbar" id="deviceRuntimeActions" style="display:none">
           <button id="pixelpilotMiniRkRebootBtn">Reboot device</button>
           <button id="pixelpilotMiniRkShutdownBtn">Shutdown device</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="card card-collapsed optional-card" id="logsCard">
+      <div class="card-head">
+        <div class="card-title-group">
+          <div class="card-title-row">
+            <h2>Logs</h2>
+          </div>
+          <div class="card-subtitle">
+            <span>Live SSE feed</span>
+            <span class="badge" id="logsStatus">waiting…</span>
+          </div>
+        </div>
+        <div class="card-actions">
+          <div class="toolbar">
+            <button class="button ghost" type="button" id="logsToggle" data-card-toggle aria-expanded="false">Show details</button>
+            <button class="button primary" id="logsConnectBtn">Connect</button>
+            <button class="button ghost" id="logsDisconnectBtn">Disconnect</button>
+          </div>
+        </div>
+      </div>
+      <div class="card-summary" id="logsSummary" data-card-summary>Waiting for /caps…</div>
+      <div class="body logs-body card-collapsible" data-card-body hidden>
+        <div class="logs-toolbar">
+          <label>Endpoint
+            <select id="logsEndpointSelect" aria-label="SSE endpoint"></select>
+          </label>
+          <div class="spacer"></div>
+        </div>
+        <div class="logs-view" aria-live="polite">
+          <div id="logsEmptyState" class="logs-empty">Select an endpoint and connect to stream logs.</div>
+          <div id="logsList" class="logs-list"></div>
         </div>
       </div>
     </section>
@@ -937,9 +983,11 @@ const SYNC_POLL_MS = 7000;
 const slotActionState = new Map();
 const tabState = { active: 'groundstation' };
 const DEFAULT_CMD_TIMEOUT_MS = 6000;
+const MAX_LOG_ENTRIES = 20;
 const capsState = { capList: new Set(), hasExec: false };
 const dvrState = { initialized: false, hasExec: false, loading: false, enabled: false };
 const miniRkState = { initialized: false, gamma: { presets: [], loading: false } };
+const logsState = { initialized: false, endpoints: [], source: null, connected: false, entries: [], selectedUrl: '' };
 const slotRenderCache = new Map();
 
 function cardElements(cardId){
@@ -1037,6 +1085,196 @@ function renderSseList(entries){
     frag.appendChild(document.createTextNode(' '));
   });
   el.appendChild(frag);
+}
+
+function normalizeSseEntries(entries){
+  if (!Array.isArray(entries)) return [];
+  return entries.map(item => {
+    const url = typeof item === 'string' ? item : item?.url;
+    if (!url) return null;
+    const name = typeof item?.name === 'string' && item.name ? item.name : url;
+    return { name, url };
+  }).filter(Boolean);
+}
+
+function formatLogTimestamp(ts){
+  const date = ts instanceof Date ? ts : new Date(ts);
+  if (Number.isNaN(date.getTime())) return '—';
+  return `${date.toLocaleDateString()} ${date.toLocaleTimeString()}`;
+}
+
+function setLogsStatus(text){
+  const el = document.getElementById('logsStatus');
+  if (el) el.textContent = text || '—';
+}
+
+function setLogsSummary(text){
+  const el = document.getElementById('logsSummary');
+  if (el) el.textContent = text || '—';
+}
+
+function renderLogEndpointOptions(endpoints){
+  const select = document.getElementById('logsEndpointSelect');
+  if (!select) return;
+  select.innerHTML = '';
+  if (!Array.isArray(endpoints) || !endpoints.length){
+    const opt = document.createElement('option');
+    opt.value = '';
+    opt.textContent = 'No SSE endpoints available';
+    opt.disabled = true;
+    opt.selected = true;
+    select.appendChild(opt);
+    return;
+  }
+  endpoints.forEach(entry => {
+    const opt = document.createElement('option');
+    opt.value = entry.url;
+    opt.textContent = entry.name || entry.url;
+    opt.title = entry.url;
+    select.appendChild(opt);
+  });
+  const match = endpoints.find(entry => entry.url === logsState.selectedUrl) || endpoints[0];
+  select.value = match.url;
+  logsState.selectedUrl = match.url;
+}
+
+function renderLogEntries(){
+  const listEl = document.getElementById('logsList');
+  const emptyEl = document.getElementById('logsEmptyState');
+  if (!listEl || !emptyEl) return;
+  listEl.innerHTML = '';
+  if (!Array.isArray(logsState.entries) || !logsState.entries.length){
+    emptyEl.style.display = '';
+    return;
+  }
+  emptyEl.style.display = 'none';
+  const frag = document.createDocumentFragment();
+  logsState.entries.forEach(entry => {
+    const item = document.createElement('div');
+    item.className = 'log-entry';
+    const meta = document.createElement('div');
+    meta.className = 'log-meta';
+    const time = document.createElement('span');
+    time.textContent = formatLogTimestamp(entry.ts);
+    meta.appendChild(time);
+    if (entry.type){
+      const pill = document.createElement('span');
+      pill.className = 'pill';
+      pill.textContent = entry.type;
+      meta.appendChild(pill);
+    }
+    item.appendChild(meta);
+    const body = document.createElement('pre');
+    body.className = 'log-text';
+    body.textContent = entry.text || '';
+    item.appendChild(body);
+    frag.appendChild(item);
+  });
+  listEl.appendChild(frag);
+}
+
+function appendLogEntry(text, type){
+  const body = typeof text === 'string'
+    ? text
+    : (text === null || text === undefined ? '' : JSON.stringify(text, null, 2));
+  logsState.entries = [{ ts: new Date(), type: type || 'message', text: body }, ...logsState.entries].slice(0, MAX_LOG_ENTRIES);
+  renderLogEntries();
+}
+
+function updateLogsControls(){
+  const hasEndpoints = Array.isArray(logsState.endpoints) && logsState.endpoints.length > 0;
+  const connectBtn = document.getElementById('logsConnectBtn');
+  const disconnectBtn = document.getElementById('logsDisconnectBtn');
+  const select = document.getElementById('logsEndpointSelect');
+  if (connectBtn) connectBtn.disabled = !hasEndpoints || logsState.connected;
+  if (disconnectBtn) disconnectBtn.disabled = !logsState.connected;
+  if (select) select.disabled = !hasEndpoints;
+}
+
+function disconnectLogStream(silent = false){
+  if (logsState.source){
+    try { logsState.source.close(); } catch { /* noop */ }
+  }
+  logsState.source = null;
+  logsState.connected = false;
+  updateLogsControls();
+  if (!silent){
+    setLogsStatus('Disconnected');
+    setLogsSummary('Disconnected from SSE endpoint');
+  }
+}
+
+function connectLogStream(){
+  if (!Array.isArray(logsState.endpoints) || !logsState.endpoints.length) return;
+  const select = document.getElementById('logsEndpointSelect');
+  if (!select || !select.value) return;
+  const url = select.value;
+  disconnectLogStream(true);
+  logsState.entries = [];
+  renderLogEntries();
+  logsState.selectedUrl = url;
+  setLogsStatus('Connecting…');
+  setLogsSummary('Connecting to selected SSE endpoint…');
+  try {
+    const es = new EventSource(url);
+    logsState.source = es;
+    logsState.connected = true;
+    updateLogsControls();
+    es.onopen = () => {
+      setLogsStatus('Connected');
+      setLogsSummary('Streaming logs');
+    };
+    es.onmessage = ev => appendLogEntry(ev?.data ?? '', ev?.type || 'message');
+    es.onerror = () => {
+      appendLogEntry('Stream error', 'error');
+      setLogsStatus('Disconnected');
+      setLogsSummary('Disconnected from SSE endpoint');
+      disconnectLogStream(true);
+    };
+  } catch (err) {
+    setLogsStatus(`Failed (${err?.message || 'error'})`);
+    setLogsSummary('Connection failed');
+    disconnectLogStream(true);
+  }
+}
+
+function applyLogEndpoints(entries){
+  logsState.endpoints = normalizeSseEntries(entries);
+  const hasEndpoints = logsState.endpoints.length > 0;
+  const selectedValid = hasEndpoints && logsState.selectedUrl
+    ? logsState.endpoints.some(entry => entry.url === logsState.selectedUrl)
+    : false;
+  renderLogEndpointOptions(logsState.endpoints);
+  setOptionalCardState('logsCard', {
+    enabled: hasEndpoints,
+    summary: hasEndpoints ? 'Select an SSE endpoint to stream logs' : 'No SSE endpoints exposed — collapsed'
+  });
+  if ((!hasEndpoints || !selectedValid) && logsState.connected){
+    disconnectLogStream();
+  }
+  if (!hasEndpoints){
+    setLogsStatus('Unavailable');
+    setLogsSummary('Waiting for /caps…');
+  } else if (logsState.connected){
+    setLogsStatus('Connected');
+    setLogsSummary('Streaming logs');
+  } else {
+    setLogsStatus('Ready');
+    setLogsSummary('Choose an endpoint to connect.');
+  }
+  updateLogsControls();
+}
+
+function ensureLogsHandlers(){
+  if (logsState.initialized) return;
+  const connectBtn = document.getElementById('logsConnectBtn');
+  const disconnectBtn = document.getElementById('logsDisconnectBtn');
+  const select = document.getElementById('logsEndpointSelect');
+  if (connectBtn) connectBtn.addEventListener('click', () => { connectLogStream(); });
+  if (disconnectBtn) disconnectBtn.addEventListener('click', () => { disconnectLogStream(); setLogsStatus('Disconnected'); });
+  if (select) select.addEventListener('change', () => { logsState.selectedUrl = select.value; });
+  logsState.initialized = true;
+  updateLogsControls();
 }
 
 function formatBytes(bytes){
@@ -1516,6 +1754,8 @@ function renderCaps(caps){
   document.getElementById('dev_load').textContent = formatLoadavg(caps?.loadavg);
   renderCapsList(caps?.caps);
   renderSseList(caps?.sse);
+  ensureLogsHandlers();
+  applyLogEndpoints(caps?.sse);
   const subtitle = document.getElementById('subtitle');
   if (subtitle){
     const label = [caps?.device || 'device', caps?.version ? `v${caps.version}` : ''].filter(Boolean).join(' ');
@@ -2361,10 +2601,12 @@ function attachSlotHandlers(){
   });
 }
 
+initCardToggle('logsCard');
 initCardToggle('pixelpilotMiniRkCard');
 initCardToggle('dvrCard');
 const capsRefreshBtn = document.getElementById('capsRefreshBtn');
 if (capsRefreshBtn) capsRefreshBtn.addEventListener('click', () => { void fetchCaps(); });
+ensureLogsHandlers();
 ensureDvrHandlers();
 initTabs();
 attachSlotHandlers();
