@@ -995,7 +995,8 @@ const logsState = {
   connected: false,
   connecting: false,
   entries: [],
-  selectedUrl: ''
+  selectedUrl: '',
+  session: 0
 };
 const slotRenderCache = new Map();
 
@@ -1247,6 +1248,8 @@ function connectLogStream(){
   const select = document.getElementById('logsEndpointSelect');
   if (!select || !select.value) return;
   const url = select.value;
+  const session = logsState.session + 1;
+  logsState.session = session;
   disconnectLogStream(true);
   logsState.entries = [];
   renderLogEntries();
@@ -1264,6 +1267,7 @@ function connectLogStream(){
         if (!res.ok || !res.body){
           throw new Error(`${res.status} ${res.statusText}`);
         }
+        if (session !== logsState.session) return;
         logsState.source = res;
         logsState.connected = true;
         logsState.connecting = false;
@@ -1287,16 +1291,18 @@ function connectLogStream(){
           }
         }
       } catch (err) {
-        if (controller.signal.aborted) return;
+        if (controller.signal.aborted || session !== logsState.session) return;
         appendLogEntry(`Stream error: ${err?.message || err}`, 'error');
         setLogsStatus('Disconnected');
         setLogsSummary('Disconnected from SSE endpoint');
       } finally {
+        if (session !== logsState.session) return;
         logsState.connecting = false;
         disconnectLogStream(true);
       }
     })();
   } catch (err) {
+    if (session !== logsState.session) return;
     logsState.connecting = false;
     setLogsStatus(`Failed (${err?.message || 'error'})`);
     setLogsSummary('Connection failed');
