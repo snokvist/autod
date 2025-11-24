@@ -1181,6 +1181,14 @@ function appendLogEntry(text, type){
   renderLogEntries();
 }
 
+function handleLogEvent(ev){
+  if (!ev) return;
+  if (ev.type === 'open') return;
+  const type = ev?.type || 'message';
+  const payload = ev && typeof ev === 'object' && 'data' in ev ? ev.data : ev;
+  appendLogEntry(payload, type);
+}
+
 function updateLogsControls(){
   const hasEndpoints = Array.isArray(logsState.endpoints) && logsState.endpoints.length > 0;
   const connectBtn = document.getElementById('logsConnectBtn');
@@ -1217,6 +1225,13 @@ function connectLogStream(){
   setLogsSummary('Connecting to selected SSE endpoint…');
   try {
     const es = new EventSource(url);
+    const handlers = ['message', 'log', 'stdout', 'stderr', 'update', 'event'];
+    const onError = () => {
+      appendLogEntry('Stream error', 'error');
+      setLogsStatus('Disconnected');
+      setLogsSummary('Disconnected from SSE endpoint');
+      disconnectLogStream(true);
+    };
     logsState.source = es;
     logsState.connected = true;
     updateLogsControls();
@@ -1224,13 +1239,10 @@ function connectLogStream(){
       setLogsStatus('Connected');
       setLogsSummary('Streaming logs');
     };
-    es.onmessage = ev => appendLogEntry(ev?.data ?? '', ev?.type || 'message');
-    es.onerror = () => {
-      appendLogEntry('Stream error', 'error');
-      setLogsStatus('Disconnected');
-      setLogsSummary('Disconnected from SSE endpoint');
-      disconnectLogStream(true);
-    };
+    es.onmessage = handleLogEvent;
+    handlers.forEach(name => es.addEventListener(name, handleLogEvent));
+    es.onerror = onError;
+    es.addEventListener('error', onError);
   } catch (err) {
     setLogsStatus(`Failed (${err?.message || 'error'})`);
     setLogsSummary('Connection failed');
