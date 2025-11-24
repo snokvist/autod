@@ -987,7 +987,15 @@ const MAX_LOG_ENTRIES = 20;
 const capsState = { capList: new Set(), hasExec: false };
 const dvrState = { initialized: false, hasExec: false, loading: false, enabled: false };
 const miniRkState = { initialized: false, gamma: { presets: [], loading: false } };
-const logsState = { initialized: false, endpoints: [], source: null, connected: false, entries: [], selectedUrl: '' };
+const logsState = {
+  initialized: false,
+  endpoints: [],
+  source: null,
+  controller: null,
+  connected: false,
+  entries: [],
+  selectedUrl: ''
+};
 const slotRenderCache = new Map();
 
 function cardElements(cardId){
@@ -1173,11 +1181,20 @@ function renderLogEntries(){
   listEl.appendChild(frag);
 }
 
-function appendLogEntry(text, type){
-  const body = typeof text === 'string'
-    ? text
-    : (text === null || text === undefined ? '' : JSON.stringify(text, null, 2));
-  logsState.entries = [{ ts: new Date(), type: type || 'message', text: body }, ...logsState.entries].slice(0, MAX_LOG_ENTRIES);
+function appendLogEntry(payload, type){
+  const ts = typeof payload?.ts === 'number' && Number.isFinite(payload.ts) ? payload.ts : Date.now();
+  const body = (() => {
+    if (typeof payload === 'string') return payload;
+    if (!payload || typeof payload !== 'object') return String(payload ?? '');
+    if (typeof payload.line === 'string'){
+      const prefix = payload.stream ? `[${payload.stream}] ` : '';
+      return `${prefix}${payload.line}`;
+    }
+    if (typeof payload.data === 'string') return payload.data;
+    if (typeof payload.text === 'string') return payload.text;
+    return JSON.stringify(payload);
+  })();
+  logsState.entries = [{ ts, type: type || payload?.type || 'message', text: body }, ...logsState.entries].slice(0, MAX_LOG_ENTRIES);
   renderLogEntries();
 }
 
@@ -1185,7 +1202,13 @@ function handleLogEvent(ev){
   if (!ev) return;
   if (ev.type === 'open') return;
   const type = ev?.type || 'message';
-  const payload = ev && typeof ev === 'object' && 'data' in ev ? ev.data : ev;
+  let payload = ev && typeof ev === 'object' && 'data' in ev ? ev.data : ev;
+  if (typeof payload === 'string'){
+    try {
+      const parsed = JSON.parse(payload);
+      payload = parsed;
+    } catch { /* best effort */ }
+  }
   appendLogEntry(payload, type);
 }
 
@@ -1203,7 +1226,11 @@ function disconnectLogStream(silent = false){
   if (logsState.source){
     try { logsState.source.close(); } catch { /* noop */ }
   }
+  if (logsState.controller){
+    try { logsState.controller.abort(); } catch { /* noop */ }
+  }
   logsState.source = null;
+  logsState.controller = null;
   logsState.connected = false;
   updateLogsControls();
   if (!silent){
@@ -1224,30 +1251,66 @@ function connectLogStream(){
   setLogsStatus('Connecting…');
   setLogsSummary('Connecting to selected SSE endpoint…');
   try {
-    const es = new EventSource(url);
-    const handlers = ['message', 'log', 'stdout', 'stderr', 'update', 'event'];
-    const onError = () => {
-      appendLogEntry('Stream error', 'error');
-      setLogsStatus('Disconnected');
-      setLogsSummary('Disconnected from SSE endpoint');
-      disconnectLogStream(true);
-    };
-    logsState.source = es;
+    const controller = new AbortController();
+    logsState.controller = controller;
     logsState.connected = true;
     updateLogsControls();
-    es.onopen = () => {
-      setLogsStatus('Connected');
-      setLogsSummary('Streaming logs');
-    };
-    es.onmessage = handleLogEvent;
-    handlers.forEach(name => es.addEventListener(name, handleLogEvent));
-    es.onerror = onError;
-    es.addEventListener('error', onError);
+    void (async () => {
+      try {
+        const res = await fetch(url, { cache: 'no-store', signal: controller.signal, headers: { Accept: 'text/event-stream' } });
+        if (!res.ok || !res.body){
+          throw new Error(`${res.status} ${res.statusText}`);
+        }
+        logsState.source = res;
+        setLogsStatus('Connected');
+        setLogsSummary('Streaming logs');
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        while (true){
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          let sepIndex = buffer.indexOf('\n\n');
+          while (sepIndex !== -1){
+            const chunk = buffer.slice(0, sepIndex);
+            buffer = buffer.slice(sepIndex + 2);
+            const eventObj = parseSseChunk(chunk);
+            if (eventObj) handleLogEvent(eventObj);
+            sepIndex = buffer.indexOf('\n\n');
+          }
+        }
+      } catch (err) {
+        if (controller.signal.aborted) return;
+        appendLogEntry(`Stream error: ${err?.message || err}`, 'error');
+        setLogsStatus('Disconnected');
+        setLogsSummary('Disconnected from SSE endpoint');
+      } finally {
+        disconnectLogStream(true);
+      }
+    })();
   } catch (err) {
     setLogsStatus(`Failed (${err?.message || 'error'})`);
     setLogsSummary('Connection failed');
     disconnectLogStream(true);
   }
+}
+
+function parseSseChunk(chunk){
+  if (!chunk) return null;
+  const lines = chunk.split(/\r?\n/);
+  let type = 'message';
+  let dataLines = [];
+  lines.forEach(line => {
+    if (line.startsWith('event:')){
+      type = line.slice(6).trim() || 'message';
+    } else if (line.startsWith('data:')){
+      dataLines.push(line.slice(5).trimStart());
+    }
+  });
+  const data = dataLines.join('\n');
+  if (!data && !type) return null;
+  return { type, data, ts: Date.now() };
 }
 
 function applyLogEndpoints(entries){
