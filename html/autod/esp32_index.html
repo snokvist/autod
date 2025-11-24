@@ -984,6 +984,7 @@ const slotActionState = new Map();
 const tabState = { active: 'groundstation' };
 const DEFAULT_CMD_TIMEOUT_MS = 6000;
 const MAX_LOG_ENTRIES = 20;
+const LOGS_RECONNECT_DELAY_MS = 250;
 const capsState = { capList: new Set(), hasExec: false };
 const dvrState = { initialized: false, hasExec: false, loading: false, enabled: false };
 const miniRkState = { initialized: false, gamma: { presets: [], loading: false } };
@@ -996,7 +997,8 @@ const logsState = {
   connecting: false,
   entries: [],
   selectedUrl: '',
-  session: 0
+  session: 0,
+  lastDisconnectAt: 0
 };
 const slotRenderCache = new Map();
 
@@ -1236,6 +1238,7 @@ function disconnectLogStream(silent = false){
   logsState.controller = null;
   logsState.connected = false;
   logsState.connecting = false;
+  logsState.lastDisconnectAt = Date.now();
   updateLogsControls();
   if (!silent){
     setLogsStatus('Disconnected');
@@ -1243,7 +1246,11 @@ function disconnectLogStream(silent = false){
   }
 }
 
-function connectLogStream(){
+function waitForCooldown(startMs){
+  return new Promise(resolve => setTimeout(resolve, Math.max(0, startMs)));
+}
+
+async function connectLogStream(){
   if (!Array.isArray(logsState.endpoints) || !logsState.endpoints.length) return;
   const select = document.getElementById('logsEndpointSelect');
   if (!select || !select.value) return;
@@ -1258,54 +1265,50 @@ function connectLogStream(){
   setLogsStatus('Connecting…');
   setLogsSummary('Connecting to selected SSE endpoint…');
   updateLogsControls();
+  const cooldown = Math.max(0, LOGS_RECONNECT_DELAY_MS - (Date.now() - logsState.lastDisconnectAt));
+  if (cooldown > 0){
+    await waitForCooldown(cooldown);
+    if (session !== logsState.session) return;
+  }
   try {
     const controller = new AbortController();
     logsState.controller = controller;
-    void (async () => {
-      try {
-        const res = await fetch(url, { cache: 'no-store', signal: controller.signal, headers: { Accept: 'text/event-stream' } });
-        if (!res.ok || !res.body){
-          throw new Error(`${res.status} ${res.statusText}`);
-        }
-        if (session !== logsState.session) return;
-        logsState.source = res;
-        logsState.connected = true;
-        logsState.connecting = false;
-        setLogsStatus('Connected');
-        setLogsSummary('Streaming logs');
-        updateLogsControls();
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
-        while (true){
-          const { value, done } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          let sepIndex = buffer.indexOf('\n\n');
-          while (sepIndex !== -1){
-            const chunk = buffer.slice(0, sepIndex);
-            buffer = buffer.slice(sepIndex + 2);
-            const eventObj = parseSseChunk(chunk);
-            if (eventObj) handleLogEvent(eventObj);
-            sepIndex = buffer.indexOf('\n\n');
-          }
-        }
-      } catch (err) {
-        if (controller.signal.aborted || session !== logsState.session) return;
-        appendLogEntry(`Stream error: ${err?.message || err}`, 'error');
-        setLogsStatus('Disconnected');
-        setLogsSummary('Disconnected from SSE endpoint');
-      } finally {
-        if (session !== logsState.session) return;
-        logsState.connecting = false;
-        disconnectLogStream(true);
+    const res = await fetch(url, { cache: 'no-store', signal: controller.signal, headers: { Accept: 'text/event-stream' } });
+    if (!res.ok || !res.body){
+      throw new Error(`${res.status} ${res.statusText}`);
+    }
+    if (session !== logsState.session || controller.signal.aborted) return;
+    logsState.source = res;
+    logsState.connected = true;
+    logsState.connecting = false;
+    setLogsStatus('Connected');
+    setLogsSummary('Streaming logs');
+    updateLogsControls();
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    while (true){
+      const { value, done } = await reader.read();
+      if (controller.signal.aborted || session !== logsState.session) return;
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let sepIndex = buffer.indexOf('\n\n');
+      while (sepIndex !== -1){
+        const chunk = buffer.slice(0, sepIndex);
+        buffer = buffer.slice(sepIndex + 2);
+        const eventObj = parseSseChunk(chunk);
+        if (eventObj) handleLogEvent(eventObj);
+        sepIndex = buffer.indexOf('\n\n');
       }
-    })();
+    }
   } catch (err) {
+    if ((logsState.controller && logsState.controller.signal.aborted) || session !== logsState.session) return;
+    appendLogEntry(`Stream error: ${err?.message || err}`, 'error');
+    setLogsStatus('Disconnected');
+    setLogsSummary('Disconnected from SSE endpoint');
+  } finally {
     if (session !== logsState.session) return;
     logsState.connecting = false;
-    setLogsStatus(`Failed (${err?.message || 'error'})`);
-    setLogsSummary('Connection failed');
     disconnectLogStream(true);
   }
 }
