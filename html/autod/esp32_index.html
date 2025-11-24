@@ -993,6 +993,7 @@ const logsState = {
   source: null,
   controller: null,
   connected: false,
+  connecting: false,
   entries: [],
   selectedUrl: ''
 };
@@ -1217,9 +1218,10 @@ function updateLogsControls(){
   const connectBtn = document.getElementById('logsConnectBtn');
   const disconnectBtn = document.getElementById('logsDisconnectBtn');
   const select = document.getElementById('logsEndpointSelect');
-  if (connectBtn) connectBtn.disabled = !hasEndpoints || logsState.connected;
-  if (disconnectBtn) disconnectBtn.disabled = !logsState.connected;
-  if (select) select.disabled = !hasEndpoints;
+  const isBusy = logsState.connecting;
+  if (connectBtn) connectBtn.disabled = !hasEndpoints || isBusy;
+  if (disconnectBtn) disconnectBtn.disabled = !logsState.connected && !logsState.connecting;
+  if (select) select.disabled = !hasEndpoints || isBusy;
 }
 
 function disconnectLogStream(silent = false){
@@ -1232,6 +1234,7 @@ function disconnectLogStream(silent = false){
   logsState.source = null;
   logsState.controller = null;
   logsState.connected = false;
+  logsState.connecting = false;
   updateLogsControls();
   if (!silent){
     setLogsStatus('Disconnected');
@@ -1248,13 +1251,13 @@ function connectLogStream(){
   logsState.entries = [];
   renderLogEntries();
   logsState.selectedUrl = url;
+  logsState.connecting = true;
   setLogsStatus('Connecting…');
   setLogsSummary('Connecting to selected SSE endpoint…');
+  updateLogsControls();
   try {
     const controller = new AbortController();
     logsState.controller = controller;
-    logsState.connected = true;
-    updateLogsControls();
     void (async () => {
       try {
         const res = await fetch(url, { cache: 'no-store', signal: controller.signal, headers: { Accept: 'text/event-stream' } });
@@ -1262,8 +1265,11 @@ function connectLogStream(){
           throw new Error(`${res.status} ${res.statusText}`);
         }
         logsState.source = res;
+        logsState.connected = true;
+        logsState.connecting = false;
         setLogsStatus('Connected');
         setLogsSummary('Streaming logs');
+        updateLogsControls();
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
         let buffer = '';
@@ -1286,10 +1292,12 @@ function connectLogStream(){
         setLogsStatus('Disconnected');
         setLogsSummary('Disconnected from SSE endpoint');
       } finally {
+        logsState.connecting = false;
         disconnectLogStream(true);
       }
     })();
   } catch (err) {
+    logsState.connecting = false;
     setLogsStatus(`Failed (${err?.message || 'error'})`);
     setLogsSummary('Connection failed');
     disconnectLogStream(true);
