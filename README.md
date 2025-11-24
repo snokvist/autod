@@ -264,11 +264,12 @@ Static files under `html/` can be served by the daemon (when `serve_ui=1`) or by
   `addEventListener("stderr", ...)` without adding textual prefixes; if the target is a pipeline or requires shell expansion, wrap
   it with `sh -c '...'` after the `--` so the helper still owns the child process and can deliver both streams in SSE form. Each
   time a client connects (or reconnects) to `/events`, `sse_tail` immediately emits a `status` event describing the helper and
-  child process IDs plus current uptimes and queueing options; send `SIGHUP` to request another snapshot without interrupting the
-  stream. When the child exits, `sse_tail` emits a final `status` SSE line with the exit code and drains any buffered output first.
-  If `sse_tail` itself receives `SIGINT`/`SIGTERM`, it flushes pending output, publishes a `status` message describing the
-  received signal, and then closes client connections; the tracked child inherits the termination signal so it does not keep
-  running.
+  child process IDs, the child process name, any `-n` label applied to the stream names, and current uptimes/queueing options;
+  send `SIGHUP` to request another snapshot without interrupting the stream. When the child exits, `sse_tail` emits a final
+  `status` SSE line with the exit code (plus the child process name and label) and drains any buffered output first. If `sse_tail`
+  itself receives `SIGINT`/`SIGTERM`, it flushes pending output, publishes a `status` message describing the received signal
+  alongside the process name/label metadata, and then closes client connections; the tracked child inherits the termination
+  signal so it does not keep running.
 - `udp_relay` → `$(PREFIX)/bin/udp_relay`.
 - `joystick2crsf` → `$(PREFIX)/bin/joystick2crsf`.
 - `ip2uart` → build with `make ip2uart` or via the `make tools` aggregate target when you need the UART↔IP bridge.

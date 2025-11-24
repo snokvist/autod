@@ -386,25 +386,28 @@ static void build_status_json(char *json, size_t cap, const char *stream_status,
                               pid_t child_pid, bool child_done, int child_status,
                               uint64_t parent_start_ms, uint64_t child_start_ms,
                               bool lifo_mode, size_t lifo_cap,
-                              uint64_t lifo_throttle_ms) {
+                              uint64_t lifo_throttle_ms, const char *prog_label,
+                              const char *child_name) {
     uint64_t now = now_ms();
     uint64_t uptime = now - parent_start_ms;
     uint64_t child_uptime = child_start_ms ? (now - child_start_ms) : 0;
     const char *lifo_state = lifo_mode ? "on" : "off";
+    const char *label = (prog_label && prog_label[0]) ? prog_label : "-";
+    const char *child_proc = (child_name && child_name[0]) ? child_name : "-";
     char line[LINE_BUFSZ];
 
     if (!child_done) {
         (void)snprintf(line, sizeof(line),
-                       "pid=%d child=%d uptime_ms=%llu child_uptime_ms=%llu lifo=%s(cap=%zu,throttle_ms=%llu)",
-                       getpid(), child_pid, (unsigned long long)uptime,
+                       "pid=%d child=%d(child_name=%s) label=%s uptime_ms=%llu child_uptime_ms=%llu lifo=%s(cap=%zu,throttle_ms=%llu)",
+                       getpid(), child_pid, child_proc, label, (unsigned long long)uptime,
                        (unsigned long long)child_uptime, lifo_state, lifo_cap,
                        (unsigned long long)lifo_throttle_ms);
     } else {
         (void)snprintf(line, sizeof(line),
-                       "pid=%d child=%d(exited=%d) uptime_ms=%llu child_runtime_ms=%llu lifo=%s(cap=%zu,throttle_ms=%llu)",
-                       getpid(), child_pid, child_status, (unsigned long long)uptime,
-                       (unsigned long long)child_uptime, lifo_state, lifo_cap,
-                       (unsigned long long)lifo_throttle_ms);
+                       "pid=%d child=%d(exited=%d child_name=%s) label=%s uptime_ms=%llu child_runtime_ms=%llu lifo=%s(cap=%zu,throttle_ms=%llu)",
+                       getpid(), child_pid, child_status, child_proc, label,
+                       (unsigned long long)uptime, (unsigned long long)child_uptime,
+                       lifo_state, lifo_cap, (unsigned long long)lifo_throttle_ms);
     }
 
     int jl = snprintf(json, cap,
@@ -441,10 +444,12 @@ static void emit_status_snapshot(struct client *clients, int *nclients, int targ
                                  pid_t child_pid, bool child_done, int child_status,
                                  uint64_t parent_start_ms, uint64_t child_start_ms,
                                  bool lifo_mode, size_t lifo_cap,
-                                 uint64_t lifo_throttle_ms) {
+                                 uint64_t lifo_throttle_ms, const char *prog_label,
+                                 const char *child_name) {
     char json[OUT_BUFSZ];
     build_status_json(json, sizeof(json), stream_status, child_pid, child_done, child_status,
-                      parent_start_ms, child_start_ms, lifo_mode, lifo_cap, lifo_throttle_ms);
+                      parent_start_ms, child_start_ms, lifo_mode, lifo_cap,
+                      lifo_throttle_ms, prog_label, child_name);
 
     (*msg_id)++;
     if (target_idx >= 0 && target_idx < *nclients) {
@@ -465,6 +470,7 @@ int main(int argc, char **argv) {
     size_t lifo_cap = LIFO_DEFAULT;
     uint64_t lifo_throttle_ms = LIFO_THROTTLE_DEFAULT_MS;
     const char *prog_name = NULL;
+    const char *child_name = NULL;
     uint64_t start_ms = now_ms();
     uint64_t child_start_ms = 0;
 
@@ -498,6 +504,10 @@ int main(int argc, char **argv) {
         fprintf(stderr, "Missing program after --\n");
         return 1;
     }
+
+    const char *child_path = argv[optind];
+    const char *slash = strrchr(child_path, '/');
+    child_name = slash ? slash + 1 : child_path;
 
     char stream_out[STREAM_NAME_MAX];
     char stream_err[STREAM_NAME_MAX];
@@ -591,7 +601,8 @@ int main(int argc, char **argv) {
                 if (added_idx >= 0) {
                     emit_status_snapshot(clients, &nclients, added_idx, stream_status, &msg_id,
                                          pid, child_done, child_status, start_ms, child_start_ms,
-                                         lifo_mode, lifo_cap, lifo_throttle_ms);
+                                         lifo_mode, lifo_cap, lifo_throttle_ms, prog_name,
+                                         child_name);
                 }
                 added_idx = -1;
             }
@@ -634,7 +645,8 @@ int main(int argc, char **argv) {
         if (g_hup) {
             emit_status_snapshot(clients, &nclients, -1, stream_status, &msg_id,
                                  pid, child_done, child_status, start_ms, child_start_ms,
-                                 lifo_mode, lifo_cap, lifo_throttle_ms);
+                                 lifo_mode, lifo_cap, lifo_throttle_ms, prog_name,
+                                 child_name);
             g_hup = 0;
         }
 
@@ -675,26 +687,28 @@ int main(int argc, char **argv) {
         queue_drain_lifo(&q_err, stream_err, clients, &nclients, &msg_id);
     }
 
+    const char *label = (prog_name && prog_name[0]) ? prog_name : "-";
+    const char *child_proc = (child_name && child_name[0]) ? child_name : "-";
     char json[256];
     if (child_done) {
         (void)snprintf(json, sizeof(json),
-                       "{\"ts\":%llu,\"stream\":\"%s\",\"line\":\"child exited (%d)\"}",
-                       (unsigned long long)now_ms(), stream_status, child_status);
+                       "{\"ts\":%llu,\"stream\":\"%s\",\"line\":\"child exited (%d) child_name=%s label=%s\"}",
+                       (unsigned long long)now_ms(), stream_status, child_status, child_proc, label);
         broadcast(clients, &nclients, stream_status, ++msg_id, json);
     } else {
         const char *sigdesc = g_stop_sig ? strsignal(g_stop_sig) : "";
         if (g_stop_sig && sigdesc && sigdesc[0]) {
             (void)snprintf(json, sizeof(json),
-                           "{\"ts\":%llu,\"stream\":\"%s\",\"line\":\"sse_tail stopping (signal %d: %s)\"}",
-                           (unsigned long long)now_ms(), stream_status, g_stop_sig, sigdesc);
+                           "{\"ts\":%llu,\"stream\":\"%s\",\"line\":\"sse_tail stopping (signal %d: %s) child_name=%s label=%s\"}",
+                           (unsigned long long)now_ms(), stream_status, g_stop_sig, sigdesc, child_proc, label);
         } else if (g_stop_sig) {
             (void)snprintf(json, sizeof(json),
-                           "{\"ts\":%llu,\"stream\":\"%s\",\"line\":\"sse_tail stopping (signal %d)\"}",
-                           (unsigned long long)now_ms(), stream_status, g_stop_sig);
+                           "{\"ts\":%llu,\"stream\":\"%s\",\"line\":\"sse_tail stopping (signal %d) child_name=%s label=%s\"}",
+                           (unsigned long long)now_ms(), stream_status, g_stop_sig, child_proc, label);
         } else {
             (void)snprintf(json, sizeof(json),
-                           "{\"ts\":%llu,\"stream\":\"%s\",\"line\":\"sse_tail stopping\"}",
-                           (unsigned long long)now_ms(), stream_status);
+                           "{\"ts\":%llu,\"stream\":\"%s\",\"line\":\"sse_tail stopping child_name=%s label=%s\"}",
+                           (unsigned long long)now_ms(), stream_status, child_proc, label);
         }
         broadcast(clients, &nclients, stream_status, ++msg_id, json);
     }
