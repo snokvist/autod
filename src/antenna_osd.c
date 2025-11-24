@@ -552,24 +552,27 @@ int main(int argc, char **argv){
             if(have_info[i]) any_info=true;
         }
 
-        if(!any_info){
+        int raw_rssi = -1;
+        int raw_rssi2 = -1;
+
+        if (!any_info) {
             strcpy(last_mcs,"NA"); strcpy(last_bw,"NA"); strcpy(last_tx,"NA");
-            smooth_rssi_sample(rssi_hist, get_display_rssi(-1));
-            if (cfg.rssi2_enable) smooth_rssi_sample(rssi2_hist, get_display_rssi2(-1));
-            continue;
         } else {
-            int raw_rssi = parse_int_from_spec(cfg.rssi_key,have_info);
-            int raw_rssi2  = cfg.rssi2_enable ? parse_int_from_spec(cfg.rssi2_key,have_info) : -1;
+            raw_rssi = parse_int_from_spec(cfg.rssi_key, have_info);
+            raw_rssi2  = cfg.rssi2_enable ? parse_int_from_spec(cfg.rssi2_key, have_info) : -1;
 
-            int disp_rssi = get_display_rssi(raw_rssi); disp_rssi = smooth_rssi_sample(rssi_hist, disp_rssi);
-            int disp_rssi2  = get_display_rssi2(raw_rssi2);   disp_rssi2  = smooth_rssi_sample(rssi2_hist,  disp_rssi2);
-
-            parse_value_from_spec(cfg.curr_tx_rate_key,have_info,last_mcs,sizeof(last_mcs));
-            parse_value_from_spec(cfg.curr_tx_bw_key,  have_info,last_bw, sizeof(last_bw));
-            parse_value_from_spec(cfg.tx_power_key,    have_info,last_tx, sizeof(last_tx));
-
-            write_osd(disp_rssi, disp_rssi2, last_mcs, last_bw, last_tx);
+            parse_value_from_spec(cfg.curr_tx_rate_key, have_info, last_mcs, sizeof(last_mcs));
+            parse_value_from_spec(cfg.curr_tx_bw_key,   have_info, last_bw,  sizeof(last_bw));
+            parse_value_from_spec(cfg.tx_power_key,     have_info, last_tx,  sizeof(last_tx));
         }
+
+        int disp_rssi = smooth_rssi_sample(rssi_hist, get_display_rssi(raw_rssi));
+        int disp_rssi2 = -1;
+        if (cfg.rssi2_enable) {
+            disp_rssi2 = smooth_rssi_sample(rssi2_hist, get_display_rssi2(raw_rssi2));
+        }
+
+        write_osd(disp_rssi, disp_rssi2, last_mcs, last_bw, last_tx);
 
     }
 }
