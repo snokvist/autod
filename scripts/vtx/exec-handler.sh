@@ -354,7 +354,7 @@ osd_restart(){
 }
 
 osd_toggle_pause(){
-  if osd_run_service reload; then echo "osd pause toggled"; return 0; fi
+  if osd_run_service toggle_pause; then echo "osd pause toggled"; return 0; fi
   echo "osd toggle_pause unsupported on this device" 1>&2
   return 3
 }
