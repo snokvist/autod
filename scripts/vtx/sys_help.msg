@@ -3,6 +3,7 @@
   "contract_version":"0.1",
   "help_endpoints":[
     {"path":"/sys/help","description":"System-level controls and discovery"},
+    {"path":"/sys/fw/help","description":"Firmware environment controls"},
     {"path":"/sys/video/help","description":"Video encoder configuration"},
     {"path":"/sys/osd/help","description":"On-screen display controls"},
     {"path":"/sys/link/help","description":"Link role selection and status"},

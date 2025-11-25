@@ -281,6 +281,51 @@ sys_shutdown_cmd(){ shutdown now; }
 
 sys_restart_cmd(){ reboot now; }
 
+# ======================= Firmware env helpers =======================
+fw_help_json(){ emit_msg "fw_help.msg"; }
+
+fw_env_set(){
+  key="$1"
+  val="$2"
+  if have fw_setenv; then fw_setenv "$key" "$val" >/dev/null 2>&1 || die "failed to set $key"; else die "fw_setenv not available"; fi
+}
+
+validate_alnum_8_24(){
+  val="$1"
+  [ -z "$val" ] && return 0
+  case "$val" in *[!A-Za-z0-9]*) return 1 ;; esac
+  len=${#val}
+  [ $len -ge 8 ] && [ $len -le 24 ]
+}
+
+fw_set_link_mode(){
+  mode="$1"
+  case "$mode" in ""|apfpv|wfb) ;; *) die "invalid link_mode: $mode" ;; esac
+  fw_env_set link_mode "$mode"
+  echo "ok"
+}
+
+fw_set_wlanssid(){
+  ssid="$1"
+  validate_alnum_8_24 "$ssid" || die "invalid wlanssid: must be empty or 8-24 alphanumerics"
+  fw_env_set wlanssid "$ssid"
+  echo "ok"
+}
+
+fw_set_msposd_tty(){
+  tty="$1"
+  case "$tty" in standalone|/dev/ttyS1|/dev/ttyS2) ;; *) die "invalid msposd_tty: $tty" ;; esac
+  fw_env_set msposd_tty "$tty"
+  echo "ok"
+}
+
+fw_set_wlanpass(){
+  pass="$1"
+  validate_alnum_8_24 "$pass" || die "invalid wlanpass: must be empty or 8-24 alphanumerics"
+  fw_env_set wlanpass "$pass"
+  echo "ok"
+}
+
 # ======================= OSD (antenna overlay) =======================
 osd_help_json(){ emit_msg "osd_help.msg"; }
 
@@ -323,8 +368,13 @@ osd_status(){
 case "$1" in
   # system
   /sys/help)            sys_help_json ;;
+  /sys/fw/help)         fw_help_json ;;
   /sys/shutdown)        shift; sys_shutdown_cmd "$@" ;;
   /sys/restart)         shift; sys_restart_cmd "$@" ;;
+  /sys/fw/set_link_mode) shift; fw_set_link_mode "$1" ;;
+  /sys/fw/set_wlanssid)  shift; fw_set_wlanssid "$1" ;;
+  /sys/fw/set_msposd_tty) shift; fw_set_msposd_tty "$1" ;;
+  /sys/fw/set_wlanpass)  shift; fw_set_wlanpass "$1" ;;
 
   # osd
   /sys/osd/help)        osd_help_json ;;
