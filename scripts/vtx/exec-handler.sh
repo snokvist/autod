@@ -281,12 +281,58 @@ sys_shutdown_cmd(){ shutdown now; }
 
 sys_restart_cmd(){ reboot now; }
 
+# ======================= OSD (antenna overlay) =======================
+osd_help_json(){ emit_msg "osd_help.msg"; }
+
+osd_run_service(){
+  action="$1"
+  if [ -x /etc/init.d/S96antenna_osd ]; then /etc/init.d/S96antenna_osd "$action" >/dev/null 2>&1 && return 0; fi
+  return 127
+}
+
+osd_start(){
+  if osd_run_service start; then echo "osd started"; return 0; fi
+  echo "osd start unsupported on this device" 1>&2
+  return 3
+}
+
+osd_stop(){
+  if osd_run_service stop; then echo "osd stopped"; return 0; fi
+  echo "osd stop unsupported on this device" 1>&2
+  return 3
+}
+
+osd_restart(){
+  if osd_run_service restart; then echo "osd restarted"; return 0; fi
+  echo "osd restart unsupported on this device" 1>&2
+  return 3
+}
+
+osd_toggle_pause(){
+  if osd_run_service reload; then echo "osd pause toggled"; return 0; fi
+  echo "osd toggle_pause unsupported on this device" 1>&2
+  return 3
+}
+
+osd_status(){
+  echo "osd: status unavailable (placeholder)"
+  return 0
+}
+
 # ======================= DISPATCH =======================
 case "$1" in
   # system
   /sys/help)            sys_help_json ;;
   /sys/shutdown)        shift; sys_shutdown_cmd "$@" ;;
   /sys/restart)         shift; sys_restart_cmd "$@" ;;
+
+  # osd
+  /sys/osd/help)        osd_help_json ;;
+  /sys/osd/start)       shift; osd_start "$@" ;;
+  /sys/osd/stop)        shift; osd_stop "$@" ;;
+  /sys/osd/restart)     shift; osd_restart "$@" ;;
+  /sys/osd/toggle_pause) shift; osd_toggle_pause "$@" ;;
+  /sys/osd/status)      shift; osd_status "$@" ;;
 
   # video
   /sys/video/help)      video_help_json ;;
