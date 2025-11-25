@@ -360,8 +360,9 @@ osd_toggle_pause(){
 }
 
 osd_status(){
-  echo "osd: status unavailable (placeholder)"
-  return 0
+  if osd_run_service status; then echo "osd status requested"; return 0; fi
+  echo "status request unsupported on this device" 1>&2
+  return 3
 }
 
 # ======================= DISPATCH =======================
