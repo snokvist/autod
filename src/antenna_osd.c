@@ -176,7 +176,13 @@ static void handle_signal(int sig)
 static void clear_osd_output(void)
 {
     FILE *fp = fopen(cfg.out_file, "w");
-    if (fp) fclose(fp);
+    if (!fp) return;
+
+    /* Write a newline so the file is non-empty and inotify/mtime watchers see a change. */
+    fputc('\n', fp);
+    fflush(fp);
+    fsync(fileno(fp));
+    fclose(fp);
 }
 
 static void set_cfg_string(const char **field, const char *value, const char *default_value)
