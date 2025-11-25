@@ -173,6 +173,12 @@ static void handle_signal(int sig)
     else if (sig == SIGUSR1) osd_paused = !osd_paused;
 }
 
+static void clear_osd_output(void)
+{
+    FILE *fp = fopen(cfg.out_file, "w");
+    if (fp) fclose(fp);
+}
+
 static void set_cfg_string(const char **field, const char *value, const char *default_value)
 {
     char *dup = strdup(value);
@@ -519,6 +525,7 @@ int main(int argc, char **argv){
         }
 
         if (osd_paused) {
+            if (!was_paused) clear_osd_output();
             was_paused = true;
             struct timespec ts = {.tv_sec = 0, .tv_nsec = 200000000};
             nanosleep(&ts, NULL);
