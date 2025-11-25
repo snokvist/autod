@@ -978,6 +978,20 @@
 
 <script type="module">
 const $ = (sel, root = document) => root.querySelector(sel);
+function normalizeNodeRecord(node){
+  if (!node || typeof node !== 'object') return null;
+  const ip = (node.ip || node.host || '').trim();
+  const port = Number.isFinite(node.port) ? Number(node.port) : null;
+  return {
+    id: node.id ?? null,
+    name: node.name ?? null,
+    ip,
+    port,
+    device: node.device ?? null,
+    role: node.role ?? null,
+    version: node.version ?? null
+  };
+}
 const nodesState = {
   expanded: new Set(),
   pollTimer: null,
@@ -2617,16 +2631,17 @@ function buildNodeCard(node, idx){
   const strong = document.createElement('strong');
   strong.textContent = node.device || '—';
   const meta = document.createElement('span');
-  meta.className = 'meta';
+  meta.className = 'meta version';
   meta.textContent = node.version ? `v${node.version}` : '';
   deviceLine.append(strong, document.createTextNode(' '), meta);
 
   const lastSeen = document.createElement('div');
-  lastSeen.className = 'meta';
+  lastSeen.className = 'meta last-seen';
   lastSeen.textContent = `last seen ${formatAgoFromSeconds(node.last_seen)}`;
 
   head.append(top, deviceLine, lastSeen);
   nodeDiv.append(head);
+  nodeDiv.dataset.nodeKey = key;
 
   const controls = document.createElement('div');
   controls.className = 'node-controls';
@@ -2684,10 +2699,11 @@ function buildNodeCard(node, idx){
 
 function renderNodes(data){
   const nodes = Array.isArray(data?.nodes) ? data.nodes : [];
-  const nextListSignature = JSON.stringify(nodes);
+  const normalizedNodes = nodes.map(normalizeNodeRecord).filter(Boolean);
+  const nextListSignature = JSON.stringify(normalizedNodes);
   const listChanged = nodesState.listSignature !== nextListSignature;
+  nodesState.list = nodes;
   if (listChanged){
-    nodesState.list = nodes;
     nodesState.listSignature = nextListSignature;
     nodesState.version += 1;
   }
@@ -2707,6 +2723,13 @@ function renderNodes(data){
   const scanBtn = document.getElementById('nodesScanBtn');
   if (scanBtn) scanBtn.disabled = !scanEnabled || !!data?.scanning;
   if (listChanged) updateSlotPanels();
+  if (!listChanged){
+    nodes.forEach((node, idx) => {
+      const key = nodeKey(node, idx);
+      const card = document.querySelector(`.node[data-node-key="${key}"] .meta.last-seen`);
+      if (card) card.textContent = `last seen ${formatAgoFromSeconds(node.last_seen)}`;
+    });
+  }
 }
 
 async function fetchNodes(){
