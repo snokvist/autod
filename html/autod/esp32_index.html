@@ -1523,13 +1523,20 @@ function normalizeSlaveRecord(rec){
   };
 }
 
+function normalizeSlaveSignature(rec){
+  const base = normalizeSlaveRecord(rec);
+  if (!base) return null;
+  const { last_seen_ms, ...rest } = base;
+  return rest;
+}
+
 function buildSlotSignature(slotNumber, rec){
-  const normalizedRec = normalizeSlaveRecord(rec);
+  const normalizedRec = normalizeSlaveSignature(rec);
   const slotMeta = syncState.meta.get(slotNumber) || null;
-  const waiting = syncState.waiting.map(normalizeSlaveRecord).filter(Boolean);
+  const waiting = syncState.waiting.map(normalizeSlaveSignature).filter(Boolean);
   const node = rec ? findNodeForSlave(rec) : null;
   const nodeSignature = node
-    ? { key: nodeKey(node, slotNumber), data: node }
+    ? { key: nodeKey(node, slotNumber), data: normalizeNodeRecord(node) }
     : { missing: true, target: rec ? (rec.remote_ip || rec.address || 'unknown') : null, loading: nodesState.loading };
   return JSON.stringify({
     rec: normalizedRec,
@@ -2830,15 +2837,23 @@ function renderSync(data){
   syncState.waiting = waiting;
   syncState.refMs = refMs;
   const signature = JSON.stringify({
-    slots: slots.map(normalizeSlaveRecord),
-    waiting: waiting.map(normalizeSlaveRecord).filter(Boolean),
+    slots: slots.map(normalizeSlaveSignature),
+    waiting: waiting.map(normalizeSlaveSignature).filter(Boolean),
     meta: Array.from(slotsMeta.entries()),
     refMs
   });
   const changed = syncState.signature !== signature;
   syncState.signature = signature;
   setSyncSummary(`Sync: Updated ${new Date().toLocaleTimeString()} • ${ (data.slaves?.length) || 0 } known`);
-  if (changed) updateSlotPanels();
+  if (changed){
+    updateSlotPanels();
+  } else {
+    for (let slot = 1; slot <= MAX_SYNC_SLOTS; slot += 1){
+      const rec = syncState.slots[slot - 1] || null;
+      updateSlotSummary(slot, rec);
+      updateSlotWaiting(slot);
+    }
+  }
 }
 
 async function sendMoveRequest(slaveId, slotTarget){
