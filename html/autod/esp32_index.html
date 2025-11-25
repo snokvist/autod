@@ -336,13 +336,27 @@
   }
   @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
   .node-controls { gap: 1rem; }
-  .node-relay { border-top: 1px solid rgba(255,255,255,0.08); padding-top: 0.75rem; display: flex; flex-direction: column; gap: 0.75rem; }
-  .node-relay textarea { width: 100%; min-height: 140px; }
-  .node-relay .row { gap: 0.75rem; flex-wrap: wrap; align-items: flex-end; }
-  .node-relay label { font-size: 0.95rem; display: flex; flex-direction: column; gap: 0.25rem; }
-  .node-relay input[type="text"],
-  .node-relay input[type="number"],
-  .node-relay select { min-width: 160px; }
+  .node-help { display: grid; gap: 0.75rem; }
+  .node-help-status { color: var(--mut); font-size: 13px; }
+  .node-help-menu { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
+  .node-help-menu select { min-width: 220px; }
+  .node-help-menu button { min-width: 110px; }
+  .node-help-endpoints { display: flex; flex-wrap: wrap; gap: 6px; font-size: 12px; color: var(--mut); }
+  .node-help-endpoints .pill { background: rgba(26, 106, 223, 0.08); border-color: rgba(26, 106, 223, 0.35); }
+  .node-help-commands { display: grid; gap: 0.75rem; }
+  .node-command { border: 1px solid var(--line); border-radius: 12px; padding: 0.75rem; display: grid; gap: 0.5rem; background: linear-gradient(135deg, rgba(255,255,255,0.95), rgba(241,246,255,0.9)); }
+  .node-command-head { display: flex; justify-content: space-between; gap: 0.5rem; align-items: flex-start; }
+  .node-command-name { font-weight: 700; }
+  .node-command-path { font-size: 12px; color: var(--mut); word-break: break-all; }
+  .node-arg { display: grid; gap: 0.35rem; font-size: 0.95rem; }
+  .node-arg small { color: var(--mut); line-height: 1.3; }
+  .node-arg-meta { display: flex; gap: 0.5rem; align-items: center; font-size: 12px; color: var(--mut); flex-wrap: wrap; }
+  .node-arg-meta .pill { font-size: 11px; }
+  .node-command-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+  .node-command-status { font-size: 12px; color: var(--mut); }
+  .node-help-output { width: 100%; min-height: 120px; }
+  .node-slider { display: grid; gap: 0.35rem; }
+  .node-slider-value { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; color: var(--mut); }
   textarea { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
 
   /* Inline VRX styles */
@@ -571,8 +585,8 @@
     .slot-action-switch { width: 100%; }
     .slot-action-switch button { flex: 1; justify-content: center; }
     .slot-actions-grid { grid-template-columns: 1fr; }
-    .node-relay .row { flex-direction: column; align-items: stretch; }
-    .node-relay input[type="text"], .node-relay input[type="number"], .node-relay select { width: 100%; }
+    .node-help-menu { flex-direction: column; align-items: stretch; }
+    .node-help-menu select, .node-help-menu button { width: 100%; }
     header { padding-bottom: 0.5rem; }
   }
 </style>
@@ -964,6 +978,20 @@
 
 <script type="module">
 const $ = (sel, root = document) => root.querySelector(sel);
+function normalizeNodeRecord(node){
+  if (!node || typeof node !== 'object') return null;
+  const ip = (node.ip || node.host || '').trim();
+  const port = Number.isFinite(node.port) ? Number(node.port) : null;
+  return {
+    id: node.id ?? null,
+    name: node.name ?? null,
+    ip,
+    port,
+    device: node.device ?? null,
+    role: node.role ?? null,
+    version: node.version ?? null
+  };
+}
 const nodesState = {
   expanded: new Set(),
   pollTimer: null,
@@ -974,6 +1002,7 @@ const nodesState = {
   scanning: false,
   pendingRefresh: false
 };
+const nodeHelpState = new Map();
 const NODES_POLL_MS = 7000;
 const NODES_SCAN_POLL_MS = 1000;
 const MAX_SYNC_SLOTS = 3;
@@ -1494,13 +1523,20 @@ function normalizeSlaveRecord(rec){
   };
 }
 
+function normalizeSlaveSignature(rec){
+  const base = normalizeSlaveRecord(rec);
+  if (!base) return null;
+  const { last_seen_ms, ...rest } = base;
+  return rest;
+}
+
 function buildSlotSignature(slotNumber, rec){
-  const normalizedRec = normalizeSlaveRecord(rec);
+  const normalizedRec = normalizeSlaveSignature(rec);
   const slotMeta = syncState.meta.get(slotNumber) || null;
-  const waiting = syncState.waiting.map(normalizeSlaveRecord).filter(Boolean);
+  const waiting = syncState.waiting.map(normalizeSlaveSignature).filter(Boolean);
   const node = rec ? findNodeForSlave(rec) : null;
   const nodeSignature = node
-    ? { key: nodeKey(node, slotNumber), data: node }
+    ? { key: nodeKey(node, slotNumber), data: normalizeNodeRecord(node) }
     : { missing: true, target: rec ? (rec.remote_ip || rec.address || 'unknown') : null, loading: nodesState.loading };
   return JSON.stringify({
     rec: normalizedRec,
@@ -2216,59 +2252,365 @@ function setNodesSummary(text){
   if (summary) summary.textContent = text;
 }
 
-async function sendRelayRequest(node, elements){
-  const { methodEl, pathEl, bodyEl, timeoutEl, outputEl, buttonEl } = elements;
-  if (!node || !methodEl || !pathEl || !outputEl || !buttonEl) return;
-  const method = (methodEl.value || 'GET').toUpperCase();
-  const path = pathEl.value.trim() || '/';
-  const timeout = Math.max(0, parseInt(timeoutEl?.value || '4000', 10) || 4000);
-  const bodyText = bodyEl?.value.trim();
-  const payload = {
-    node_ip: node.ip || node.host,
-    method,
-    path,
-    timeout_ms: timeout
-  };
-  if (bodyText && method !== 'GET' && method !== 'HEAD'){
-    payload.body = bodyText;
-    payload.headers = { 'Content-Type': 'application/json' };
+  function getNodeHelpStore(key){
+    if (!nodeHelpState.has(key)){
+      nodeHelpState.set(key, {
+        cache: new Map(),
+        endpoints: new Map([['/sys/help', { description: 'System help & discovery' }]]),
+        activePath: '/sys/help',
+        loadingPath: null,
+        error: '',
+        lastOutput: ''
+      });
+    }
+    return nodeHelpState.get(key);
   }
-  buttonEl.disabled = true;
-  outputEl.value = 'Sending via /http…';
-  try {
+
+  function describeEndpoint(path, meta, help){
+    if (meta?.description) return meta.description;
+    if (help?.cap) return help.cap;
+    return path || 'help';
+  }
+
+  function deriveCommandPath(helpPath, command){
+    if (!command) return helpPath || '/sys';
+    const base = (helpPath || '').replace(/\/+$/, '').replace(/\/help$/i, '');
+    if (!base) return `/${command}`;
+    return `${base}/${command}`;
+  }
+
+  function makePill(text){
+    const span = document.createElement('span');
+    span.className = 'pill';
+    span.textContent = text || '';
+    return span;
+  }
+
+  async function relayExecToNode(node, path, args, timeoutMs = DEFAULT_CMD_TIMEOUT_MS){
+    const ip = node?.ip || node?.host;
+    if (!ip) throw new Error('missing node ip');
+    const payload = {
+      node_ip: ip,
+      method: 'POST',
+      path: '/exec',
+      timeout_ms: timeoutMs,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path, args: Array.isArray(args) ? args : [] })
+    };
     const res = await fetch('/http', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
     });
     const data = await res.json().catch(() => null);
-    if (!res.ok){
-      outputEl.value = data && data.error ? `error: ${data.error}` : `HTTP ${res.status}`;
-      return;
+    if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+    if (!data || data.error) throw new Error(data?.error || 'relay_failed');
+    const execText = decodeBase64ToUtf8(data.body_base64);
+    let exec;
+    try {
+      exec = JSON.parse(execText);
+    } catch (err) {
+      throw new Error('invalid /exec response');
     }
-    if (!data || data.error){
-      outputEl.value = data && data.error ? `error: ${data.error}` : 'relay_failed';
-      return;
-    }
-    const bodyStr = decodeBase64ToUtf8(data.body_base64);
-    const headerLines = Array.isArray(data.headers)
-      ? data.headers.map(h => `${h.name}: ${h.value}`).join('\n')
-      : '';
-    const summary = [
-      `status ${data.status_code ?? '?'} ${data.reason || ''}`.trim(),
-      `target ${data.target_ip || '?'}:${data.target_port || ''}`.trim(),
-      data.sync_id ? `sync id ${data.sync_id}` : '',
-      headerLines ? '\n-- headers --\n' + headerLines : '',
-      '\n-- body --',
-      bodyStr
-    ].filter(Boolean).join('\n');
-    outputEl.value = summary;
-  } catch (err) {
-    outputEl.value = `relay_error: ${err.message}`;
-  } finally {
-    buttonEl.disabled = false;
+    return { relay: data, exec };
   }
-}
+
+  function summarizeExec(path, exec){
+    const lines = [];
+    const rc = typeof exec?.rc === 'number' ? exec.rc : null;
+    lines.push(`${path} → rc ${rc ?? '?'}`);
+    if (exec?.stdout) lines.push(`stdout: ${String(exec.stdout).trim()}`);
+    if (exec?.stderr) lines.push(`stderr: ${String(exec.stderr).trim()}`);
+    if (Number.isFinite(exec?.elapsed_ms)) lines.push(`elapsed_ms: ${exec.elapsed_ms}`);
+    return lines.filter(Boolean).join('\n');
+  }
+
+  async function fetchNodeHelp(node, key, path, ui, forceReload = false){
+    const store = getNodeHelpStore(key);
+    const helpPath = path || '/sys/help';
+    if (!forceReload && store.cache.has(helpPath)){
+      store.activePath = helpPath;
+      renderNodeHelp(node, key, ui);
+      return;
+    }
+    store.activePath = helpPath;
+    store.loadingPath = helpPath;
+    store.error = '';
+    renderNodeHelp(node, key, ui);
+    try {
+      const { exec } = await relayExecToNode(node, helpPath, []);
+      const rcOk = typeof exec?.rc === 'number' ? exec.rc === 0 : true;
+      if (!rcOk) throw new Error(exec?.stderr || exec?.stdout || 'exec failed');
+      const stdout = String(exec?.stdout || '').trim();
+      const help = stdout ? JSON.parse(stdout) : null;
+      if (!help) throw new Error('empty help payload');
+      store.cache.set(helpPath, help);
+      const meta = store.endpoints.get(helpPath) || {};
+      store.endpoints.set(helpPath, { description: describeEndpoint(helpPath, meta, help) });
+      (Array.isArray(help.help_endpoints) ? help.help_endpoints : []).forEach(ep => {
+        if (!ep?.path) return;
+        const prev = store.endpoints.get(ep.path) || {};
+        store.endpoints.set(ep.path, { description: ep.description || prev.description || '' });
+      });
+    } catch (err) {
+      store.error = err.message || 'Failed to load help';
+    } finally {
+      store.loadingPath = null;
+      renderNodeHelp(node, key, ui);
+    }
+  }
+
+  function createNodeHelpElements(){
+    const wrapper = document.createElement('div');
+    wrapper.className = 'node-help';
+
+    const status = document.createElement('div');
+    status.className = 'node-help-status';
+
+    const menuRow = document.createElement('div');
+    menuRow.className = 'node-help-menu';
+    const menuLabel = document.createElement('label');
+    menuLabel.textContent = 'Help menu ';
+    const menuSelect = document.createElement('select');
+    menuLabel.append(menuSelect);
+    const refreshBtn = document.createElement('button');
+    refreshBtn.type = 'button';
+    refreshBtn.textContent = 'Reload help';
+    menuRow.append(menuLabel, refreshBtn);
+
+    const endpointsRow = document.createElement('div');
+    endpointsRow.className = 'node-help-endpoints';
+
+    const commands = document.createElement('div');
+    commands.className = 'node-help-commands';
+
+    const output = document.createElement('textarea');
+    output.className = 'node-help-output';
+    output.placeholder = 'Command output will appear here';
+    output.readOnly = true;
+
+    wrapper.append(status, menuRow, endpointsRow, commands, output);
+    return { wrapper, status, menuSelect, refreshBtn, endpointsRow, commands, output };
+  }
+
+  function buildArgControl(arg){
+    const wrapper = document.createElement('label');
+    wrapper.className = 'node-arg';
+    const metaLine = document.createElement('div');
+    metaLine.className = 'node-arg-meta';
+    metaLine.append(makePill(arg?.key || 'arg'));
+    if (arg?.type) metaLine.append(makePill(arg.type));
+    if (arg?.required) metaLine.append(makePill('required'));
+    wrapper.append(metaLine);
+    if (arg?.description){
+      const desc = document.createElement('small');
+      desc.textContent = arg.description;
+      wrapper.append(desc);
+    }
+    let input;
+    const kind = arg?.control?.kind;
+    if (kind === 'toggle'){
+      input = document.createElement('input');
+      input.type = 'checkbox';
+      input.checked = arg?.default === true;
+    } else if (kind === 'select'){
+      input = document.createElement('select');
+      if (arg?.control?.multi) input.multiple = true;
+      (arg?.control?.options || []).forEach(opt => {
+        const optEl = document.createElement('option');
+        optEl.value = String(opt);
+        optEl.textContent = String(opt);
+        input.append(optEl);
+      });
+      if (arg?.default !== undefined) input.value = String(arg.default);
+    } else if (kind === 'range'){
+      const sliderWrap = document.createElement('div');
+      sliderWrap.className = 'node-slider';
+      input = document.createElement('input');
+      input.type = 'range';
+      if (Number.isFinite(arg?.control?.min)) input.min = String(arg.control.min);
+      if (Number.isFinite(arg?.control?.max)) input.max = String(arg.control.max);
+      if (Number.isFinite(arg?.control?.step)) input.step = String(arg.control.step);
+      if (arg?.default !== undefined) input.value = String(arg.default);
+      const valueLabel = document.createElement('div');
+      valueLabel.className = 'node-slider-value';
+      valueLabel.textContent = input.value || String(arg?.default ?? '');
+      input.addEventListener('input', () => { valueLabel.textContent = input.value; });
+      sliderWrap.append(input, valueLabel);
+      wrapper.append(sliderWrap);
+      return { wrapper, input };
+    } else {
+      input = document.createElement('input');
+      input.type = 'text';
+      if (arg?.control?.placeholder) input.placeholder = arg.control.placeholder;
+      if (arg?.default !== undefined) input.value = String(arg.default);
+    }
+    wrapper.append(input);
+    return { wrapper, input };
+  }
+
+  function readArgValue(input, arg){
+    if (!input) return '';
+    if (input.type === 'checkbox') return input.checked ? 'true' : 'false';
+    if (input.tagName === 'SELECT' && input.multiple){
+      const vals = Array.from(input.selectedOptions).map(opt => opt.value).filter(Boolean);
+      if (!vals.length) return arg?.required ? '' : null;
+      return vals;
+    }
+    const value = (input.value || '').trim();
+    if (!value) return arg?.required ? '' : null;
+    return value;
+  }
+
+  function renderHelpEndpoints(ui, help){
+    ui.endpointsRow.innerHTML = '';
+    const endpoints = Array.isArray(help?.help_endpoints) ? help.help_endpoints : [];
+    if (!endpoints.length){
+      const empty = document.createElement('div');
+      empty.className = 'mut';
+      empty.textContent = 'No nested help endpoints advertised.';
+      ui.endpointsRow.append(empty);
+      return;
+    }
+    endpoints.forEach(ep => {
+      const pill = makePill(ep?.path || 'help');
+      if (ep?.description) pill.title = ep.description;
+      pill.addEventListener('click', () => {
+        ui.menuSelect.value = ep?.path || '/sys/help';
+        ui.menuSelect.dispatchEvent(new Event('change'));
+      });
+      ui.endpointsRow.append(pill);
+    });
+  }
+
+  function renderNodeCommands(node, key, ui, help){
+    ui.commands.innerHTML = '';
+    const commands = Array.isArray(help?.commands) ? help.commands : [];
+    if (!commands.length){
+      const empty = document.createElement('div');
+      empty.className = 'mut';
+      empty.textContent = help ? 'No commands advertised.' : 'Load a help endpoint to view commands.';
+      ui.commands.append(empty);
+      return;
+    }
+    const store = getNodeHelpStore(key);
+    commands.forEach(cmd => {
+      const card = document.createElement('div');
+      card.className = 'node-command';
+      const head = document.createElement('div');
+      head.className = 'node-command-head';
+      const left = document.createElement('div');
+      const name = document.createElement('div');
+      name.className = 'node-command-name';
+      name.textContent = cmd?.name || 'command';
+      const desc = document.createElement('div');
+      desc.className = 'mut';
+      desc.textContent = cmd?.description || '';
+      left.append(name, desc);
+      const pathEl = document.createElement('div');
+      pathEl.className = 'node-command-path';
+      const fullPath = deriveCommandPath(store.activePath, cmd?.name || '');
+      pathEl.textContent = fullPath;
+      head.append(left, pathEl);
+      card.append(head);
+
+      const argsWrap = document.createElement('div');
+      const inputs = [];
+      if (Array.isArray(cmd?.args) && cmd.args.length){
+        cmd.args.forEach(arg => {
+          const { wrapper, input } = buildArgControl(arg);
+          inputs.push({ arg, input });
+          argsWrap.append(wrapper);
+        });
+      } else {
+        const none = document.createElement('div');
+        none.className = 'mut';
+        none.textContent = 'No arguments';
+        argsWrap.append(none);
+      }
+      card.append(argsWrap);
+
+      const actions = document.createElement('div');
+      actions.className = 'node-command-actions';
+      const runBtn = document.createElement('button');
+      runBtn.type = 'button';
+      runBtn.textContent = 'Run';
+      const status = document.createElement('div');
+      status.className = 'node-command-status';
+      status.textContent = 'Idle';
+      actions.append(runBtn, status);
+      card.append(actions);
+
+      runBtn.addEventListener('click', ev => {
+        ev.stopPropagation();
+        const args = [];
+        for (const entry of inputs){
+          const val = readArgValue(entry.input, entry.arg);
+          if (val === ''){
+            status.textContent = `${entry.arg?.key || 'arg'} is required`;
+            return;
+          }
+          if (val === null || val === undefined) continue;
+          if (Array.isArray(val)) args.push(...val.map(v => String(v)));
+          else args.push(String(val));
+        }
+        runBtn.disabled = true;
+        status.textContent = `Running ${fullPath}…`;
+        relayExecToNode(node, fullPath, args).then(({ exec }) => {
+          const ok = typeof exec?.rc === 'number' ? exec.rc === 0 : true;
+          const summary = summarizeExec(fullPath, exec);
+          ui.output.value = summary;
+          getNodeHelpStore(key).lastOutput = summary;
+          status.textContent = ok ? 'Success' : 'Completed with errors';
+        }).catch(err => {
+          const msg = err.message || 'Command failed';
+          ui.output.value = `${fullPath}\n${msg}`;
+          getNodeHelpStore(key).lastOutput = ui.output.value;
+          status.textContent = msg;
+        }).finally(() => {
+          runBtn.disabled = false;
+        });
+      });
+
+      ui.commands.append(card);
+    });
+  }
+
+  function syncNodeHelpMenu(ui, store){
+    const entries = Array.from(store.endpoints.entries()).map(([path, meta]) => ({
+      path,
+      description: meta?.description || path
+    }));
+    entries.sort((a, b) => a.path.localeCompare(b.path));
+    const prevValue = ui.menuSelect.value;
+    ui.menuSelect.innerHTML = '';
+    entries.forEach(entry => {
+      const opt = document.createElement('option');
+      opt.value = entry.path;
+      opt.textContent = `${entry.path} — ${entry.description}`.trim();
+      if (entry.path === store.activePath) opt.selected = true;
+      ui.menuSelect.append(opt);
+    });
+    if (prevValue) ui.menuSelect.value = store.activePath || prevValue;
+  }
+
+  function renderNodeHelp(node, key, ui){
+    const store = getNodeHelpStore(key);
+    const help = store.cache.get(store.activePath) || null;
+    syncNodeHelpMenu(ui, store);
+    renderHelpEndpoints(ui, help);
+    const statusParts = [];
+    if (store.loadingPath) statusParts.push(`Loading ${store.loadingPath}…`);
+    if (store.error) statusParts.push(`Error: ${store.error}`);
+    if (!store.loadingPath && !store.error && help){
+      const cap = help.cap ? `${help.cap}${help.contract_version ? ` v${help.contract_version}` : ''}` : 'help';
+      statusParts.push(`Loaded ${store.activePath} • ${cap}`);
+    }
+    if (!statusParts.length) statusParts.push('Select a help endpoint to view commands.');
+    ui.status.textContent = statusParts.join(' ');
+    renderNodeCommands(node, key, ui, help);
+    if (store.lastOutput) ui.output.value = store.lastOutput;
+  }
 
 function buildNodeCard(node, idx){
   const key = nodeKey(node, idx);
@@ -2296,101 +2638,43 @@ function buildNodeCard(node, idx){
   const strong = document.createElement('strong');
   strong.textContent = node.device || '—';
   const meta = document.createElement('span');
-  meta.className = 'meta';
+  meta.className = 'meta version';
   meta.textContent = node.version ? `v${node.version}` : '';
   deviceLine.append(strong, document.createTextNode(' '), meta);
 
   const lastSeen = document.createElement('div');
-  lastSeen.className = 'meta';
+  lastSeen.className = 'meta last-seen';
   lastSeen.textContent = `last seen ${formatAgoFromSeconds(node.last_seen)}`;
 
   head.append(top, deviceLine, lastSeen);
   nodeDiv.append(head);
+  nodeDiv.dataset.nodeKey = key;
 
   const controls = document.createElement('div');
   controls.className = 'node-controls';
   controls.style.display = expanded ? 'grid' : 'none';
 
-  const relay = document.createElement('div');
-  relay.className = 'node-relay';
-  const intro = document.createElement('div');
-  intro.className = 'mut';
-  intro.textContent = 'Relay requests via /http to reach /caps, /exec, or other endpoints on this node.';
-  relay.append(intro);
-
-  const pathRow = document.createElement('div');
-  pathRow.className = 'row';
-  const methodLabel = document.createElement('label');
-  methodLabel.textContent = 'method ';
-  const methodSelect = document.createElement('select');
-  methodSelect.innerHTML = '<option>GET</option><option>POST</option><option>PUT</option><option>DELETE</option>';
-  methodLabel.append(methodSelect);
-  const pathLabel = document.createElement('label');
-  pathLabel.textContent = 'path ';
-  const pathInput = document.createElement('input');
-  pathInput.type = 'text';
-  pathInput.value = '/caps';
-  pathLabel.append(pathInput);
-  const timeoutLabel = document.createElement('label');
-  timeoutLabel.textContent = 'timeout (ms) ';
-  const timeoutInput = document.createElement('input');
-  timeoutInput.type = 'number';
-  timeoutInput.min = '100';
-  timeoutInput.value = '4000';
-  timeoutLabel.append(timeoutInput);
-  pathRow.append(methodLabel, pathLabel, timeoutLabel);
-  relay.append(pathRow);
-
-  const bodyArea = document.createElement('textarea');
-  bodyArea.placeholder = 'Optional JSON body (defaults to /caps)';
-  relay.append(bodyArea);
-
-  const actionRow = document.createElement('div');
-  actionRow.className = 'row';
-  const capsBtn = document.createElement('button');
-  capsBtn.type = 'button';
-  capsBtn.textContent = 'Load /caps';
-  capsBtn.addEventListener('click', ev => {
-    ev.stopPropagation();
-    methodSelect.value = 'GET';
-    pathInput.value = '/caps';
-    bodyArea.value = '';
-  });
-  const execBtn = document.createElement('button');
-  execBtn.type = 'button';
-  execBtn.textContent = 'POST /exec';
-  execBtn.addEventListener('click', ev => {
-    ev.stopPropagation();
-    methodSelect.value = 'POST';
-    pathInput.value = '/exec';
-    bodyArea.value = JSON.stringify({ path: '/sys/help', args: [] }, null, 2);
-  });
-  const spacer = document.createElement('div');
-  spacer.className = 'spacer';
-  const sendBtn = document.createElement('button');
-  sendBtn.type = 'button';
-  sendBtn.textContent = 'Send via /http';
-  sendBtn.addEventListener('click', ev => {
-    ev.stopPropagation();
-    void sendRelayRequest(node, {
-      methodEl: methodSelect,
-      pathEl: pathInput,
-      bodyEl: bodyArea,
-      timeoutEl: timeoutInput,
-      outputEl: relayOutput,
-      buttonEl: sendBtn
-    });
-  });
-  actionRow.append(capsBtn, execBtn, spacer, sendBtn);
-  relay.append(actionRow);
-
-  const relayOutput = document.createElement('textarea');
-  relayOutput.readOnly = true;
-  relayOutput.placeholder = 'Relay response will appear here';
-  relay.append(relayOutput);
-
-  controls.append(relay);
+  const helpUi = createNodeHelpElements();
+  controls.append(helpUi.wrapper);
   nodeDiv.append(controls);
+
+  const loadHelp = (path, force = false) => {
+    const desired = path || getNodeHelpStore(key).activePath || '/sys/help';
+    void fetchNodeHelp(node, key, desired, helpUi, force);
+  };
+
+  helpUi.menuSelect.addEventListener('change', ev => {
+    ev.stopPropagation();
+    loadHelp(helpUi.menuSelect.value || '/sys/help', false);
+  });
+  helpUi.refreshBtn.addEventListener('click', ev => {
+    ev.stopPropagation();
+    loadHelp(getNodeHelpStore(key).activePath || helpUi.menuSelect.value || '/sys/help', true);
+  });
+  if (expanded){
+    renderNodeHelp(node, key, helpUi);
+    loadHelp(getNodeHelpStore(key).activePath, false);
+  }
 
   const toggle = () => {
     const isOpen = nodesState.expanded.has(key);
@@ -2404,6 +2688,8 @@ function buildNodeCard(node, idx){
       controls.style.display = 'grid';
       nodeDiv.classList.add('expanded');
       head.setAttribute('aria-expanded', 'true');
+      renderNodeHelp(node, key, helpUi);
+      loadHelp(getNodeHelpStore(key).activePath, false);
     }
   };
 
@@ -2420,10 +2706,11 @@ function buildNodeCard(node, idx){
 
 function renderNodes(data){
   const nodes = Array.isArray(data?.nodes) ? data.nodes : [];
-  const nextListSignature = JSON.stringify(nodes);
+  const normalizedNodes = nodes.map(normalizeNodeRecord).filter(Boolean);
+  const nextListSignature = JSON.stringify(normalizedNodes);
   const listChanged = nodesState.listSignature !== nextListSignature;
+  nodesState.list = nodes;
   if (listChanged){
-    nodesState.list = nodes;
     nodesState.listSignature = nextListSignature;
     nodesState.version += 1;
   }
@@ -2443,6 +2730,13 @@ function renderNodes(data){
   const scanBtn = document.getElementById('nodesScanBtn');
   if (scanBtn) scanBtn.disabled = !scanEnabled || !!data?.scanning;
   if (listChanged) updateSlotPanels();
+  if (!listChanged){
+    nodes.forEach((node, idx) => {
+      const key = nodeKey(node, idx);
+      const card = document.querySelector(`.node[data-node-key="${key}"] .meta.last-seen`);
+      if (card) card.textContent = `last seen ${formatAgoFromSeconds(node.last_seen)}`;
+    });
+  }
 }
 
 async function fetchNodes(){
@@ -2543,15 +2837,23 @@ function renderSync(data){
   syncState.waiting = waiting;
   syncState.refMs = refMs;
   const signature = JSON.stringify({
-    slots: slots.map(normalizeSlaveRecord),
-    waiting: waiting.map(normalizeSlaveRecord).filter(Boolean),
+    slots: slots.map(normalizeSlaveSignature),
+    waiting: waiting.map(normalizeSlaveSignature).filter(Boolean),
     meta: Array.from(slotsMeta.entries()),
     refMs
   });
   const changed = syncState.signature !== signature;
   syncState.signature = signature;
   setSyncSummary(`Sync: Updated ${new Date().toLocaleTimeString()} • ${ (data.slaves?.length) || 0 } known`);
-  if (changed) updateSlotPanels();
+  if (changed){
+    updateSlotPanels();
+  } else {
+    for (let slot = 1; slot <= MAX_SYNC_SLOTS; slot += 1){
+      const rec = syncState.slots[slot - 1] || null;
+      updateSlotSummary(slot, rec);
+      updateSlotWaiting(slot);
+    }
+  }
 }
 
 async function sendMoveRequest(slaveId, slotTarget){
