@@ -76,13 +76,40 @@ reload() {
     kill -HUP $(get_pids) 2>/dev/null && echo "OK" || echo "FAIL"
 }
 
+toggle_pause() {
+    if ! is_running; then
+        echo "$DAEMON is not running"
+        return 1
+    fi
+    echo -n "Toggling pause (SIGUSR1) on $DAEMON: "
+    if kill -USR1 $(get_pids) 2>/dev/null; then
+        echo "OK"
+        return 0
+    else
+        echo "FAIL"
+        return 1
+    fi
+}
+
+status() {
+    if is_running; then
+        echo "$DAEMON is running (PIDs: $(get_pids))"
+        return 0
+    else
+        echo "$DAEMON is not running"
+        return 3
+    fi
+}
+
 case "$1" in
-    start)   start ;;
-    stop)    stop ;;
-    restart) stop; sleep 1; start ;;
-    reload)  reload ;;
+    start)         start ;;
+    stop)          stop ;;
+    restart)       stop; sleep 1; start ;;
+    reload)        reload ;;
+    toggle_pause)  toggle_pause ;;
+    status)        status ;;
     *)
-        echo "Usage: $0 {start|stop|restart|reload}"
+        echo "Usage: $0 {start|stop|restart|reload|toggle_pause|status}"
         exit 1
         ;;
 esac
