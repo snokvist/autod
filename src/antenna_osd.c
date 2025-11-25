@@ -118,6 +118,7 @@ static const cfg_t cfg_default = {
 
 static cfg_t cfg;
 static volatile sig_atomic_t reload_requested = 0;
+static volatile sig_atomic_t osd_paused = 0;
 static const char *config_path = DEF_CFG_FILE;
 
 static void reset_info_buffers(void)
@@ -166,9 +167,22 @@ static void reset_config_defaults(void)
     cfg = cfg_default;
 }
 
-static void request_reload(int sig)
+static void handle_signal(int sig)
 {
     if (sig == SIGHUP) reload_requested = 1;
+    else if (sig == SIGUSR1) osd_paused = !osd_paused;
+}
+
+static void clear_osd_output(void)
+{
+    FILE *fp = fopen(cfg.out_file, "w");
+    if (!fp) return;
+
+    /* Write a newline so the file is non-empty and inotify/mtime watchers see a change. */
+    fputc('\n', fp);
+    fflush(fp);
+    fsync(fileno(fp));
+    fclose(fp);
 }
 
 static void set_cfg_string(const char **field, const char *value, const char *default_value)
@@ -482,10 +496,11 @@ int main(int argc, char **argv){
 
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
-    sa.sa_handler = request_reload;
+    sa.sa_handler = handle_signal;
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = 0;
     sigaction(SIGHUP, &sa, NULL);
+    sigaction(SIGUSR1, &sa, NULL);
 
     reset_config_defaults();
     load_config(config_path);
@@ -496,6 +511,7 @@ int main(int argc, char **argv){
     if (osd_period_ms < 20) osd_period_ms = 20;
 
     int64_t next_osd_ms = now_ms();
+    bool was_paused = false;
     char last_mcs[32]="NA", last_bw[32]="NA", last_tx[32]="NA";
 
     for(;;){
@@ -512,6 +528,17 @@ int main(int argc, char **argv){
             strcpy(last_mcs,"NA");
             strcpy(last_bw,"NA");
             strcpy(last_tx,"NA");
+        }
+
+        if (osd_paused) {
+            if (!was_paused) clear_osd_output();
+            was_paused = true;
+            struct timespec ts = {.tv_sec = 0, .tv_nsec = 200000000};
+            nanosleep(&ts, NULL);
+            continue;
+        } else if (was_paused) {
+            next_osd_ms = now_ms();
+            was_paused = false;
         }
 
         int64_t t_now_ms = now_ms();
