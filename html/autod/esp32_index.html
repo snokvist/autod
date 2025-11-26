@@ -2712,13 +2712,15 @@ function setNodesSummary(text){
       actions.className = 'node-setting-actions';
       const status = document.createElement('div');
       status.className = 'node-setting-status';
-      status.textContent = 'Changes auto-apply';
       const hint = document.createElement('div');
       hint.className = 'node-setting-auto';
-      hint.textContent = 'Changes auto-apply (250ms debounce)';
+      const isTextControl = input?.dataset?.kind === 'text';
+      status.textContent = isTextControl ? 'Edit then apply' : 'Changes auto-apply';
+      hint.textContent = isTextControl ? 'Press Apply to send text values' : 'Changes auto-apply (250ms debounce)';
       let setTimer = null;
       let suppressSet = false;
       let inFlight = false;
+      let applyBtn = null;
 
       const runGet = async () => {
         if (!getCmd || !getPath || !input) return;
@@ -2792,9 +2794,25 @@ function setNodesSummary(text){
       };
 
       if (getCmd && getPath) refreshTasks.push(runGet);
-      const eventName = input?.type === 'range' ? 'input' : (input?.tagName === 'SELECT' || input?.type === 'checkbox' ? 'change' : 'input');
-      if (input) input.addEventListener(eventName, () => scheduleSet());
+      if (isTextControl){
+        applyBtn = document.createElement('button');
+        applyBtn.type = 'button';
+        applyBtn.textContent = 'Apply';
+        applyBtn.addEventListener('click', ev => { ev.stopPropagation(); runSet(); });
+        if (input){
+          input.addEventListener('keydown', ev => {
+            if (ev.key === 'Enter'){
+              ev.preventDefault();
+              runSet();
+            }
+          });
+        }
+      } else {
+        const eventName = input?.type === 'range' ? 'input' : (input?.tagName === 'SELECT' || input?.type === 'checkbox' ? 'change' : 'input');
+        if (input) input.addEventListener(eventName, () => scheduleSet());
+      }
 
+      if (applyBtn) actions.append(applyBtn);
       actions.append(hint, status);
       card.append(actions);
       ui.settings.append(card);
