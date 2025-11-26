@@ -25,12 +25,13 @@
 
 #define MAX_INFO_SOURCES 2
 
-static int last_valid_rssi=0, neg1_count_rssi=0, last_valid_rssi2=0, neg1_count_rssi2=0;
+static double last_valid_rssi=0.0, last_valid_rssi2=0.0;
+static int neg1_count_rssi=0, neg1_count_rssi2=0;
 static char *info_buf[MAX_INFO_SOURCES]={NULL,NULL};
 static size_t info_size[MAX_INFO_SOURCES]={0,0};
 static time_t last_info_attempt[MAX_INFO_SOURCES]={0,0};
 static bool info_buf_valid[MAX_INFO_SOURCES]={false,false};
-static int rssi_hist[3]={-1,-1,-1}, rssi2_hist[3]={-1,-1,-1};
+static double rssi_hist[3]={-1.0,-1.0,-1.0}, rssi2_hist[3]={-1.0,-1.0,-1.0};
 
 #define DEF_CFG_FILE        "/etc/antenna_osd.conf"
 #define DEF_INFO_FILE       "/proc/net/*8*/wlan0/trx_info_debug"
@@ -296,22 +297,22 @@ static void read_system_msg(void){
     if(cfg.system_msg[0]&&(now-sys_msg_last_update>cfg.sys_msg_timeout)) cfg.system_msg[0]='\0';
 }
 
-static int smooth_rssi_sample(int *hist,int newval){
+static double smooth_rssi_sample(double *hist,double newval){
     if(newval<0) return newval;
     hist[2]=hist[1]; hist[1]=hist[0]; hist[0]=newval;
     if(hist[1]<0||hist[2]<0) return newval;
-    return (int)(0.5*hist[0]+0.25*hist[1]+0.25*hist[2]);
+    return 0.5*hist[0]+0.25*hist[1]+0.25*hist[2];
 }
 
-static int get_display_rssi(int raw){
+static double get_display_rssi(double raw){
     if(raw>=0){last_valid_rssi=raw; neg1_count_rssi=0; return raw;}
-    if(++neg1_count_rssi>=3) return -1;
+    if(++neg1_count_rssi>=3) return -1.0;
     return last_valid_rssi;
 }
 
-static int get_display_rssi2(int raw){
+static double get_display_rssi2(double raw){
     if(raw>=0){last_valid_rssi2=raw; neg1_count_rssi2=0; return raw;}
-    if(++neg1_count_rssi2>=3) return -1;
+    if(++neg1_count_rssi2>=3) return -1.0;
     return last_valid_rssi2;
 }
 
@@ -347,13 +348,18 @@ static bool load_info_buffer(int idx){
     fclose(fp); return true;
 }
 
-static int parse_int_from_buf(const char *buf,const char *key){
+static double parse_double_from_buf(const char *buf,const char *key){
     const char *p=buf;
     while((p=strcasestr(p,key))!=NULL){
-        const char *sep=strchr(p,':'); if(!sep) sep=strchr(p,'='); if(sep){sep++; while(*sep==' '||*sep=='\t') sep++; return (int)strtol(sep,NULL,10);}
+        const char *sep=strchr(p,':'); if(!sep) sep=strchr(p,'=');
+        if(sep){
+            sep++;
+            while(*sep==' '||*sep=='\t') sep++;
+            return strtod(sep,NULL);
+        }
         p+=strlen(key);
     }
-    return -1;
+    return -1.0;
 }
 
 static void parse_value_from_buf(const char *buf,const char *key,char *out,size_t outlen){
@@ -401,13 +407,13 @@ static int resolve_source_from_spec(const char *spec,const char **key_out){
     return 0;
 }
 
-static int parse_int_from_spec(const char *spec,const bool have_info[]){
+static double parse_double_from_spec(const char *spec,const bool have_info[]){
     const char *key=NULL;
     int idx=resolve_source_from_spec(spec,&key);
     if(idx<0||idx>=MAX_INFO_SOURCES) idx=0;
     if(!key||!*key) return -1;
     if(!have_info[idx]||!info_buf[idx]) return -1;
-    return parse_int_from_buf(info_buf[idx],key);
+    return parse_double_from_buf(info_buf[idx],key);
 }
 
 static void parse_value_from_spec(const char *spec,const bool have_info[],char *out,size_t outlen){
@@ -439,13 +445,15 @@ static inline const char *choose_rssi_hdr(int pct){
     int idx=(pct*6)/100; if(idx>5) idx=5; return cfg.rssi_hdr[idx];
 }
 
-static void write_osd(int rssi,int rssi2,const char *mcs_str,const char *bw_str,const char *tx_str){
-    int pct; if(rssi<0)pct=0; else if(rssi<=cfg.bottom)pct=0; else if(rssi>=cfg.top)pct=100; else pct=(rssi-cfg.bottom)*100/(cfg.top-cfg.bottom);
+static void write_osd(double rssi,double rssi2,const char *mcs_str,const char *bw_str,const char *tx_str){
+    double pct_val;
+    if(rssi<0)pct_val=0.0; else if(rssi<=cfg.bottom)pct_val=0.0; else if(rssi>=cfg.top)pct_val=100.0; else pct_val=(rssi-cfg.bottom)*100.0/(cfg.top-cfg.bottom);
+    int pct=(int)(pct_val+0.5);
     char bar[cfg.bar_width*3+1]; build_bar(bar,sizeof(bar),pct,cfg.empty_sym); const char *hdr=choose_rssi_hdr(pct);
     int pct_rssi2=0; char bar_rssi2[cfg.bar_width*3+1]; const char *hdr_rssi2=NULL;
     if(cfg.rssi2_enable){
-        int disp_rssi2=rssi2;
-        if(disp_rssi2<0)pct_rssi2=0; else if(disp_rssi2<=cfg.bottom2)pct_rssi2=0; else if(disp_rssi2>=cfg.top2)pct_rssi2=100; else pct_rssi2=(disp_rssi2-cfg.bottom2)*100/(cfg.top2-cfg.bottom2);
+        double disp_rssi2=rssi2;
+        if(disp_rssi2<0)pct_rssi2=0; else if(disp_rssi2<=cfg.bottom2)pct_rssi2=0; else if(disp_rssi2>=cfg.top2)pct_rssi2=100; else pct_rssi2=(int)(((disp_rssi2-cfg.bottom2)*100.0/(cfg.top2-cfg.bottom2))+0.5);
         build_bar(bar_rssi2,sizeof(bar_rssi2),pct_rssi2,cfg.empty_sym2); hdr_rssi2=choose_rssi_hdr(pct_rssi2);
     }
     char filebuf[2048]; int flen=0;
@@ -579,22 +587,22 @@ int main(int argc, char **argv){
             if(have_info[i]) any_info=true;
         }
 
-        int raw_rssi = -1;
-        int raw_rssi2 = -1;
+        double raw_rssi = -1.0;
+        double raw_rssi2 = -1.0;
 
         if (!any_info) {
             strcpy(last_mcs,"NA"); strcpy(last_bw,"NA"); strcpy(last_tx,"NA");
         } else {
-            raw_rssi = parse_int_from_spec(cfg.rssi_key, have_info);
-            raw_rssi2  = cfg.rssi2_enable ? parse_int_from_spec(cfg.rssi2_key, have_info) : -1;
+            raw_rssi = parse_double_from_spec(cfg.rssi_key, have_info);
+            raw_rssi2  = cfg.rssi2_enable ? parse_double_from_spec(cfg.rssi2_key, have_info) : -1.0;
 
             parse_value_from_spec(cfg.curr_tx_rate_key, have_info, last_mcs, sizeof(last_mcs));
             parse_value_from_spec(cfg.curr_tx_bw_key,   have_info, last_bw,  sizeof(last_bw));
             parse_value_from_spec(cfg.tx_power_key,     have_info, last_tx,  sizeof(last_tx));
         }
 
-        int disp_rssi = smooth_rssi_sample(rssi_hist, get_display_rssi(raw_rssi));
-        int disp_rssi2 = -1;
+        double disp_rssi = smooth_rssi_sample(rssi_hist, get_display_rssi(raw_rssi));
+        double disp_rssi2 = -1.0;
         if (cfg.rssi2_enable) {
             disp_rssi2 = smooth_rssi_sample(rssi2_hist, get_display_rssi2(raw_rssi2));
         }
