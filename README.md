@@ -244,7 +244,7 @@ Static files under `html/` can be served by the daemon (when `serve_ui=1`) or by
 
 #### Auto-generated controls (get/set contract)
 
-The ESP32/VTX dashboards auto-build their controls from the `/sys/<cap>/help` payload. To participate, expose a `get` command that accepts a single `name` argument (prefer `enum` + `control.kind: "select"`) and a `set` command that accepts a `pair` argument (`key=value`). Pair those with a `settings` array that lists each `key`, `type`, and `control` hint (`toggle`, `range`, `select`, or `text`). When that shape is present, the UI renders a typed control for every setting, auto-fetches current values via `get`, and auto-applies changes through `set` with a small debounce. The firmware env handler (`/sys/fw/*`) now follows this pattern so link mode, SSID, OSD TTY, and WLAN passphrase fields render alongside the video controls without manual wiring.
+The ESP32/VTX dashboards auto-build their controls from the `/sys/<cap>/help` payload. To participate, expose a `get` command that accepts a single `name` argument (prefer `enum` + `control.kind: "select"`) and a `set` command that accepts a `pair` argument (`key=value`). Pair those with a `settings` array that lists each `key`, `type`, and `control` hint (`toggle`, `range`, `select`, or `text`). When that shape is present, the UI renders a typed control for every setting, auto-fetches current values via `get`, and auto-applies changes through `set` with a small debounce. The firmware env handler (`/sys/fw/*`) now follows this pattern so link mode, SSID, OSD TTY, and WLAN passphrase fields render alongside the video controls without manual wiring; SSIDs accept 4-24 alphanumerics (or empty to clear) while passphrases remain 8-24.
 
 ### Helper Tools
 

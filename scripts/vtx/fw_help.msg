@@ -10,7 +10,7 @@
   ],
   "settings": [
     {"key":"link_mode","type":"enum","description":"Firmware link mode (apfpv, wfb, or empty to clear)","control":{"kind":"select","options":["apfpv","wfb",""],"multi":false,"allow_free":true}},
-    {"key":"wlanssid","type":"string","description":"Wi-Fi SSID (8-24 alphanumerics or empty to clear)","control":{"kind":"text","placeholder":"wlanssid"}},
+    {"key":"wlanssid","type":"string","description":"Wi-Fi SSID (4-24 alphanumerics or empty to clear)","control":{"kind":"text","placeholder":"wlanssid"}},
     {"key":"msposd_tty","type":"enum","description":"MSP/OSD serial device","control":{"kind":"select","options":["standalone","/dev/ttyS1","/dev/ttyS2"],"multi":false}},
     {"key":"wlanpass","type":"string","description":"Wi-Fi passphrase (8-24 alphanumerics or empty to clear)","control":{"kind":"text","placeholder":"wlanpass"}}
   ]

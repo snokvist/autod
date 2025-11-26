@@ -313,7 +313,7 @@ fw_set_one(){
     link_mode)
       case "$val" in ""|apfpv|wfb) ;; *) die "invalid link_mode: $val" ;; esac ;;
     wlanssid)
-      validate_alnum_8_24 "$val" || die "invalid wlanssid: must be empty or 8-24 alphanumerics" ;;
+      validate_alnum_4_24 "$val" || die "invalid wlanssid: must be empty or 4-24 alphanumerics" ;;
     msposd_tty)
       case "$val" in standalone|/dev/ttyS1|/dev/ttyS2) ;; *) die "invalid msposd_tty: $val" ;; esac ;;
     wlanpass)
@@ -332,6 +332,14 @@ fw_params(){
   for kv in "$@"; do case "$kv" in --*) continue;; esac; out="$(fw_set_one "$kv" 2>&1)" || { echo "$out" 1>&2; ok=0; }; done
   [ $ok -eq 1 ] || exit 2
   echo "ok"
+}
+
+validate_alnum_4_24(){
+  val="$1"
+  [ -z "$val" ] && return 0
+  case "$val" in *[!A-Za-z0-9]*) return 1 ;; esac
+  len=${#val}
+  [ $len -ge 4 ] && [ $len -le 24 ]
 }
 
 validate_alnum_8_24(){
