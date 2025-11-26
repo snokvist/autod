@@ -2580,16 +2580,24 @@ function setNodesSummary(text){
     return { wrapper, input, kind: resolvedKind };
   }
 
+  function allowEmptyValue(arg){
+    const control = arg?.control || {};
+    if (control.allow_empty || arg?.allow_empty) return true;
+    const opts = Array.isArray(control.options) ? control.options : Array.isArray(arg?.options) ? arg.options : [];
+    return opts.some(opt => String(opt) === '');
+  }
+
   function readArgValue(input, arg){
     if (!input) return '';
+    const allowEmpty = allowEmptyValue(arg);
     if (input.type === 'checkbox') return input.checked ? 'true' : 'false';
     if (input.tagName === 'SELECT' && input.multiple){
-      const vals = Array.from(input.selectedOptions).map(opt => opt.value).filter(Boolean);
-      if (!vals.length) return arg?.required ? '' : null;
+      const vals = Array.from(input.selectedOptions).map(opt => opt.value);
+      if (!vals.length) return allowEmpty ? '' : (arg?.required ? '' : null);
       return vals;
     }
     const value = (input.value || '').trim();
-    if (!value) return arg?.required ? '' : null;
+    if (!value) return allowEmpty ? '' : (arg?.required ? '' : null);
     return value;
   }
 
@@ -2623,11 +2631,15 @@ function setNodesSummary(text){
       return;
     }
     if (kind === 'select' && input.tagName === 'SELECT'){
-      const vals = Array.isArray(value)
+      const allowEmpty = allowEmptyValue(arg);
+      let vals = Array.isArray(value)
         ? value.map(v => String(v))
-        : String(value ?? '').split(',').map(v => v.trim()).filter(Boolean);
+        : String(value ?? '').split(',').map(v => v.trim());
+      if (!allowEmpty) vals = vals.filter(v => v);
       Array.from(input.options).forEach(opt => { opt.selected = vals.includes(opt.value); });
-      if (!input.multiple && vals[0]) input.value = vals[0];
+      if (!input.multiple){
+        input.value = vals[0] !== undefined ? vals[0] : '';
+      }
       return;
     }
     const strVal = Array.isArray(value) ? value[0] : value;
@@ -2756,12 +2768,13 @@ function setNodesSummary(text){
           if (!setTimer) setTimer = setTimeout(() => { setTimer = null; runSet(); }, 250);
           return;
         }
+        const allowEmpty = allowEmptyValue(setting);
         const val = readArgValue(input, setting);
-        if (val === ''){
+        if (val === '' && !allowEmpty && setting?.required){
           status.textContent = `${setting?.key || 'value'} is required`;
           return;
         }
-        if (val === null || val === undefined){
+        if (val === null || val === undefined || (val === '' && !allowEmpty)){
           status.textContent = 'No value selected';
           return;
         }
