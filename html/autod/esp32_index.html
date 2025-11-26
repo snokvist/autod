@@ -344,6 +344,13 @@
   .node-help-endpoints { display: flex; flex-wrap: wrap; gap: 6px; font-size: 12px; color: var(--mut); }
   .node-help-endpoints .pill { background: rgba(26, 106, 223, 0.08); border-color: rgba(26, 106, 223, 0.35); }
   .node-help-commands { display: grid; gap: 0.75rem; }
+  .node-settings { display: grid; gap: 0.5rem; }
+  .node-setting { border: 1px solid var(--line); border-radius: 12px; padding: 0.75rem; display: grid; gap: 0.5rem; background: linear-gradient(135deg, rgba(255,255,255,0.93), rgba(246,250,255,0.9)); }
+  .node-setting-head { display: flex; justify-content: space-between; gap: 0.5rem; align-items: flex-start; }
+  .node-setting-name { font-weight: 700; }
+  .node-setting-desc { color: var(--mut); font-size: 13px; }
+  .node-setting-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+  .node-setting-status { font-size: 12px; color: var(--mut); }
   .node-command { border: 1px solid var(--line); border-radius: 12px; padding: 0.75rem; display: grid; gap: 0.5rem; background: linear-gradient(135deg, rgba(255,255,255,0.95), rgba(241,246,255,0.9)); }
   .node-command-head { display: flex; justify-content: space-between; gap: 0.5rem; align-items: flex-start; }
   .node-command-name { font-weight: 700; }
@@ -2286,6 +2293,12 @@ function setNodesSummary(text){
     return `${base}/${command}`;
   }
 
+  function findCommand(commands, name){
+    if (!name) return null;
+    const target = String(name).toLowerCase();
+    return (Array.isArray(commands) ? commands : []).find(cmd => (cmd?.name || '').toLowerCase() === target) || null;
+  }
+
   function makePill(text){
     const span = document.createElement('span');
     span.className = 'pill';
@@ -2389,6 +2402,9 @@ function setNodesSummary(text){
     const endpointsRow = document.createElement('div');
     endpointsRow.className = 'node-help-endpoints';
 
+    const settings = document.createElement('div');
+    settings.className = 'node-settings';
+
     const commands = document.createElement('div');
     commands.className = 'node-help-commands';
 
@@ -2397,8 +2413,8 @@ function setNodesSummary(text){
     output.placeholder = 'Command output will appear here';
     output.readOnly = true;
 
-    wrapper.append(status, menuRow, endpointsRow, commands, output);
-    return { wrapper, status, menuSelect, refreshBtn, endpointsRow, commands, output };
+    wrapper.append(status, menuRow, endpointsRow, settings, commands, output);
+    return { wrapper, status, menuSelect, refreshBtn, endpointsRow, settings, commands, output };
   }
 
   function buildArgControl(arg){
@@ -2521,6 +2537,116 @@ function setNodesSummary(text){
         ui.menuSelect.dispatchEvent(new Event('change'));
       });
       ui.endpointsRow.append(pill);
+    });
+  }
+
+  function renderNodeSettings(node, key, ui, help){
+    ui.settings.innerHTML = '';
+    const settings = Array.isArray(help?.settings) ? help.settings : [];
+    const commands = Array.isArray(help?.commands) ? help.commands : [];
+    const setCmd = findCommand(commands, 'set');
+    if (!settings.length || !setCmd){
+      ui.settings.style.display = 'none';
+      return;
+    }
+    const getCmd = findCommand(commands, 'get');
+    ui.settings.style.display = 'grid';
+    const store = getNodeHelpStore(key);
+    const setPath = deriveCommandPath(store.activePath, setCmd.name);
+    const getPath = getCmd ? deriveCommandPath(store.activePath, getCmd.name) : null;
+
+    settings.forEach(setting => {
+      const card = document.createElement('div');
+      card.className = 'node-setting';
+
+      const head = document.createElement('div');
+      head.className = 'node-setting-head';
+      const left = document.createElement('div');
+      const name = document.createElement('div');
+      name.className = 'node-setting-name';
+      name.textContent = setting?.key || 'setting';
+      left.append(name);
+      if (setting?.description){
+        const desc = document.createElement('div');
+        desc.className = 'node-setting-desc';
+        desc.textContent = setting.description;
+        left.append(desc);
+      }
+      const pathEl = document.createElement('div');
+      pathEl.className = 'node-command-path';
+      pathEl.textContent = setPath;
+      head.append(left, pathEl);
+      card.append(head);
+
+      const { wrapper, input } = buildArgControl({ ...setting, key: setting?.key || 'setting' });
+      card.append(wrapper);
+
+      const actions = document.createElement('div');
+      actions.className = 'node-setting-actions';
+      const status = document.createElement('div');
+      status.className = 'node-setting-status';
+      status.textContent = 'Idle';
+
+      if (getCmd && getPath){
+        const getBtn = document.createElement('button');
+        getBtn.type = 'button';
+        getBtn.textContent = 'Get';
+        getBtn.addEventListener('click', ev => {
+          ev.stopPropagation();
+          const args = [];
+          if (Array.isArray(getCmd.args) && getCmd.args.length) args.push(String(setting?.key || ''));
+          getBtn.disabled = true;
+          status.textContent = `Running ${getPath}…`;
+          relayExecToNode(node, getPath, args).then(({ exec }) => {
+            const ok = typeof exec?.rc === 'number' ? exec.rc === 0 : true;
+            const summary = summarizeExec(getPath, exec);
+            ui.output.value = summary;
+            getNodeHelpStore(key).lastOutput = summary;
+            status.textContent = ok ? 'Success' : 'Completed with errors';
+          }).catch(err => {
+            const msg = err.message || 'Command failed';
+            ui.output.value = `${getPath}\n${msg}`;
+            getNodeHelpStore(key).lastOutput = ui.output.value;
+            status.textContent = msg;
+          }).finally(() => {
+            getBtn.disabled = false;
+          });
+        });
+        actions.append(getBtn);
+      }
+
+      const setBtn = document.createElement('button');
+      setBtn.type = 'button';
+      setBtn.textContent = 'Set';
+      setBtn.addEventListener('click', ev => {
+        ev.stopPropagation();
+        const val = readArgValue(input, setting);
+        if (val === ''){
+          status.textContent = `${setting?.key || 'value'} is required`;
+          return;
+        }
+        const normalized = Array.isArray(val) ? val.join(',') : val;
+        const args = [`${setting?.key || 'value'}=${normalized}`];
+        setBtn.disabled = true;
+        status.textContent = `Running ${setPath}…`;
+        relayExecToNode(node, setPath, args).then(({ exec }) => {
+          const ok = typeof exec?.rc === 'number' ? exec.rc === 0 : true;
+          const summary = summarizeExec(setPath, exec);
+          ui.output.value = summary;
+          getNodeHelpStore(key).lastOutput = summary;
+          status.textContent = ok ? 'Success' : 'Completed with errors';
+        }).catch(err => {
+          const msg = err.message || 'Command failed';
+          ui.output.value = `${setPath}\n${msg}`;
+          getNodeHelpStore(key).lastOutput = ui.output.value;
+          status.textContent = msg;
+        }).finally(() => {
+          setBtn.disabled = false;
+        });
+      });
+      actions.append(setBtn, status);
+      card.append(actions);
+      ui.settings.append(card);
     });
   }
 
@@ -2649,6 +2775,7 @@ function setNodesSummary(text){
     }
     if (!statusParts.length) statusParts.push('Select a help endpoint to view commands.');
     ui.status.textContent = statusParts.join(' ');
+    renderNodeSettings(node, key, ui, help);
     renderNodeCommands(node, key, ui, help);
     if (store.lastOutput) ui.output.value = store.lastOutput;
   }
