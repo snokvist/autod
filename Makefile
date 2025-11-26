@@ -2,6 +2,9 @@
 APP          := autod
 UDP_APP      := udp_relay
 
+# Default OpenWrt toolchain PATH (can be overridden when invoking make)
+export PATH := /home/snokvist/dev/openwrt/staging_dir/toolchain-mipsel_24kc_gcc-14.3.0_musl/bin:$(PATH)
+
 # Install prefixes (override as needed)
 PREFIX       ?= /usr/local
 BINDIR       ?= $(PREFIX)/bin
@@ -39,6 +42,13 @@ PKGCONFIG    ?= pkg-config
 STRIP_NATIVE ?= strip
 STRIP_MUSL   ?= arm-linux-musleabihf-strip
 STRIP_GNU    ?= arm-linux-gnueabihf-strip
+
+# OpenWrt mipsel_24kc musl toolchain
+# You can override CROSS_OWRT from env if needed, e.g.
+#   make owrt CROSS_OWRT=mipsel-openwrt-linux-
+CROSS_OWRT   ?= mipsel-openwrt-linux-musl-
+CC_OWRT      ?= $(CROSS_OWRT)gcc
+STRIP_OWRT   ?= $(CROSS_OWRT)strip
 
 # Common flags
 CPPFLAGS_COM := -I$(SRC_DIR) -D_POSIX_C_SOURCE=200809L -DNO_SSL -DNO_CGI -DNO_FILES
@@ -170,16 +180,18 @@ $$($1_BUILD):
 
 endef
 
-# ===== Define the three flavors =====
+# ===== Define the flavors =====
 # native -> ./autod / ./sse_tail / ./udp_relay
 $(eval $(call DEFINE_FLAVOR,native,$(CC_NATIVE),native,$(APP),,$(STRIP_NATIVE)))
 # musl   -> ./autod-musl / ./sse_tail-musl / ./udp_relay-musl
 $(eval $(call DEFINE_FLAVOR,musl,$(CC_MUSL),musl,$(APP)-musl,-musl,$(STRIP_MUSL)))
 # gnu    -> ./autod-gnu / ./sse_tail-gnu / ./udp_relay-gnu
 $(eval $(call DEFINE_FLAVOR,gnu,$(CC_GNU),gnu,$(APP)-gnu,-gnu,$(STRIP_GNU)))
+# owrt   -> ./autod-owrt / ./sse_tail-owrt / ./udp_relay-owrt
+$(eval $(call DEFINE_FLAVOR,owrt,$(CC_OWRT),owrt,$(APP)-owrt,-owrt,$(STRIP_OWRT)))
 
 # ===== Top-level convenience targets =====
-.PHONY: all tools tools-musl tools-gnu clean strip install help
+.PHONY: all tools tools-musl tools-gnu tools-owrt clean strip install help
 
 all: native
 
@@ -187,14 +199,15 @@ all: native
 tools: sse_tail udp_relay antenna_osd ip2uart joystick2crsf
 tools-musl: sse_tail-musl udp_relay-musl antenna_osd-musl ip2uart-musl
 tools-gnu: sse_tail-gnu udp_relay-gnu antenna_osd-gnu ip2uart-gnu
+tools-owrt: sse_tail-owrt udp_relay-owrt antenna_osd-owrt ip2uart-owrt
 
 clean:
 	rm -rf build \
-	       $(APP) $(APP)-musl $(APP)-gnu \
-	       sse_tail sse_tail-musl sse_tail-gnu \
-	       udp_relay udp_relay-musl udp_relay-gnu \
-	       antenna_osd antenna_osd-musl antenna_osd-gnu \
-	       ip2uart ip2uart-musl ip2uart-gnu \
+	       $(APP) $(APP)-musl $(APP)-gnu $(APP)-owrt \
+	       sse_tail sse_tail-musl sse_tail-gnu sse_tail-owrt \
+	       udp_relay udp_relay-musl udp_relay-gnu udp_relay-owrt \
+	       antenna_osd antenna_osd-musl antenna_osd-gnu antenna_osd-owrt \
+	       ip2uart ip2uart-musl ip2uart-gnu ip2uart-owrt \
                joystick2crsf
 
 # Strip whatever exists (no-op if strip tools missing)
@@ -202,6 +215,7 @@ strip: ;
 	-@command -v $(STRIP_NATIVE) >/dev/null 2>&1 && $(STRIP_NATIVE) $(APP) sse_tail udp_relay antenna_osd ip2uart joystick2crsf 2>/dev/null || true
 	-@command -v $(STRIP_MUSL)   >/dev/null 2>&1 && $(STRIP_MUSL)   $(APP)-musl sse_tail-musl udp_relay-musl antenna_osd-musl ip2uart-musl 2>/dev/null || true
 	-@command -v $(STRIP_GNU)    >/dev/null 2>&1 && $(STRIP_GNU)    $(APP)-gnu sse_tail-gnu udp_relay-gnu antenna_osd-gnu ip2uart-gnu 2>/dev/null || true
+	-@command -v $(STRIP_OWRT)   >/dev/null 2>&1 && $(STRIP_OWRT)   $(APP)-owrt sse_tail-owrt udp_relay-owrt antenna_osd-owrt ip2uart-owrt 2>/dev/null || true
 
 JOYSTICK2CRSF_BUILD := build/native
 JOYSTICK2CRSF_BIN   := joystick2crsf
@@ -290,12 +304,15 @@ help:
 	@echo "  make                 -> native => ./$(APP)"
 	@echo "  make musl            -> musl   => ./$(APP)-musl"
 	@echo "  make gnu             -> gnu    => ./$(APP)-gnu"
+	@echo "  make owrt            -> OpenWrt mipsel => ./$(APP)-owrt"
 	@echo ""
 	@echo "Utilities:"
-	@echo "  make tools           -> native sse_tail and udp_relay"
-	@echo "  make tools-musl      -> musl  sse_tail-musl and udp_relay-musl"
-	@echo "  make tools-gnu       -> gnu   sse_tail-gnu  and udp_relay-gnu"
+	@echo "  make tools           -> native sse_tail, udp_relay, antenna_osd, ip2uart, joystick2crsf"
+	@echo "  make tools-musl      -> musl   sse_tail-musl, udp_relay-musl, antenna_osd-musl, ip2uart-musl"
+	@echo "  make tools-gnu       -> gnu    sse_tail-gnu,  udp_relay-gnu,  antenna_osd-gnu,  ip2uart-gnu"
+	@echo "  make tools-owrt      -> owrt   sse_tail-owrt, udp_relay-owrt, antenna_osd-owrt, ip2uart-owrt"
 	@echo ""
 	@echo "Env overrides:"
-	@echo "  CC_NATIVE=...  CC_MUSL=...  CC_GNU=...  PKGCONFIG=..."
-	@echo "  STRIP_NATIVE=... STRIP_MUSL=... STRIP_GNU=..."
+	@echo "  CC_NATIVE=...  CC_MUSL=...  CC_GNU=...  CC_OWRT=...  PKGCONFIG=..."
+	@echo "  STRIP_NATIVE=... STRIP_MUSL=... STRIP_GNU=... STRIP_OWRT=..."
+	@echo "  CROSS_OWRT=...   (default: mipsel-openwrt-linux-musl-)"
