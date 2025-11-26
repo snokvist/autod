@@ -194,6 +194,76 @@ static void set_cfg_string(const char **field, const char *value, const char *de
     *field = dup;
 }
 
+static int hex_value(char c)
+{
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return 10 + c - 'a';
+    if (c >= 'A' && c <= 'F') return 10 + c - 'A';
+    return -1;
+}
+
+static char *dup_unescaped_string(const char *value)
+{
+    size_t len = strlen(value);
+    char *out = malloc(len + 1);
+    if (!out) return NULL;
+
+    size_t o = 0;
+    for (size_t i = 0; value[i]; ++i) {
+        if (value[i] != '\\') {
+            out[o++] = value[i];
+            continue;
+        }
+
+        char esc = value[i + 1];
+        if (!esc) {
+            out[o++] = '\\';
+            break;
+        }
+
+        if (esc == 'x') {
+            int h1 = hex_value(value[i + 2]);
+            int h2 = hex_value(value[i + 3]);
+            if (h1 >= 0 && h2 >= 0) {
+                out[o++] = (char)((h1 << 4) | h2);
+                i += 3;
+                continue;
+            }
+        } else if (esc == 'n') {
+            out[o++] = '\n';
+            i++;
+            continue;
+        } else if (esc == 'r') {
+            out[o++] = '\r';
+            i++;
+            continue;
+        } else if (esc == 't') {
+            out[o++] = '\t';
+            i++;
+            continue;
+        } else if (esc == '\\') {
+            out[o++] = '\\';
+            i++;
+            continue;
+        }
+
+        /* Fallback: treat unknown escapes literally. */
+        out[o++] = esc;
+        i++;
+    }
+
+    out[o] = '\0';
+    return out;
+}
+
+static void set_cfg_unescaped_string(const char **field, const char *value, const char *default_value)
+{
+    char *dup = dup_unescaped_string(value);
+    if (!dup) return;
+    if (*field && *field != default_value) free((void *)*field);
+    *field = dup;
+}
+
 static void set_cfg_field(const char *k, const char *v)
 {
 #define EQ(a,b) (strcmp((a),(b))==0)
@@ -227,12 +297,12 @@ static void set_cfg_field(const char *k, const char *v)
     else if (EQ(k, "rssi_range3_hdr")) set_cfg_string(&cfg.rssi_hdr[3], v, cfg_default.rssi_hdr[3]);
     else if (EQ(k, "rssi_range4_hdr")) set_cfg_string(&cfg.rssi_hdr[4], v, cfg_default.rssi_hdr[4]);
     else if (EQ(k, "rssi_range5_hdr")) set_cfg_string(&cfg.rssi_hdr[5], v, cfg_default.rssi_hdr[5]);
-    else if (EQ(k, "start_sym")) set_cfg_string(&cfg.start_sym, v, cfg_default.start_sym);
-    else if (EQ(k, "end_sym")) set_cfg_string(&cfg.end_sym, v, cfg_default.end_sym);
-    else if (EQ(k, "empty_sym")) set_cfg_string(&cfg.empty_sym, v, cfg_default.empty_sym);
-    else if (EQ(k, "start_sym2") || EQ(k, "secondary_start_sym")) set_cfg_string(&cfg.start_sym2, v, cfg_default.start_sym2);
-    else if (EQ(k, "end_sym2") || EQ(k, "secondary_end_sym")) set_cfg_string(&cfg.end_sym2, v, cfg_default.end_sym2);
-    else if (EQ(k, "empty_sym2") || EQ(k, "secondary_empty_sym")) set_cfg_string(&cfg.empty_sym2, v, cfg_default.empty_sym2);
+    else if (EQ(k, "start_sym")) set_cfg_unescaped_string(&cfg.start_sym, v, cfg_default.start_sym);
+    else if (EQ(k, "end_sym")) set_cfg_unescaped_string(&cfg.end_sym, v, cfg_default.end_sym);
+    else if (EQ(k, "empty_sym")) set_cfg_unescaped_string(&cfg.empty_sym, v, cfg_default.empty_sym);
+    else if (EQ(k, "start_sym2") || EQ(k, "secondary_start_sym")) set_cfg_unescaped_string(&cfg.start_sym2, v, cfg_default.start_sym2);
+    else if (EQ(k, "end_sym2") || EQ(k, "secondary_end_sym")) set_cfg_unescaped_string(&cfg.end_sym2, v, cfg_default.end_sym2);
+    else if (EQ(k, "empty_sym2") || EQ(k, "secondary_empty_sym")) set_cfg_unescaped_string(&cfg.empty_sym2, v, cfg_default.empty_sym2);
     else if (EQ(k, "rssi_key") || EQ(k, "signal_key") || EQ(k, "signal_strength_key")) set_cfg_string(&cfg.rssi_key, v, cfg_default.rssi_key);
     else if (EQ(k, "curr_tx_rate_key") || EQ(k, "stats_mcs_key") || EQ(k, "stats_rate_key")) set_cfg_string(&cfg.curr_tx_rate_key, v, cfg_default.curr_tx_rate_key);
     else if (EQ(k, "curr_tx_bw_key") || EQ(k, "stats_bw_key") || EQ(k, "stats_bandwidth_key")) set_cfg_string(&cfg.curr_tx_bw_key, v, cfg_default.curr_tx_bw_key);
