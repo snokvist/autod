@@ -2356,6 +2356,10 @@ function setNodesSummary(text){
     return span;
   }
 
+  function delay(ms){
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
   async function relayExecToNode(node, path, args, timeoutMs = DEFAULT_CMD_TIMEOUT_MS){
     const ip = node?.ip || node?.host;
     if (!ip) throw new Error('missing node ip');
@@ -2676,6 +2680,7 @@ function setNodesSummary(text){
     const store = getNodeHelpStore(key);
     const setPath = deriveCommandPath(store.activePath, setCmd.name);
     const getPath = getCmd ? deriveCommandPath(store.activePath, getCmd.name) : null;
+    const refreshTasks = [];
 
     settings.forEach(setting => {
       const card = document.createElement('div');
@@ -2714,6 +2719,34 @@ function setNodesSummary(text){
       let setTimer = null;
       let suppressSet = false;
       let inFlight = false;
+
+      const runGet = async () => {
+        if (!getCmd || !getPath || !input) return;
+        const args = [];
+        if (Array.isArray(getCmd.args) && getCmd.args.length) args.push(String(setting?.key || ''));
+        status.textContent = `Fetching ${getPath}…`;
+        try {
+          const { exec } = await relayExecToNode(node, getPath, args);
+          const ok = typeof exec?.rc === 'number' ? exec.rc === 0 : true;
+          const summary = summarizeExec(getPath, exec);
+          ui.output.value = summary;
+          getNodeHelpStore(key).lastOutput = summary;
+          const parsed = parseSettingValueFromExec(exec, setting);
+          if (parsed !== undefined){
+            suppressSet = true;
+            applyValueToControl(input, setting, parsed);
+            suppressSet = false;
+            status.textContent = ok ? `Updated to ${parsed}` : 'Completed with errors';
+          } else {
+            status.textContent = ok ? 'Get completed' : 'Completed with errors';
+          }
+        } catch (err) {
+          const msg = err.message || 'Command failed';
+          ui.output.value = `${getPath}\n${msg}`;
+          getNodeHelpStore(key).lastOutput = ui.output.value;
+          status.textContent = msg;
+        }
+      };
 
       const runSet = () => {
         if (!input) return;
@@ -2758,41 +2791,7 @@ function setNodesSummary(text){
         }, 250);
       };
 
-      if (getCmd && getPath){
-        const getBtn = document.createElement('button');
-        getBtn.type = 'button';
-        getBtn.textContent = 'Get';
-        getBtn.addEventListener('click', ev => {
-          ev.stopPropagation();
-          const args = [];
-          if (Array.isArray(getCmd.args) && getCmd.args.length) args.push(String(setting?.key || ''));
-          getBtn.disabled = true;
-          status.textContent = `Running ${getPath}…`;
-          relayExecToNode(node, getPath, args).then(({ exec }) => {
-            const ok = typeof exec?.rc === 'number' ? exec.rc === 0 : true;
-            const summary = summarizeExec(getPath, exec);
-            ui.output.value = summary;
-            getNodeHelpStore(key).lastOutput = summary;
-            const parsed = parseSettingValueFromExec(exec, setting);
-            if (parsed !== undefined){
-              suppressSet = true;
-              applyValueToControl(input, setting, parsed);
-              suppressSet = false;
-              status.textContent = ok ? `Updated to ${parsed}` : 'Completed with errors';
-            } else {
-              status.textContent = ok ? 'Get completed' : 'Completed with errors';
-            }
-          }).catch(err => {
-            const msg = err.message || 'Command failed';
-            ui.output.value = `${getPath}\n${msg}`;
-            getNodeHelpStore(key).lastOutput = ui.output.value;
-            status.textContent = msg;
-          }).finally(() => {
-            getBtn.disabled = false;
-          });
-        });
-        actions.append(getBtn);
-      }
+      if (getCmd && getPath) refreshTasks.push(runGet);
       const eventName = input?.type === 'range' ? 'input' : (input?.tagName === 'SELECT' || input?.type === 'checkbox' ? 'change' : 'input');
       if (input) input.addEventListener(eventName, () => scheduleSet());
 
@@ -2800,6 +2799,15 @@ function setNodesSummary(text){
       card.append(actions);
       ui.settings.append(card);
     });
+
+    if (refreshTasks.length){
+      (async () => {
+        for (const task of refreshTasks){
+          await task();
+          await delay(200);
+        }
+      })();
+    }
   }
 
   function renderNodeCommands(node, key, ui, help){
