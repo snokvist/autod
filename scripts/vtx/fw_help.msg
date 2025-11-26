@@ -1,11 +1,17 @@
 {
-  "cap":"fw",
-  "contract_version":"0.1",
-  "commands":[
+  "cap": "fw",
+  "contract_version": "0.2",
+  "help_endpoints": ["/sys/fw/help"],
+  "commands": [
     {"name":"help","description":"Describe firmware environment controls","args":[]},
-    {"name":"set_link_mode","description":"Set firmware link mode (apfpv, wfb, or empty to clear)","args":[{"key":"mode","type":"enum","control":{"kind":"select","options":["apfpv","wfb",""],"multi":false,"allow_free":true},"required":false}]},
-    {"name":"set_wlanssid","description":"Set Wi-Fi SSID (8-24 alphanumerics or empty to clear)","args":[{"key":"ssid","type":"string","control":{"kind":"text"},"required":false}]},
-    {"name":"set_msposd_tty","description":"Select MSP/OSD serial device","args":[{"key":"tty","type":"enum","control":{"kind":"select","options":["standalone","/dev/ttyS1","/dev/ttyS2"],"multi":false},"required":true}]},
-    {"name":"set_wlanpass","description":"Set Wi-Fi passphrase (8-24 alphanumerics or empty to clear)","args":[{"key":"pass","type":"string","control":{"kind":"text"},"required":false}]}
+    {"name":"get","description":"Read one firmware env value","args":[{"key":"name","type":"enum","control":{"kind":"select","options":["link_mode","wlanssid","msposd_tty","wlanpass"],"multi":false,"allow_free":true},"required":true}]},
+    {"name":"set","description":"Set a firmware env key=value pair","args":[{"key":"pair","type":"string","control":{"kind":"text"},"required":true,"description":"key=value"}]},
+    {"name":"params","description":"Set multiple firmware env pairs","args":[{"key":"pairs","type":"string","control":{"kind":"text"},"required":false,"description":"Repeated key=value tokens"}]}
+  ],
+  "settings": [
+    {"key":"link_mode","type":"enum","description":"Firmware link mode (apfpv, wfb, or empty to clear)","control":{"kind":"select","options":["apfpv","wfb",""],"multi":false,"allow_free":true}},
+    {"key":"wlanssid","type":"string","description":"Wi-Fi SSID (8-24 alphanumerics or empty to clear)","control":{"kind":"text","placeholder":"wlanssid"}},
+    {"key":"msposd_tty","type":"enum","description":"MSP/OSD serial device","control":{"kind":"select","options":["standalone","/dev/ttyS1","/dev/ttyS2"],"multi":false}},
+    {"key":"wlanpass","type":"string","description":"Wi-Fi passphrase (8-24 alphanumerics or empty to clear)","control":{"kind":"text","placeholder":"wlanpass"}}
   ]
 }

@@ -119,6 +119,8 @@ POST /exec
 - `control` is a **hint** for UI builders; the handler is the source of truth.
 - `type: "enum"` implies `control.kind: "select"`; include `options` and optional `multi`.
 - `toggle` implies boolean semantics; UI may render a switch. See normalization rules in §4.3.
+- When you expose both `get` (single `name` arg) and `set` (`pair` key=value arg) alongside a `settings` array, the ESP32/VRX UI
+  can auto-generate controls, waterfall `get` calls to populate defaults, and debounce `set` calls as users change values.
 
 ---
 

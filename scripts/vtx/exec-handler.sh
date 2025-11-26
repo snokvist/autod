@@ -290,6 +290,50 @@ fw_env_set(){
   if have fw_setenv; then fw_setenv "$key" "$val" >/dev/null 2>&1 || die "failed to set $key"; else die "fw_setenv not available"; fi
 }
 
+fw_supported_key(){
+  case "$1" in link_mode|wlanssid|msposd_tty|wlanpass) return 0 ;; *) return 1 ;; esac
+}
+
+fw_get(){
+  name="$1"
+  [ -n "$name" ] || die "missing name"
+  fw_supported_key "$name" || die "unknown setting: $name"
+  have fw_printenv || die "fw_printenv not available"
+  out=$(fw_printenv "$name" 2>&1) || { echo "$out" 1>&2; exit 2; }
+  echo "$out"
+}
+
+fw_set_one(){
+  pair="$1"
+  key="${pair%%=*}"
+  val="${pair#*=}"
+  [ -n "$key" ] || die "missing key in pair"
+  [ "$key" != "$val" ] || die "missing value in pair"
+  case "$key" in
+    link_mode)
+      case "$val" in ""|apfpv|wfb) ;; *) die "invalid link_mode: $val" ;; esac ;;
+    wlanssid)
+      validate_alnum_8_24 "$val" || die "invalid wlanssid: must be empty or 8-24 alphanumerics" ;;
+    msposd_tty)
+      case "$val" in standalone|/dev/ttyS1|/dev/ttyS2) ;; *) die "invalid msposd_tty: $val" ;; esac ;;
+    wlanpass)
+      validate_alnum_8_24 "$val" || die "invalid wlanpass: must be empty or 8-24 alphanumerics" ;;
+    *)
+      die "unknown setting: $key" ;;
+  esac
+  fw_env_set "$key" "$val"
+  echo "ok"
+}
+
+fw_set_cmd(){ [ $# -ge 1 ] || die "usage: /sys/fw/set key=value"; fw_set_one "$1"; }
+
+fw_params(){
+  ok=1
+  for kv in "$@"; do case "$kv" in --*) continue;; esac; out="$(fw_set_one "$kv" 2>&1)" || { echo "$out" 1>&2; ok=0; }; done
+  [ $ok -eq 1 ] || exit 2
+  echo "ok"
+}
+
 validate_alnum_8_24(){
   val="$1"
   [ -z "$val" ] && return 0
@@ -369,6 +413,9 @@ case "$1" in
   # system
   /sys/help)            sys_help_json ;;
   /sys/fw/help)         fw_help_json ;;
+  /sys/fw/get)          shift; fw_get "$1" ;;
+  /sys/fw/set)          shift; fw_set_cmd "$@" ;;
+  /sys/fw/params)       shift; fw_params "$@" ;;
   /sys/shutdown)        shift; sys_shutdown_cmd "$@" ;;
   /sys/restart)         shift; sys_restart_cmd "$@" ;;
   /sys/fw/set_link_mode) shift; fw_set_link_mode "$1" ;;

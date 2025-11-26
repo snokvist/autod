@@ -6,6 +6,8 @@
 - Use the top-level `Makefile` targets instead of ad-hoc compiler invocations so build instructions stay accurate.
 - When editing any `scripts/**/exec-handler.sh`, ensure the `/sys/help` payload enumerates every available help endpoint so
   clients can discover them consistently (see `scripts/vtx/sys_help.msg` for the expected structure).
+- Prefer exposing configurable knobs through paired `get`/`set` commands plus a `settings` array in the help payload so the UI
+  can auto-generate typed controls (select/range/toggle/text) and refresh values without manual wiring.
 - UI screenshots are not required unless explicitly requested.
 - When touching anything under `html/`, especially the segmented web UI assets,
   audit related HTML, CSS, and JS files in the same feature bundle so the views
