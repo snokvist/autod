@@ -299,7 +299,7 @@ fw_get(){
   [ -n "$name" ] || die "missing name"
   fw_supported_key "$name" || die "unknown setting: $name"
   have fw_printenv || die "fw_printenv not available"
-  out=$(fw_printenv "$name" 2>&1) || { echo "$out" 1>&2; exit 2; }
+  out=$(fw_printenv -n "$name" 2>&1) || { echo "$out" 1>&2; exit 2; }
   echo "$out"
 }
 
