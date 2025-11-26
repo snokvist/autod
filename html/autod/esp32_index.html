@@ -364,6 +364,56 @@
   .node-help-output { width: 100%; min-height: 120px; }
   .node-slider { display: grid; gap: 0.35rem; }
   .node-slider-value { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; color: var(--mut); }
+  .node-setting-auto { font-size: 12px; color: var(--mut); }
+  .toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    user-select: none;
+    position: relative;
+  }
+  .toggle-input {
+    position: absolute;
+    opacity: 0;
+    width: 1px;
+    height: 1px;
+  }
+  .toggle-track {
+    width: 46px;
+    height: 26px;
+    background: linear-gradient(180deg, #dfe8f5, #ccd9ed);
+    border-radius: 999px;
+    border: 1px solid var(--line);
+    position: relative;
+    transition: background 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.7);
+  }
+  .toggle-thumb {
+    position: absolute;
+    top: 3px;
+    left: 3px;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+    transition: transform 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
+  }
+  .toggle-input:checked + .toggle-track {
+    background: linear-gradient(135deg, rgba(28,132,247,0.15), rgba(35,133,63,0.18));
+    border-color: rgba(35, 133, 63, 0.6);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.8);
+  }
+  .toggle-input:checked + .toggle-track .toggle-thumb {
+    transform: translateX(20px);
+    background: #2b8540;
+    box-shadow: 0 2px 6px rgba(43,133,64,0.35);
+  }
+  .toggle-input:focus-visible + .toggle-track {
+    outline: 2px solid var(--mut);
+    outline-offset: 2px;
+  }
   textarea { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
 
   /* Inline VRX styles */
@@ -2418,7 +2468,7 @@ function setNodesSummary(text){
   }
 
   function buildArgControl(arg){
-    const wrapper = document.createElement('label');
+    const wrapper = document.createElement('div');
     wrapper.className = 'node-arg';
     const metaLine = document.createElement('div');
     metaLine.className = 'node-arg-meta';
@@ -2446,6 +2496,12 @@ function setNodesSummary(text){
       return isNumeric ? 'number' : 'text';
     })();
 
+    const setKindMeta = (el) => {
+      if (!el) return;
+      el.dataset.kind = resolvedKind;
+      el.dataset.argKey = arg?.key || '';
+    };
+
     const makeSelect = () => {
       const select = document.createElement('select');
       if (control.multi) select.multiple = true;
@@ -2462,6 +2518,7 @@ function setNodesSummary(text){
           select.value = String(arg.default);
         }
       }
+      setKindMeta(select);
       return select;
     };
 
@@ -2481,14 +2538,28 @@ function setNodesSummary(text){
       slider.addEventListener('input', () => { valueLabel.textContent = `${slider.value}${unit}`; });
       sliderWrap.append(slider, valueLabel);
       wrapper.append(sliderWrap);
+      slider.dataset.unit = unit;
+      slider._valueLabel = valueLabel;
+      setKindMeta(slider);
       return slider;
     };
 
     let input;
     if (resolvedKind === 'toggle'){
+      const toggle = document.createElement('label');
+      toggle.className = 'toggle';
       input = document.createElement('input');
       input.type = 'checkbox';
+      input.className = 'toggle-input';
       input.checked = arg?.default === true;
+      setKindMeta(input);
+      const track = document.createElement('span');
+      track.className = 'toggle-track';
+      const thumb = document.createElement('span');
+      thumb.className = 'toggle-thumb';
+      track.append(thumb);
+      toggle.append(input, track);
+      wrapper.append(toggle);
     } else if (resolvedKind === 'select'){
       input = makeSelect();
     } else if (resolvedKind === 'range'){
@@ -2499,9 +2570,10 @@ function setNodesSummary(text){
       input.type = resolvedKind === 'number' ? 'number' : 'text';
       if (control.placeholder) input.placeholder = control.placeholder;
       if (arg?.default !== undefined) input.value = String(arg.default);
+      setKindMeta(input);
     }
-    wrapper.append(input);
-    return { wrapper, input };
+    if (input && !wrapper.contains(input)) wrapper.append(input);
+    return { wrapper, input, kind: resolvedKind };
   }
 
   function readArgValue(input, arg){
@@ -2515,6 +2587,56 @@ function setNodesSummary(text){
     const value = (input.value || '').trim();
     if (!value) return arg?.required ? '' : null;
     return value;
+  }
+
+  function parseSettingValueFromExec(exec, setting){
+    const stdout = String(exec?.stdout ?? '').trim();
+    if (!stdout) return undefined;
+    try {
+      const data = JSON.parse(stdout);
+      if (data && typeof data === 'object'){
+        if (setting?.key && data.hasOwnProperty(setting.key)) return data[setting.key];
+        if (data.hasOwnProperty('value')) return data.value;
+      }
+    } catch (err) {
+      /* ignore parse errors */
+    }
+    if (setting?.key){
+      const match = stdout.match(new RegExp(`${setting.key}\\s*=\\s*([^\\n]+)`));
+      if (match) return match[1].trim();
+    }
+    const lines = stdout.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    if (lines.length === 1) return lines[0];
+    return undefined;
+  }
+
+  function applyValueToControl(input, arg, value){
+    if (!input) return;
+    const kind = input.dataset.kind || input.type;
+    if (kind === 'toggle' || input.type === 'checkbox'){
+      const truthy = value === true || value === 'true' || value === '1' || value === 1 || String(value).toLowerCase() === 'on';
+      input.checked = !!truthy;
+      return;
+    }
+    if (kind === 'select' && input.tagName === 'SELECT'){
+      const vals = Array.isArray(value)
+        ? value.map(v => String(v))
+        : String(value ?? '').split(',').map(v => v.trim()).filter(Boolean);
+      Array.from(input.options).forEach(opt => { opt.selected = vals.includes(opt.value); });
+      if (!input.multiple && vals[0]) input.value = vals[0];
+      return;
+    }
+    const strVal = Array.isArray(value) ? value[0] : value;
+    if (kind === 'range'){
+      if (strVal === undefined || strVal === null) return;
+      input.value = String(strVal);
+      if (input._valueLabel){
+        const unit = input.dataset.unit || '';
+        input._valueLabel.textContent = `${input.value}${unit}`;
+      }
+      return;
+    }
+    input.value = strVal === undefined || strVal === null ? '' : String(strVal);
   }
 
   function renderHelpEndpoints(ui, help){
@@ -2585,7 +2707,56 @@ function setNodesSummary(text){
       actions.className = 'node-setting-actions';
       const status = document.createElement('div');
       status.className = 'node-setting-status';
-      status.textContent = 'Idle';
+      status.textContent = 'Changes auto-apply';
+      const hint = document.createElement('div');
+      hint.className = 'node-setting-auto';
+      hint.textContent = 'Changes auto-apply (250ms debounce)';
+      let setTimer = null;
+      let suppressSet = false;
+      let inFlight = false;
+
+      const runSet = () => {
+        if (!input) return;
+        if (inFlight){
+          if (!setTimer) setTimer = setTimeout(() => { setTimer = null; runSet(); }, 250);
+          return;
+        }
+        const val = readArgValue(input, setting);
+        if (val === ''){
+          status.textContent = `${setting?.key || 'value'} is required`;
+          return;
+        }
+        if (val === null || val === undefined){
+          status.textContent = 'No value selected';
+          return;
+        }
+        const normalized = Array.isArray(val) ? val.join(',') : val;
+        inFlight = true;
+        status.textContent = `Applying ${setPath}…`;
+        relayExecToNode(node, setPath, [`${setting?.key || 'value'}=${normalized}`]).then(({ exec }) => {
+          const ok = typeof exec?.rc === 'number' ? exec.rc === 0 : true;
+          const summary = summarizeExec(setPath, exec);
+          ui.output.value = summary;
+          getNodeHelpStore(key).lastOutput = summary;
+          status.textContent = ok ? 'Set applied' : 'Completed with errors';
+        }).catch(err => {
+          const msg = err.message || 'Command failed';
+          ui.output.value = `${setPath}\n${msg}`;
+          getNodeHelpStore(key).lastOutput = ui.output.value;
+          status.textContent = msg;
+        }).finally(() => {
+          inFlight = false;
+        });
+      };
+
+      const scheduleSet = () => {
+        if (suppressSet) return;
+        if (setTimer) clearTimeout(setTimer);
+        setTimer = setTimeout(() => {
+          setTimer = null;
+          runSet();
+        }, 250);
+      };
 
       if (getCmd && getPath){
         const getBtn = document.createElement('button');
@@ -2602,7 +2773,15 @@ function setNodesSummary(text){
             const summary = summarizeExec(getPath, exec);
             ui.output.value = summary;
             getNodeHelpStore(key).lastOutput = summary;
-            status.textContent = ok ? 'Success' : 'Completed with errors';
+            const parsed = parseSettingValueFromExec(exec, setting);
+            if (parsed !== undefined){
+              suppressSet = true;
+              applyValueToControl(input, setting, parsed);
+              suppressSet = false;
+              status.textContent = ok ? `Updated to ${parsed}` : 'Completed with errors';
+            } else {
+              status.textContent = ok ? 'Get completed' : 'Completed with errors';
+            }
           }).catch(err => {
             const msg = err.message || 'Command failed';
             ui.output.value = `${getPath}\n${msg}`;
@@ -2614,37 +2793,10 @@ function setNodesSummary(text){
         });
         actions.append(getBtn);
       }
+      const eventName = input?.type === 'range' ? 'input' : (input?.tagName === 'SELECT' || input?.type === 'checkbox' ? 'change' : 'input');
+      if (input) input.addEventListener(eventName, () => scheduleSet());
 
-      const setBtn = document.createElement('button');
-      setBtn.type = 'button';
-      setBtn.textContent = 'Set';
-      setBtn.addEventListener('click', ev => {
-        ev.stopPropagation();
-        const val = readArgValue(input, setting);
-        if (val === ''){
-          status.textContent = `${setting?.key || 'value'} is required`;
-          return;
-        }
-        const normalized = Array.isArray(val) ? val.join(',') : val;
-        const args = [`${setting?.key || 'value'}=${normalized}`];
-        setBtn.disabled = true;
-        status.textContent = `Running ${setPath}…`;
-        relayExecToNode(node, setPath, args).then(({ exec }) => {
-          const ok = typeof exec?.rc === 'number' ? exec.rc === 0 : true;
-          const summary = summarizeExec(setPath, exec);
-          ui.output.value = summary;
-          getNodeHelpStore(key).lastOutput = summary;
-          status.textContent = ok ? 'Success' : 'Completed with errors';
-        }).catch(err => {
-          const msg = err.message || 'Command failed';
-          ui.output.value = `${setPath}\n${msg}`;
-          getNodeHelpStore(key).lastOutput = ui.output.value;
-          status.textContent = msg;
-        }).finally(() => {
-          setBtn.disabled = false;
-        });
-      });
-      actions.append(setBtn, status);
+      actions.append(hint, status);
       card.append(actions);
       ui.settings.append(card);
     });
