@@ -11,6 +11,8 @@
     {"name":"help","description":"Describe overall system controls","args":[]},
     {"name":"shutdown","description":"Shut down the device immediately","args":[]},
     {"name":"restart","description":"Restart the device immediately","args":[]},
-    {"name":"ping","description":"Send a single ICMP ping with a 1 second timeout","args":[{"key":"host","type":"string","required":true}]}
+    {"name":"ping","description":"Send a single ICMP ping with a 1 second timeout","args":[{"key":"host","type":"string","required":true}]},
+    {"name":"luci-on","description":"Enable the LuCI web interface","args":[]},
+    {"name":"luci-off","description":"Disable the LuCI web interface","args":[]}
   ]
 }
