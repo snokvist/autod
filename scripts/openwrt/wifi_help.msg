@@ -7,7 +7,7 @@
     {"name":"params","description":"Set multiple wifi parameters","args":[{"key":"pairs","type":"string","control":{"kind":"text"},"required":false}]},
     {"name":"start","description":"Start WiFi link","args":[]},
     {"name":"stop","description":"Stop WiFi link","args":[]},
-    {"name":"status","description":"WiFi link status (placeholder)","args":[]},
+    {"name":"status","description":"WiFi link status (wifi status JSON)","args":[]},
     {"name":"help","description":"Describe WiFi controls","args":[]}
   ],
   "settings":[

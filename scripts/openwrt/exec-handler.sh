@@ -4,7 +4,7 @@
 # Contract: /exec with JSON {"path":"/sys/<cap>/<command>","args":[...]}
 #
 # Implemented:
-#   /sys/help|shutdown|restart|ping
+#   /sys/help|shutdown|restart|ping|luci-on|luci-off
 #   /sys/link/help|select|start|stop|status
 #   /sys/link/wifi/help|get|set|params|start|stop|status
 #   /sys/link/wfb_ng/help|get|set|params|start|stop|status
@@ -63,9 +63,12 @@ wifi_stop(){
 }
 
 wifi_status(){
-  # placeholder (hardcoded simple status string)
-  echo "wifi: status unavailable (placeholder)"
-  return 0
+  if have wifi; then
+    wifi status 2>/dev/null || { echo "wifi status failed" 1>&2; return 3; }
+    return 0
+  fi
+  echo "wifi status unsupported on this device" 1>&2
+  return 3
 }
 
 wifi_get(){ name="$1"; [ -n "$name" ] || die "missing name"; link_param_get "$name"; }
@@ -131,12 +134,22 @@ sys_shutdown_cmd(){ shutdown now; }
 
 sys_restart_cmd(){ reboot now; }
 
+sys_luci_on(){
+  if have luci-on; then luci-on "$@"; else die "luci-on not available"; fi
+}
+
+sys_luci_off(){
+  if have luci-off; then luci-off "$@"; else die "luci-off not available"; fi
+}
+
 # ======================= DISPATCH =======================
 case "$1" in
   /sys/help)               sys_help_json ;;
   /sys/shutdown)           shift; sys_shutdown_cmd "$@" ;;
   /sys/restart)            shift; sys_restart_cmd "$@" ;;
   /sys/ping)               shift; ping -c 1 -W 1 "$1" 2>&1 ;;
+  /sys/luci-on)            shift; sys_luci_on "$@" ;;
+  /sys/luci-off)           shift; sys_luci_off "$@" ;;
 
   # link overall (wifi_mode-driven)
   /sys/link/help)         link_help_json ;;
