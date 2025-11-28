@@ -5,7 +5,7 @@
 #
 # Implemented:
 #   /sys/help|shutdown|restart|ping|luci-on|luci-off
-#   /sys/link/help|select|start|stop|status
+#   /sys/link/help|status
 #   /sys/link/wifi/help|get|set|params|start|stop|status
 #   /sys/link/wfb_ng/help|get|set|params|start|stop|status
 #
@@ -35,12 +35,6 @@ emit_msg(){
 
 wifi_mode_get(){
   if have fw_printenv; then fw_printenv -n wifi_mode 2>/dev/null; else echo "sta"; fi
-}
-
-wifi_mode_set(){
-  mode="$1"
-  case "$mode" in wfb_ng|ap|sta) ;; *) die "invalid wifi_mode: $mode";; esac
-  if have fw_setenv; then fw_setenv wifi_mode "$mode" >/dev/null 2>&1 || die "failed to set wifi_mode"; echo "ok"; else die "fw_setenv not available"; fi
 }
 
 # env helpers
@@ -103,22 +97,6 @@ wfb_params(){ ok=1; for kv in "$@"; do case "$kv" in --*) continue;; esac; out="
 # Overall link control using wifi_mode
 link_help_json(){ emit_msg "link_help.msg"; }
 
-link_route_start(){
-  mode="$(wifi_mode_get)"
-  case "$mode" in
-    wfb_ng) wfb_start ;;
-    ap|sta|*) wifi_start ;;  # default to WiFi for any non-wfb_ng
-  esac
-}
-
-link_route_stop(){
-  mode="$(wifi_mode_get)"
-  case "$mode" in
-    wfb_ng) wfb_stop ;;
-    ap|sta|*) wifi_stop ;;
-  esac
-}
-
 link_route_status(){
   mode="$(wifi_mode_get)"
   case "$mode" in
@@ -153,9 +131,6 @@ case "$1" in
 
   # link overall (wifi_mode-driven)
   /sys/link/help)         link_help_json ;;
-  /sys/link/select)       shift; wifi_mode_set "$1" ;;
-  /sys/link/start)        shift; link_route_start "$@" ;;
-  /sys/link/stop)         shift; link_route_stop "$@" ;;
   /sys/link/status)       shift; link_route_status "$@" ;;
 
   # wifi
