@@ -5,9 +5,9 @@
 #
 # Implemented:
 #   /sys/help|shutdown|restart|ping|luci-on|luci-off
-#   /sys/link/help|select|start|stop|status
+#   /sys/link/help|status
 #   /sys/link/wifi/help|get|set|params|start|stop|status
-#   /sys/link/wfb_ng/help|get|set|params|start|stop|status
+#   /sys/link/wfb_ng/help|get|set|params|start|stop|restart|status
 #
 # Notes:
 # - Cheap argv parsing; handler remains JSON-agnostic.
@@ -35,12 +35,6 @@ emit_msg(){
 
 wifi_mode_get(){
   if have fw_printenv; then fw_printenv -n wifi_mode 2>/dev/null; else echo "sta"; fi
-}
-
-wifi_mode_set(){
-  mode="$1"
-  case "$mode" in wfb_ng|ap|sta) ;; *) die "invalid wifi_mode: $mode";; esac
-  if have fw_setenv; then fw_setenv wifi_mode "$mode" >/dev/null 2>&1 || die "failed to set wifi_mode"; echo "ok"; else die "fw_setenv not available"; fi
 }
 
 # env helpers
@@ -79,21 +73,40 @@ wifi_params(){ ok=1; for kv in "$@"; do case "$kv" in --*) continue;; esac; out=
 wfb_help_json(){ emit_msg "wfb_help.msg"; }
 
 wfb_start(){
+  if [ -x /etc/init.d/wfb-ng ]; then /etc/init.d/wfb-ng start >/dev/null 2>&1 && { echo "wfb_ng started"; return 0; } fi
   if [ -x /etc/init.d/S95wfb_ng ]; then /etc/init.d/S95wfb_ng start >/dev/null 2>&1 && { echo "wfb_ng started"; return 0; } fi
   if [ -x /etc/init.d/S95wfb-ng ]; then /etc/init.d/S95wfb-ng start >/dev/null 2>&1 && { echo "wfb_ng started"; return 0; } fi
   echo "wfb_ng start unsupported on this device" 1>&2; return 3
 }
 
 wfb_stop(){
+  if [ -x /etc/init.d/wfb-ng ]; then /etc/init.d/wfb-ng stop >/dev/null 2>&1 && { echo "wfb_ng stopped"; return 0; } fi
   if [ -x /etc/init.d/S95wfb_ng ]; then /etc/init.d/S95wfb_ng stop >/dev/null 2>&1 && { echo "wfb_ng stopped"; return 0; } fi
   if [ -x /etc/init.d/S95wfb-ng ]; then /etc/init.d/S95wfb-ng stop >/dev/null 2>&1 && { echo "wfb_ng stopped"; return 0; } fi
   echo "wfb_ng stop unsupported on this device" 1>&2; return 3
 }
 
+wfb_restart(){
+  if [ -x /etc/init.d/wfb-ng ]; then /etc/init.d/wfb-ng restart >/dev/null 2>&1 && { echo "wfb_ng restarted"; return 0; } fi
+  if [ -x /etc/init.d/S95wfb_ng ]; then /etc/init.d/S95wfb_ng restart >/dev/null 2>&1 && { echo "wfb_ng restarted"; return 0; } fi
+  if [ -x /etc/init.d/S95wfb-ng ]; then /etc/init.d/S95wfb-ng restart >/dev/null 2>&1 && { echo "wfb_ng restarted"; return 0; } fi
+  echo "wfb_ng restart unsupported on this device" 1>&2; return 3
+}
+
 wfb_status(){
-  # placeholder
-  echo "wfb_ng: status unavailable (placeholder)"
-  return 0
+  if have pidof; then
+    pids=$(pidof forker 2>/dev/null) || true
+    if [ -z "$pids" ]; then
+      echo "wfb_ng status unavailable: forker not running" 1>&2
+      return 3
+    fi
+    if kill -SIGUSR1 $pids >/dev/null 2>&1; then
+      echo "wfb_ng status signal sent"
+      return 0
+    fi
+  fi
+  echo "wfb_ng status unsupported on this device" 1>&2
+  return 3
 }
 
 wfb_get(){ name="$1"; [ -n "$name" ] || die "missing name"; link_param_get "$name"; }
@@ -102,22 +115,6 @@ wfb_params(){ ok=1; for kv in "$@"; do case "$kv" in --*) continue;; esac; out="
 
 # Overall link control using wifi_mode
 link_help_json(){ emit_msg "link_help.msg"; }
-
-link_route_start(){
-  mode="$(wifi_mode_get)"
-  case "$mode" in
-    wfb_ng) wfb_start ;;
-    ap|sta|*) wifi_start ;;  # default to WiFi for any non-wfb_ng
-  esac
-}
-
-link_route_stop(){
-  mode="$(wifi_mode_get)"
-  case "$mode" in
-    wfb_ng) wfb_stop ;;
-    ap|sta|*) wifi_stop ;;
-  esac
-}
 
 link_route_status(){
   mode="$(wifi_mode_get)"
@@ -153,9 +150,6 @@ case "$1" in
 
   # link overall (wifi_mode-driven)
   /sys/link/help)         link_help_json ;;
-  /sys/link/select)       shift; wifi_mode_set "$1" ;;
-  /sys/link/start)        shift; link_route_start "$@" ;;
-  /sys/link/stop)         shift; link_route_stop "$@" ;;
   /sys/link/status)       shift; link_route_status "$@" ;;
 
   # wifi
@@ -174,6 +168,7 @@ case "$1" in
   /sys/link/wfb_ng/params) shift; wfb_params "$@" ;;
   /sys/link/wfb_ng/start)  shift; wfb_start "$@" ;;
   /sys/link/wfb_ng/stop)   shift; wfb_stop "$@" ;;
+  /sys/link/wfb_ng/restart) shift; wfb_restart "$@" ;;
   /sys/link/wfb_ng/status) shift; wfb_status "$@" ;;
 
   *) echo "unknown path: $1" 1>&2; exit 2 ;;

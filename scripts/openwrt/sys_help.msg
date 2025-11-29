@@ -3,7 +3,7 @@
   "contract_version":"0.1",
   "help_endpoints":[
     {"path":"/sys/help","description":"System-level controls and discovery"},
-    {"path":"/sys/link/help","description":"Link role selection and status"},
+    {"path":"/sys/link/help","description":"Link status"},
     {"path":"/sys/link/wifi/help","description":"Wi-Fi link configuration"},
     {"path":"/sys/link/wfb_ng/help","description":"WFB-NG link configuration"}
   ],
