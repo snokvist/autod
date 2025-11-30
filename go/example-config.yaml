@@ -1,0 +1,17 @@
+# Example configuration for autod-lite in Go.
+# Mode can be "master" or "slave".
+mode: master
+id: master-1
+listen: ":8080"
+# advertise is only required for slaves to tell the master how to reach them.
+advertise: ""
+master_url: ""
+exec_timeout: 10s
+register_interval: 15s
+probe_cidrs:
+  - "192.168.1.0/30"
+probe_interval: 45s
+probe_port: 8080
+slots:
+  - cam0
+  - cam1
