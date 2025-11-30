@@ -79,8 +79,10 @@ Each flavour drops intermediates under `build/<flavour>/` and strips binaries au
 A slim Go-based reimplementation that only exposes `/health`, `/exec`, `/nodes`, and sync endpoints lives under [`go/`](go/). Build it separately with:
 
 ```bash
-cd go
-go build ./cmd/autod-lite
+make autod-lite
+
+# Optional ARMv7 hard-float cross build
+make autod-lite-armhf
 ```
 
 Refer to [`go/README.md`](go/README.md) for configuration and usage examples.

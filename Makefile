@@ -191,9 +191,16 @@ $(eval $(call DEFINE_FLAVOR,gnu,$(CC_GNU),gnu,$(APP)-gnu,-gnu,$(STRIP_GNU)))
 $(eval $(call DEFINE_FLAVOR,owrt,$(CC_OWRT),owrt,$(APP)-owrt,-owrt,$(STRIP_OWRT)))
 
 # ===== Top-level convenience targets =====
-.PHONY: all tools tools-musl tools-gnu tools-owrt clean strip install help
+.PHONY: all tools tools-musl tools-gnu tools-owrt autod-lite autod-lite-armhf clean strip install help
 
 all: native
+
+# Go prototype helpers
+autod-lite:
+	cd go && go build -o autod-lite ./cmd/autod-lite
+
+autod-lite-armhf:
+	cd go && GOOS=linux GOARCH=arm GOARM=7 go build -o autod-lite-armhf ./cmd/autod-lite
 
 # Utilities (native by default)
 tools: sse_tail udp_relay antenna_osd ip2uart joystick2crsf

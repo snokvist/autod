@@ -12,9 +12,24 @@ The legacy C implementation remains untouched for comparison and review.
 
 ## Building
 
+From the repository root, you can use the top-level `Makefile` targets:
+
+```
+# Native build (emits go/autod-lite)
+make autod-lite
+
+# Cross-compile for ARMv7 hard-float (emits go/autod-lite-armhf)
+make autod-lite-armhf
+```
+
+To build manually from this directory:
+
 ```
 cd go
 go build ./cmd/autod-lite
+
+# Cross-compile without the Makefile
+GOOS=linux GOARCH=arm GOARM=7 go build -o autod-lite-armhf ./cmd/autod-lite
 ```
 
 ## Configuration
