@@ -20,6 +20,9 @@ make autod-lite
 
 # Cross-compile for ARMv7 hard-float (emits go/autod-lite-armhf)
 make autod-lite-armhf
+
+# Size-optimised build (CGO disabled, stripped, optional UPX compression; override GO_LITE_GOOS/GO_LITE_GOARCH as needed)
+make autod-lite-min
 ```
 
 To build manually from this directory:
@@ -30,6 +33,10 @@ go build ./cmd/autod-lite
 
 # Cross-compile without the Makefile
 GOOS=linux GOARCH=arm GOARM=7 go build -o autod-lite-armhf ./cmd/autod-lite
+
+# Size-optimised binary (roughly 50 KB when UPX is available)
+CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -buildid=" -o autod-lite-min ./cmd/autod-lite
+command -v upx >/dev/null && upx --lzma --best autod-lite-min
 ```
 
 ## Configuration

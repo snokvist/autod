@@ -83,6 +83,9 @@ make autod-lite
 
 # Optional ARMv7 hard-float cross build
 make autod-lite-armhf
+
+# Size-optimised build (stripped, optional UPX compression; set GO_LITE_GOOS/GO_LITE_GOARCH to override)
+make autod-lite-min
 ```
 
 Refer to [`go/README.md`](go/README.md) for configuration and usage examples.
