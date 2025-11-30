@@ -14,20 +14,19 @@
     {"name":"help","description":"Describe WFB link controls","args":[]}
   ],
   "settings":[
-    {"key":"rx_nics","type":"string","default":"wlx40a5ef2f229b","description":"Receive NIC names (CSV)","control":{"kind":"text","placeholder":"wlx..."}},
-    {"key":"tx_nics","type":"string","default":"wlx40a5ef2f229b","description":"Transmit NIC names (CSV)","control":{"kind":"text","placeholder":"wlx..."}},
-    {"key":"master_node","type":"string","default":"192.168.2.20","description":"Master node IP or hostname","control":{"kind":"text","placeholder":"192.168.2.20"}},
-    {"key":"link_id","type":"int","default":7669206,"description":"Link identifier","control":{"kind":"text"}},
-    {"key":"mcs","type":"int","default":2,"description":"Modulation coding scheme index","control":{"kind":"range","min":0,"max":15,"step":1}},
-    {"key":"ldpc","type":"int","default":0,"description":"LDPC toggle (0/1)","control":{"kind":"toggle"}},
-    {"key":"stbc","type":"int","default":0,"description":"STBC toggle (0/1)","control":{"kind":"toggle"}},
+    {"key":"rx_nics","type":"string","default":"wlx40a5ef2f229b","description":"Receive NIC names (comma-separated) used by the WFB link","control":{"kind":"text","placeholder":"wlx..."}},
+    {"key":"tx_nics","type":"string","default":"wlx40a5ef2f229b","description":"Transmit NIC names (comma-separated) used by the WFB link","control":{"kind":"text","placeholder":"wlx..."}},
+    {"key":"master_node","type":"string","default":"192.168.2.20","description":"Master node IP or hostname coordinating this link","control":{"kind":"text","placeholder":"192.168.2.20"}},
+    {"key":"link_id","type":"int","default":7669206,"description":"Unique link identifier shared between peers","control":{"kind":"text"}},
+    {"key":"mcs","type":"int","default":2,"description":"Modulation coding scheme index (0–15)","control":{"kind":"range","min":0,"max":15,"step":1}},
+    {"key":"ldpc","type":"bool","default":false,"description":"Enable LDPC forward error correction","control":{"kind":"toggle"}},
+    {"key":"stbc","type":"bool","default":false,"description":"Enable space-time block coding","control":{"kind":"toggle"}},
     {"key":"key_file","type":"string","default":"/etc/gs.key","description":"Path to the encryption key file","control":{"kind":"text","placeholder":"/etc/gs.key"}},
     {"key":"log_interval","type":"int","default":1000,"description":"Telemetry log interval (ms)","control":{"kind":"range","min":0,"max":5000,"step":50,"unit":"ms"}},
-    {"key":"REGION","type":"string","default":"US","description":"Regulatory region","control":{"kind":"text","placeholder":"US"}},
-    {"key":"CHANNEL","type":"int","default":161,"description":"Operating channel","control":{"kind":"range","min":1,"max":196,"step":1}},
-    {"key":"BANDWIDTH","type":"string","default":"HT20","description":"PHY bandwidth profile","control":{"kind":"select","options":["HT20","HT40"],"multi":false}},
+    {"key":"REGION","type":"string","default":"US","description":"Regulatory region for the WFB radios","control":{"kind":"text","placeholder":"US"}},
+    {"key":"CHANNEL","type":"int","default":165,"description":"Operating 5 GHz channel","control":{"kind":"select","options":[36,40,44,48,149,153,157,161,165]}},
     {"key":"TXPOWER","type":"int","default":500,"description":"Transmit power (mW)","control":{"kind":"range","min":1,"max":2000,"step":1,"unit":"mW"}},
-    {"key":"WFB_BW_MHZ","type":"int","default":20,"description":"WFB bandwidth (MHz)","control":{"kind":"range","min":5,"max":80,"step":5,"unit":"MHz"}}
+    {"key":"WFB_BW_MHZ","type":"int","default":20,"description":"WFB channel bandwidth (MHz)","control":{"kind":"range","min":5,"max":80,"step":5,"unit":"MHz"}}
   ],
   "notes":[
     "Service controls call systemctl against wfb_supervisor.service.",

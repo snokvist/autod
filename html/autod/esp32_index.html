@@ -497,6 +497,8 @@
   .log-text { margin: 0; background: #0f1620; color: #eaf1fb; border: 1px solid #1f3148; border-radius: 8px; padding: 8px 10px; white-space: pre-wrap; word-break: break-word; }
 
   .nodes-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; }
+  #browserNodeContainer { grid-template-columns: minmax(0, 1fr); }
+  #browserNodeContainer .node { width: 100%; }
   .node {
     border: 1px solid var(--line);
     background: linear-gradient(145deg, rgba(15, 108, 209, 0.05), rgba(15, 108, 209, 0.02));
