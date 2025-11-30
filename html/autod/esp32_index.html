@@ -666,6 +666,7 @@
       <button data-tab="slot1" aria-controls="panel-slot1" class="slot-primary" title="Slot 1 slave assignment">Slot 1</button>
       <button data-tab="slot2" aria-controls="panel-slot2" title="Slot 2 slave assignment">Slot 2</button>
       <button data-tab="slot3" aria-controls="panel-slot3" title="Slot 3 slave assignment">Slot 3</button>
+      <button data-tab="slot4" aria-controls="panel-slot4" title="Slot 4 slave assignment">Slot 4</button>
     </div>
   </div>
 </header>
@@ -1033,6 +1034,73 @@
       </section>
     </div>
   </section>
+
+  <section class="tab-panel" data-panel="slot4" id="panel-slot4">
+    <div class="slot-layout" data-slot="4">
+      <section class="card slot-card">
+        <h2>Slot 4</h2>
+        <div class="body">
+          <div class="slot-summary-block">
+            <div class="slot-summary-head">
+              <div class="slot-summary-title">
+                <strong id="slot4Summary">No slave assigned.</strong>
+              </div>
+              <div class="slot-meta-inline">
+                <span class="badge" id="slot4LastSeen">Last seen —</span>
+              </div>
+            </div>
+            <div class="slot-line" id="slot4Meta">—</div>
+            <div class="slot-line" id="slot4SlotMeta">Slot config: —</div>
+          </div>
+          <div class="slot-actions" data-slot="4">
+            <div class="slot-action-switch" role="group" aria-label="Slot 4 actions">
+              <button type="button" class="active" data-slot-action="assign">Assign</button>
+              <button type="button" data-slot-action="move">Move</button>
+              <button type="button" data-slot-action="replay">Replay</button>
+            </div>
+            <div class="slot-action-panels">
+              <div class="slot-action-panel slot-waiting active" data-slot-panel="assign">
+                <div class="slot-actions-grid">
+                  <label>Assign waiting slave
+                    <select id="slot4AssignSelect" class="slot-assign-select"></select>
+                  </label>
+                  <div class="slot-action-row">
+                    <button type="button" class="slot-assign-btn" data-slot="4">Assign to slot 4</button>
+                    <div class="mut" id="slot4WaitingSummary">Waiting: —</div>
+                  </div>
+                </div>
+              </div>
+              <div class="slot-action-panel" data-slot-panel="move">
+                <div class="slot-actions-grid">
+                  <label>Move assignment
+                    <select id="slot4MoveSelect" class="slot-move-select"></select>
+                  </label>
+                  <div class="slot-action-row">
+                    <button type="button" class="slot-move-btn" data-slot="4">Send move</button>
+                    <div class="mut">Move or unassign the current slave.</div>
+                  </div>
+                </div>
+              </div>
+              <div class="slot-action-panel" data-slot-panel="replay">
+                <div class="slot-actions-grid">
+                  <div class="slot-action-row">
+                    <button type="button" class="slot-replay-btn" data-slot="4">Replay commands</button>
+                    <div class="mut">Re-send the latest slot commands to this slave.</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+      <section class="card slot-node-card">
+        <h3>Node & relay</h3>
+        <div class="body" id="slot4NodeContainer">
+          <div class="slot-node-empty">Waiting for slot assignment.</div>
+        </div>
+      </section>
+    </div>
+  </section>
 </main>
 
 <script type="module">
@@ -1064,7 +1132,7 @@ const nodesState = {
 const nodeHelpState = new Map();
 const NODES_POLL_MS = 7000;
 const NODES_SCAN_POLL_MS = 1000;
-const MAX_SYNC_SLOTS = 3;
+const MAX_SYNC_SLOTS = 4;
 const syncState = { slots: Array.from({ length: MAX_SYNC_SLOTS }, () => null), meta: new Map(), waiting: [], refMs: 0, signature: '' };
 const syncUiState = { busy: false, pollTimer: null, loading: false, pendingRefresh: false };
 const SYNC_POLL_MS = 7000;
