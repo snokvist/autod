@@ -11,8 +11,7 @@
 #   /sys/pixelpilot_mini_rk/help|toggle_osd|toggle_recording|gamma|start|stop|restart
 #   /sys/udp_relay/help|start|stop|status
 #   /sys/joystick2crsf/help|get|set|reload|start|stop|restart|status
-#   /sys/link/wfb/help|get|set|status
-#   /sys/link/start|stop|restart|enable|disable
+#   /sys/link/wfb/help|get|set|status|start|stop|restart|enable|disable
 #   /sys/ping                                    (utility passthrough)
 #
 # Notes:
@@ -1256,11 +1255,11 @@ case "$1" in
   /sys/link/wfb/help)      print_help_msg "link_help.msg" ;;
   /sys/link/wfb/get)       shift; wfb_conf_get "$@" ;;
   /sys/link/wfb/set)       shift; wfb_conf_set "$@" ;;
-  /sys/link/start)         shift; wfb_start "$@" ;;
-  /sys/link/stop)          shift; wfb_stop "$@" ;;
-  /sys/link/restart)       shift; wfb_restart "$@" ;;
-  /sys/link/enable)        shift; wfb_enable "$@" ;;
-  /sys/link/disable)       shift; wfb_disable "$@" ;;
+  /sys/link/wfb/start)     shift; wfb_start "$@" ;;
+  /sys/link/wfb/stop)      shift; wfb_stop "$@" ;;
+  /sys/link/wfb/restart)   shift; wfb_restart "$@" ;;
+  /sys/link/wfb/enable)    shift; wfb_enable "$@" ;;
+  /sys/link/wfb/disable)   shift; wfb_disable "$@" ;;
   /sys/link/wfb/status)    shift; wfb_status "$@" ;;
 
   # dvr recordings

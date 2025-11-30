@@ -1,5 +1,5 @@
 {
-  "cap":"link",
+  "cap":"link/wfb",
   "contract_version":"0.1",
   "config_path":"/etc/wfb.conf",
   "commands":[
