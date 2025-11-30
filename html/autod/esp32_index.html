@@ -276,6 +276,10 @@
   .runtime-scan .button { justify-content: flex-start; }
   .runtime-pill-stack { display: grid; gap: 6px; }
   .runtime-pill-stack .status-pill { width: 100%; justify-content: flex-start; }
+  .runtime-node-block { display: grid; gap: 8px; border: 1px dashed var(--line); border-radius: 12px; padding: 0.85rem 1rem; background: linear-gradient(135deg, rgba(15, 108, 209, 0.06), rgba(15, 108, 209, 0.02)); box-shadow: 0 6px 16px rgba(14, 76, 149, 0.08); }
+  .runtime-node-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; flex-wrap: wrap; }
+  .runtime-node-title { font-weight: 700; }
+  .runtime-node-note { color: var(--mut); font-size: 13px; }
   .tab-panel { display: none; flex-direction: column; gap: 1.5rem; }
   .tab-panel.active { display: flex; }
   :root { --card-pad: 1.1rem 1.25rem; }
@@ -708,6 +712,15 @@
         <div class="kv"><div class="mut">Loadavg</div><div id="dev_load">—</div></div>
         <div class="kv"><div class="mut">Capabilities</div><div class="caps" id="dev_caps">—</div></div>
         <div class="kv"><div class="mut">SSE</div><div class="sse" id="dev_sse">—</div></div>
+        <div class="runtime-node-block">
+          <div class="runtime-node-head">
+            <div class="runtime-node-title">Browser node</div>
+            <div class="runtime-node-note">Browse /sys help directly from this UI</div>
+          </div>
+          <div class="nodes-grid" id="browserNodeContainer">
+            <div class="slot-node-empty">Waiting for /caps…</div>
+          </div>
+        </div>
         <div class="toolbar" id="deviceRuntimeActions" style="display:none">
           <button id="pixelpilotMiniRkRebootBtn">Reboot device</button>
           <button id="pixelpilotMiniRkShutdownBtn">Shutdown device</button>
@@ -1141,7 +1154,8 @@ const tabState = { active: 'groundstation' };
 const DEFAULT_CMD_TIMEOUT_MS = 6000;
 const MAX_LOG_ENTRIES = 20;
 const LOGS_RECONNECT_DELAY_MS = 1000;
-const capsState = { capList: new Set(), hasExec: false };
+const capsState = { capList: new Set(), hasExec: false, latest: null };
+const browserNodeState = { signature: '' };
 const dvrState = { initialized: false, hasExec: false, loading: false, enabled: false };
 const miniRkState = { initialized: false, gamma: { presets: [], loading: false } };
 const logsState = {
@@ -1946,6 +1960,58 @@ function setHeaderStatus(text){
   if (headerStatus) headerStatus.textContent = text;
 }
 
+function buildBrowserNodeRecord(caps){
+  const host = window.location.hostname || 'browser';
+  const parsedPort = Number(window.location.port);
+  return {
+    id: 'browser',
+    name: 'browser',
+    ip: host,
+    host,
+    port: Number.isFinite(parsedPort) ? parsedPort : null,
+    device: caps?.device || 'Browser',
+    role: caps?.role || 'browser',
+    version: caps?.version || '',
+    last_seen: Math.floor(Date.now() / 1000),
+    local: true
+  };
+}
+
+function browserNodeSignature(node){
+  return JSON.stringify({
+    device: node?.device || '',
+    role: node?.role || '',
+    version: node?.version || '',
+    host: node?.host || node?.ip || '',
+    port: Number.isFinite(node?.port) ? node.port : ''
+  });
+}
+
+function renderBrowserNode(caps){
+  const container = document.getElementById('browserNodeContainer');
+  if (!container) return;
+  if (!caps){
+    browserNodeState.signature = '';
+    container.innerHTML = '';
+    container.append(buildSlotPlaceholder('Load /caps to browse browser commands.'));
+    return;
+  }
+  if (!capsState.hasExec){
+    browserNodeState.signature = 'no-exec';
+    container.innerHTML = '';
+    container.append(buildSlotPlaceholder('Exec capability required to browse browser commands.'));
+    return;
+  }
+  const node = buildBrowserNodeRecord(caps);
+  const signature = browserNodeSignature(node);
+  if (browserNodeState.signature === signature && container.childElementCount){
+    return;
+  }
+  browserNodeState.signature = signature;
+  container.innerHTML = '';
+  container.append(buildNodeCard(node, 'browser'));
+}
+
 function applyCapabilityToggles(capList){
   const list = Array.isArray(capList) ? capList : [];
   capsState.capList = new Set(list);
@@ -2001,6 +2067,7 @@ function applyCapabilityToggles(capList){
 }
 
 function renderCaps(caps){
+  capsState.latest = caps || null;
   document.getElementById('dev_device').textContent = caps?.device || '—';
   document.getElementById('dev_role').textContent = caps?.role || '—';
   document.getElementById('dev_version').textContent = caps?.version || '—';
@@ -2018,6 +2085,7 @@ function renderCaps(caps){
   }
   setCapsStatus(`Updated ${new Date().toLocaleTimeString()}`);
   applyCapabilityToggles(Array.isArray(caps?.caps) ? caps.caps : []);
+  renderBrowserNode(caps);
 }
 
 async function fetchCaps(){
@@ -2032,6 +2100,7 @@ async function fetchCaps(){
     renderCaps(data);
   } catch (err) {
     setCapsStatus(`Failed (${err.message})`);
+    renderBrowserNode(null);
   }
 }
 
@@ -2434,6 +2503,10 @@ function setNodesSummary(text){
   }
 
   async function relayExecToNode(node, path, args, timeoutMs = DEFAULT_CMD_TIMEOUT_MS){
+    if (node?.local){
+      const exec = await postExec({ path, args: Array.isArray(args) ? args : [] }, timeoutMs);
+      return { relay: { local: true }, exec };
+    }
     const ip = node?.ip || node?.host;
     if (!ip) throw new Error('missing node ip');
     const payload = {
@@ -3090,7 +3163,10 @@ function buildNodeCard(node, idx){
   roleSpan.textContent = node.role || '—';
   const ipSpan = document.createElement('span');
   ipSpan.className = 'ip';
-  ipSpan.textContent = `${node.ip || '—'}:${node.port ?? ''}`;
+  const portValue = node.port;
+  const hasPort = portValue !== null && portValue !== undefined && portValue !== '';
+  const portText = hasPort ? portValue : '';
+  ipSpan.textContent = hasPort ? `${node.ip || '—'}:${portText}` : (node.ip || '—');
   top.append(roleSpan, ipSpan);
 
   const deviceLine = document.createElement('div');
