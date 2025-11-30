@@ -23,6 +23,9 @@ make autod-lite-armhf
 
 # Size-optimised build (CGO disabled, stripped, optional UPX compression; override GO_LITE_GOOS/GO_LITE_GOARCH as needed)
 make autod-lite-min
+
+# Env-only, YAML-free build (uses -tags tiny; trimmed reflection footprint)
+make autod-lite-tiny
 ```
 
 To build manually from this directory:
@@ -34,14 +37,24 @@ go build ./cmd/autod-lite
 # Cross-compile without the Makefile
 GOOS=linux GOARCH=arm GOARM=7 go build -o autod-lite-armhf ./cmd/autod-lite
 
-# Size-optimised binary (roughly 50 KB when UPX is available)
+# Size-optimised binary (stripped, no debug info)
 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -buildid=" -o autod-lite-min ./cmd/autod-lite
 command -v upx >/dev/null && upx --lzma --best autod-lite-min
+
+# Env-only build that avoids YAML/reflection; configure via AUTOD_* env vars
+CGO_ENABLED=0 go build -trimpath -tags tiny -gcflags "all=-l -B" -ldflags "-s -w -buildid=" -o autod-lite-tiny ./cmd/autod-lite
+command -v upx >/dev/null && upx --lzma --best autod-lite-tiny
 ```
+
+### Footprint tips
+
+- The standard `autod-lite` binary on linux/amd64 lands around ~7 MB when stripped.
+- `autod-lite-min` trims debug data; adding UPX typically squeezes it to a few megabytes.
+- `autod-lite-tiny` drops YAML/reflection entirely (env-only configuration) and pairs well with UPX for the smallest footprint.
 
 ## Configuration
 
-Settings are supplied via a YAML file. See [`example-config.yaml`](./example-config.yaml) for all fields.
+Standard builds load settings from a YAML file. See [`example-config.yaml`](./example-config.yaml) for all fields.
 Key options:
 
 - `mode`: `master` or `slave`.
@@ -51,6 +64,20 @@ Key options:
 - `register_interval`: how often a slave re-registers.
 - `probe_cidrs` / `probe_interval` / `probe_port`: optional master-side active health polling.
 - `slots`: identifiers the node can service.
+
+For `-tags tiny` builds the YAML dependency is removed and configuration is injected via environment variables instead:
+
+- `AUTOD_MODE` (`master` or `slave`, required)
+- `AUTOD_LISTEN` (listen address, default `:8080`)
+- `AUTOD_ADVERTISE` (optional external host:port for slave reachability)
+- `AUTOD_MASTER_URL` (master base URL for slave registration)
+- `AUTOD_EXEC_TIMEOUT` (e.g., `10s`)
+- `AUTOD_REGISTER_EVERY` (e.g., `15s`)
+- `AUTOD_PROBE_CIDRS` (comma-separated list)
+- `AUTOD_PROBE_EVERY` (e.g., `45s`)
+- `AUTOD_PROBE_PORT` (e.g., `8080`)
+- `AUTOD_SLOTS` (comma-separated list)
+- `AUTOD_ID` (optional explicit identifier; otherwise auto-generated)
 
 ## Running
 

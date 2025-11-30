@@ -200,6 +200,8 @@ GO_LITE_LDFLAGS := -s -w -buildid=
 GO_LITE_ENV     := CGO_ENABLED=0
 GO_LITE_GOOS    ?= linux
 GO_LITE_GOARCH  ?= amd64
+GO_LITE_TINY_TAGS := -tags tiny
+GO_LITE_TINY_GC   := all=-l -B
 
 autod-lite:
         cd go && go build -o autod-lite ./cmd/autod-lite
@@ -211,6 +213,12 @@ autod-lite-min:
         cd go && $(GO_LITE_ENV) GOOS=$(GO_LITE_GOOS) GOARCH=$(GO_LITE_GOARCH) go build -trimpath -ldflags '$(GO_LITE_LDFLAGS)' -o autod-lite-min ./cmd/autod-lite
         @if command -v upx >/dev/null 2>&1; then \
                 cd go && upx --lzma --best autod-lite-min >/dev/null; \
+        fi
+
+autod-lite-tiny:
+        cd go && $(GO_LITE_ENV) GOOS=$(GO_LITE_GOOS) GOARCH=$(GO_LITE_GOARCH) go build -trimpath $(GO_LITE_TINY_TAGS) -gcflags '$(GO_LITE_TINY_GC)' -ldflags '$(GO_LITE_LDFLAGS)' -o autod-lite-tiny ./cmd/autod-lite
+        @if command -v upx >/dev/null 2>&1; then \
+                cd go && upx --lzma --best autod-lite-tiny >/dev/null; \
         fi
 
 # Utilities (native by default)

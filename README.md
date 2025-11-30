@@ -86,6 +86,9 @@ make autod-lite-armhf
 
 # Size-optimised build (stripped, optional UPX compression; set GO_LITE_GOOS/GO_LITE_GOARCH to override)
 make autod-lite-min
+
+# YAML-free, env-configured build (drops YAML/reflection to shrink the footprint)
+make autod-lite-tiny
 ```
 
 Refer to [`go/README.md`](go/README.md) for configuration and usage examples.
