@@ -6,6 +6,7 @@
     "/sys/pixelpilot/help",
     "/sys/udp_relay/help",
     "/sys/joystick2crsf/help",
+    "/sys/link/help",
     "/sys/link/wfb/help",
     "/sys/pixelpilot_mini_rk/help",
     "/sys/sync/help"

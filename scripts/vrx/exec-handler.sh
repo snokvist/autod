@@ -11,6 +11,7 @@
 #   /sys/pixelpilot_mini_rk/help|toggle_osd|toggle_recording|gamma|start|stop|restart
 #   /sys/udp_relay/help|start|stop|status
 #   /sys/joystick2crsf/help|get|set|reload|start|stop|restart|status
+#   /sys/link/help                                   (advertise link help endpoints)
 #   /sys/link/wfb/help|get|set|status|start|stop|restart|enable|disable
 #   /sys/ping                                    (utility passthrough)
 #
@@ -1250,6 +1251,9 @@ case "$1" in
   /sys/joystick2crsf/stop)     shift; joystick2crsf_stop "$@" ;;
   /sys/joystick2crsf/restart)  shift; joystick2crsf_restart "$@" ;;
   /sys/joystick2crsf/status)   shift; joystick2crsf_status "$@" ;;
+
+  # link
+  /sys/link/help)          print_help_msg "link_root_help.msg" ;;
 
   # link wfb
   /sys/link/wfb/help)      print_help_msg "link_help.msg" ;;
