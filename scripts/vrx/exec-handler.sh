@@ -11,7 +11,8 @@
 #   /sys/pixelpilot_mini_rk/help|toggle_osd|toggle_recording|gamma|start|stop|restart
 #   /sys/udp_relay/help|start|stop|status
 #   /sys/joystick2crsf/help|get|set|reload|start|stop|restart|status
-#   /sys/link/help|mode|select|start|stop|status
+#   /sys/link/help                                   (advertise link help endpoints)
+#   /sys/link/wfb/help|get|set|status|start|stop|restart|enable|disable
 #   /sys/ping                                    (utility passthrough)
 #
 # Notes:
@@ -25,9 +26,9 @@ PATH=/usr/sbin:/usr/bin:/sbin:/bin
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
 HELP_DIR="${HELP_DIR:-$SCRIPT_DIR}"
 STATE_DIR="${VRX_STATE_DIR:-/tmp/vrx}"
-LINK_STATE_FILE="$STATE_DIR/link.env"
 DVR_MEDIA_DIR="${DVR_MEDIA_DIR:-/media}"
 JOYSTICK2CRSF_CONF="${JOYSTICK2CRSF_CONF:-/etc/joystick2crsf.conf}"
+WFB_CONF="${WFB_CONF:-/etc/wfb.conf}"
 SYNC_MAX_SLOTS=10
 AUTOD_HTTP_PORT="${AUTOD_HTTP_PORT:-55667}"
 AUTOD_HTTP_HOST="${AUTOD_HTTP_HOST:-127.0.0.1}"
@@ -540,60 +541,240 @@ joystick2crsf_set(){
   return 0
 }
 
-# ======================= Link Aggregation =======================
-link_env_key(){ echo "vrx_link_mode"; }
-link_get_value(){ config_get "$(link_env_key)" "$LINK_STATE_FILE"; }
-link_set_value(){ config_set "$(link_env_key)" "$1" "$LINK_STATE_FILE"; }
+# ======================= Link WFB =======================
+wfb_conf_path(){ echo "$WFB_CONF"; }
 
-default_link_mode(){ echo "udp_relay"; }
-
-link_mode_get(){
-  mode="$(link_get_value 2>/dev/null)"
-  if [ -n "$mode" ]; then
-    echo "$mode"
-  else
-    default_link_mode
+wfb_conf_get(){
+  key="$1"
+  [ -n "$key" ] || { echo "usage: link/wfb/get key" 1>&2; return 2; }
+  file="$(wfb_conf_path)"
+  if [ ! -r "$file" ]; then
+    echo "wfb config not found: $file" 1>&2
+    return 4
   fi
+  result="$(awk -v key="$key" '
+    function trim(str){ sub(/^[ \t]+/, "", str); sub(/[ \t]+$/, "", str); return str; }
+    BEGIN{ in_params=0; found=0; }
+    {
+      line=$0
+      if(match(line, /^[ \t]*\[/)){
+        section=trim(line)
+        if(tolower(section)=="[parameters]"){
+          in_params=1
+        } else if(in_params){
+          exit
+        } else {
+          in_params=0
+        }
+        next
+      }
+      if(!in_params) next
+      trimmed=trim(line)
+      if(trimmed=="" || substr(trimmed,1,1)=="#") next
+      if(index(trimmed, key "=")==1){
+        value=substr(trimmed, length(key)+2)
+        value=trim(value)
+        printf("FOUND:%s\n", value)
+        found=1
+        exit
+      }
+    }
+    END{ if(!found) print "MISSING"; }
+  ' "$file" 2>/dev/null)"
+  rc=$?
+  if [ $rc -ne 0 ]; then
+    echo "failed to read wfb config" 1>&2
+    return 4
+  fi
+  case "$result" in
+    FOUND:*)
+      value="${result#FOUND:}"
+      printf '%s=%s\n' "$key" "$value"
+      return 0
+      ;;
+    MISSING)
+      echo "wfb config key not found in [parameters]: $key" 1>&2
+      return 4
+      ;;
+    *)
+      echo "failed to read wfb config" 1>&2
+      return 4
+      ;;
+  esac
 }
 
-link_mode_set(){
-  mode="$1"
-  case "$mode" in
-    udp_relay|pixelpilot|none) ;;
-    *) die "invalid link mode: $mode" ;;
-  esac
-  link_set_value "$mode" >/dev/null || die "failed to persist link mode"
+wfb_conf_set(){
+  if [ $# -eq 1 ]; then
+    case "$1" in
+      *=*)
+        key="${1%%=*}"
+        value="${1#*=}"
+        ;;
+      *)
+        echo "usage: link/wfb/set key=value" 1>&2
+        return 2
+        ;;
+    esac
+  elif [ $# -eq 2 ]; then
+    key="$1"
+    value="$2"
+  else
+    echo "usage: link/wfb/set key=value" 1>&2
+    return 2
+  fi
+  if [ -z "$key" ]; then
+    echo "missing key" 1>&2
+    return 2
+  fi
+  file="$(wfb_conf_path)"
+  ensure_parent_dir "$(dirname "$file")"
+  tmp="$file.tmp.$$"
+  if [ -f "$file" ]; then
+    if ! awk -v key="$key" -v value="$value" '
+      function trim(str){ sub(/^[ \t]+/, "", str); sub(/[ \t]+$/, "", str); return str; }
+      BEGIN{ in_params=0; found=0; seen_params=0; }
+      {
+        line=$0
+        if(match(line, /^[ \t]*\[/)){
+          if(in_params && !found){
+            printf("%s=%s\n", key, value)
+            found=1
+          }
+          section=trim(line)
+          if(tolower(section)=="[parameters]"){
+            in_params=1
+            seen_params=1
+          } else {
+            in_params=0
+          }
+          print line
+          next
+        }
+        if(in_params){
+          trimmed=trim(line)
+          if(trimmed=="" || substr(trimmed,1,1)=="#"){ print line; next; }
+          if(index(trimmed, key "=")==1){
+            match(line, /^[ \t]*/); prefix=substr(line, 1, RLENGTH)
+            rest=trim(substr(trimmed, length(key)+2))
+            comment=""
+            pre=rest
+            commentStart=index(rest, "#")
+            if(commentStart>0){
+              comment=substr(rest, commentStart)
+              pre=substr(rest, 1, commentStart-1)
+            }
+            spacing=""
+            if(match(pre, /[ \t]+$/)){
+              spacing=substr(pre, RSTART, RLENGTH)
+            }
+            printf("%s%s=%s%s%s\n", prefix, key, value, spacing, comment)
+            found=1
+            next
+          }
+        }
+        print line
+      }
+      END{
+        if(!found){
+          if(!seen_params){
+            print ""
+            print "[parameters]"
+          }
+          printf("%s=%s\n", key, value)
+        }
+      }
+    ' "$file" > "$tmp"; then
+      rm -f "$tmp"
+      echo "failed to update wfb config" 1>&2
+      return 4
+    fi
+  else
+    if ! {
+      echo "[parameters]" && printf '%s=%s\n' "$key" "$value"
+    } > "$tmp"; then
+      rm -f "$tmp"
+      echo "failed to write wfb config" 1>&2
+      return 4
+    fi
+  fi
+  if ! mv "$tmp" "$file"; then
+    rm -f "$tmp"
+    echo "failed to write wfb config" 1>&2
+    return 4
+  fi
+  chmod 644 "$file" 2>/dev/null || true
   echo "ok"
+  return 0
 }
 
-link_route_start(){
-  mode="$(link_mode_get)"
-  case "$mode" in
-    pixelpilot) start_pixelpilot ;;
-    udp_relay)  udp_relay_start ;;
-    none)       echo "link mode is none; nothing to start" ;;
-    *)          echo "unknown link mode: $mode" 1>&2; return 2 ;;
+wfb_unit(){ echo "wfb_supervisor.service"; }
+
+wfb_systemctl(){
+  action="$1"
+  if ! have systemctl; then
+    echo "systemctl unavailable" 1>&2
+    return 3
+  fi
+  unit="$(wfb_unit)"
+  systemctl "$action" "$unit" >/dev/null 2>&1
+}
+
+wfb_start(){
+  wfb_systemctl start
+  rc=$?
+  case $rc in
+    0) echo "wfb supervisor started"; return 0 ;;
+    3) return 3 ;;
+    *) echo "failed to start wfb supervisor" 1>&2; return 4 ;;
   esac
 }
 
-link_route_stop(){
-  mode="$(link_mode_get)"
-  case "$mode" in
-    pixelpilot) stop_pixelpilot ;;
-    udp_relay)  udp_relay_stop ;;
-    none)       echo "link mode is none; nothing to stop" ;;
-    *)          echo "unknown link mode: $mode" 1>&2; return 2 ;;
+wfb_stop(){
+  wfb_systemctl stop
+  rc=$?
+  case $rc in
+    0) echo "wfb supervisor stopped"; return 0 ;;
+    3) return 3 ;;
+    *) echo "failed to stop wfb supervisor" 1>&2; return 4 ;;
   esac
 }
 
-link_route_status(){
-  mode="$(link_mode_get)"
-  case "$mode" in
-    pixelpilot) pixelpilot_status ;;
-    udp_relay)  udp_relay_status ;;
-    none)       echo "link mode is none" ;;
-    *)          echo "unknown link mode: $mode" 1>&2; return 2 ;;
+wfb_restart(){
+  wfb_systemctl restart
+  rc=$?
+  case $rc in
+    0) echo "wfb supervisor restarted"; return 0 ;;
+    3) return 3 ;;
+    *) echo "failed to restart wfb supervisor" 1>&2; return 4 ;;
   esac
+}
+
+wfb_enable(){
+  wfb_systemctl enable
+  rc=$?
+  case $rc in
+    0) echo "wfb supervisor enabled"; return 0 ;;
+    3) return 3 ;;
+    *) echo "failed to enable wfb supervisor" 1>&2; return 4 ;;
+  esac
+}
+
+wfb_disable(){
+  wfb_systemctl disable
+  rc=$?
+  case $rc in
+    0) echo "wfb supervisor disabled"; return 0 ;;
+    3) return 3 ;;
+    *) echo "failed to disable wfb supervisor" 1>&2; return 4 ;;
+  esac
+}
+
+wfb_status(){
+  if ! have systemctl; then
+    echo "systemctl unavailable" 1>&2
+    return 3
+  fi
+  systemctl is-active "$(wfb_unit)"
 }
 
 # ======================= DVR recordings =======================
@@ -1071,13 +1252,19 @@ case "$1" in
   /sys/joystick2crsf/restart)  shift; joystick2crsf_restart "$@" ;;
   /sys/joystick2crsf/status)   shift; joystick2crsf_status "$@" ;;
 
-  # link aggregation
-  /sys/link/help)          print_help_msg "link_help.msg" ;;
-  /sys/link/mode)          shift; link_mode_get "$@" ;;
-  /sys/link/select)        shift; link_mode_set "$1" ;;
-  /sys/link/start)         shift; link_route_start "$@" ;;
-  /sys/link/stop)          shift; link_route_stop "$@" ;;
-  /sys/link/status)        shift; link_route_status "$@" ;;
+  # link
+  /sys/link/help)          print_help_msg "link_root_help.msg" ;;
+
+  # link wfb
+  /sys/link/wfb/help)      print_help_msg "link_help.msg" ;;
+  /sys/link/wfb/get)       shift; wfb_conf_get "$@" ;;
+  /sys/link/wfb/set)       shift; wfb_conf_set "$@" ;;
+  /sys/link/wfb/start)     shift; wfb_start "$@" ;;
+  /sys/link/wfb/stop)      shift; wfb_stop "$@" ;;
+  /sys/link/wfb/restart)   shift; wfb_restart "$@" ;;
+  /sys/link/wfb/enable)    shift; wfb_enable "$@" ;;
+  /sys/link/wfb/disable)   shift; wfb_disable "$@" ;;
+  /sys/link/wfb/status)    shift; wfb_status "$@" ;;
 
   # dvr recordings
   /sys/dvr/list)           shift; dvr_list "$@" ;;
