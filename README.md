@@ -21,6 +21,7 @@ remote.md            # End-to-end joystick / CRSF deployment guide
 scripts/             # Helper scripts (HTML minifier, exec handlers, VRX/VTX wrappers backing the UI)
 src/                 # C sources for the daemon, scanner, and utilities
 tests/               # Smoke and regression tests for selected subsystems
+go/                  # Go-based lightweight prototype (see go/README.md)
 ```
 
 Key executables built from `src/`:
@@ -72,6 +73,25 @@ All commands are run from the repository root.
 Each flavour drops intermediates under `build/<flavour>/` and strips binaries automatically when the matching `strip` tool is found.
 
 \* `joystick2crsf` depends on SDL2. The `tools` target builds it alongside the other helpers; use the stand-alone `make joystick2crsf` target if you only want to compile the joystick bridge once the SDL2 development headers are present. Cross-toolchain aggregates (`make tools-musl`, `make tools-gnu`) omit the joystick helper because the build requires native SDL2 support.
+
+### Go prototype (experimental)
+
+A slim Go-based reimplementation that only exposes `/health`, `/exec`, `/nodes`, and sync endpoints lives under [`go/`](go/). Build it separately with:
+
+```bash
+make autod-lite
+
+# Optional ARMv7 hard-float cross build
+make autod-lite-armhf
+
+# Size-optimised build (stripped, optional UPX compression; set GO_LITE_GOOS/GO_LITE_GOARCH to override)
+make autod-lite-min
+
+# YAML-free, env-configured build (drops YAML/reflection to shrink the footprint)
+make autod-lite-tiny
+```
+
+Refer to [`go/README.md`](go/README.md) for configuration and usage examples.
 
 ### Installing on Debian/`systemd`
 

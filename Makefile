@@ -191,9 +191,35 @@ $(eval $(call DEFINE_FLAVOR,gnu,$(CC_GNU),gnu,$(APP)-gnu,-gnu,$(STRIP_GNU)))
 $(eval $(call DEFINE_FLAVOR,owrt,$(CC_OWRT),owrt,$(APP)-owrt,-owrt,$(STRIP_OWRT)))
 
 # ===== Top-level convenience targets =====
-.PHONY: all tools tools-musl tools-gnu tools-owrt clean strip install help
+.PHONY: all tools tools-musl tools-gnu tools-owrt autod-lite autod-lite-armhf autod-lite-min clean strip install help
 
 all: native
+
+# Go prototype helpers
+GO_LITE_LDFLAGS := -s -w -buildid=
+GO_LITE_ENV     := CGO_ENABLED=0
+GO_LITE_GOOS    ?= linux
+GO_LITE_GOARCH  ?= amd64
+GO_LITE_TINY_TAGS := -tags tiny
+GO_LITE_TINY_GC   := all=-l -B
+
+autod-lite:
+        cd go && go build -o autod-lite ./cmd/autod-lite
+
+autod-lite-armhf:
+        cd go && GOOS=linux GOARCH=arm GOARM=7 go build -o autod-lite-armhf ./cmd/autod-lite
+
+autod-lite-min:
+        cd go && $(GO_LITE_ENV) GOOS=$(GO_LITE_GOOS) GOARCH=$(GO_LITE_GOARCH) go build -trimpath -ldflags '$(GO_LITE_LDFLAGS)' -o autod-lite-min ./cmd/autod-lite
+        @if command -v upx >/dev/null 2>&1; then \
+                cd go && upx --lzma --best autod-lite-min >/dev/null; \
+        fi
+
+autod-lite-tiny:
+        cd go && $(GO_LITE_ENV) GOOS=$(GO_LITE_GOOS) GOARCH=$(GO_LITE_GOARCH) go build -trimpath $(GO_LITE_TINY_TAGS) -gcflags '$(GO_LITE_TINY_GC)' -ldflags '$(GO_LITE_LDFLAGS)' -o autod-lite-tiny ./cmd/autod-lite
+        @if command -v upx >/dev/null 2>&1; then \
+                cd go && upx --lzma --best autod-lite-tiny >/dev/null; \
+        fi
 
 # Utilities (native by default)
 tools: sse_tail udp_relay antenna_osd ip2uart joystick2crsf
