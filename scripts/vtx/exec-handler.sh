@@ -10,6 +10,7 @@
 #   /sys/link/select <wfb_ng|ap|sta>  (sets wifi_mode)
 #   /sys/link/wifi/help|get|set|params|start|stop|status
 #   /sys/link/wfb_ng/help|get|set|params|start|stop|status
+#   /sys/fw/ota_force <url> (force OTA upgrade via sysupgrade; SSE stream on :6666)
 #
 # Notes:
 # - Cheap argv parsing; handler remains JSON-agnostic.
@@ -334,6 +335,15 @@ fw_params(){
   echo "ok"
 }
 
+fw_ota_force(){
+  url="$1"
+  [ -n "$url" ] || die "usage: /sys/fw/ota_force <url>"
+  have sse_tail || die "sse_tail not available"
+  have sysupgrade || die "sysupgrade not available"
+  sse_tail 6666 sysupgrade -n -f --url="$url" &
+  echo "ota_force started"
+}
+
 validate_alnum_4_24(){
   val="$1"
   [ -z "$val" ] && return 0
@@ -397,6 +407,7 @@ case "$1" in
   /sys/fw/get)          shift; fw_get "$1" ;;
   /sys/fw/set)          shift; fw_set_cmd "$@" ;;
   /sys/fw/params)       shift; fw_params "$@" ;;
+  /sys/fw/ota_force)    shift; fw_ota_force "$1" ;;
   /sys/shutdown)        shift; sys_shutdown_cmd "$@" ;;
   /sys/restart)         shift; sys_restart_cmd "$@" ;;
 

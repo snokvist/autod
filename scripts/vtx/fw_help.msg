@@ -6,7 +6,8 @@
     {"name":"help","description":"Describe firmware environment controls","args":[]},
     {"name":"get","description":"Read one firmware env value","args":[{"key":"name","type":"enum","control":{"kind":"select","options":["link_mode","wlanssid","msposd_tty","wlanpass"],"multi":false,"allow_free":true},"required":true}]},
     {"name":"set","description":"Set a firmware env key=value pair","args":[{"key":"pair","type":"string","control":{"kind":"text"},"required":true,"description":"key=value"}]},
-    {"name":"params","description":"Set multiple firmware env pairs","args":[{"key":"pairs","type":"string","control":{"kind":"text"},"required":false,"description":"Repeated key=value tokens"}]}
+    {"name":"params","description":"Set multiple firmware env pairs","args":[{"key":"pairs","type":"string","control":{"kind":"text"},"required":false,"description":"Repeated key=value tokens"}]},
+    {"name":"ota_force","description":"Force OTA upgrade via sysupgrade (SSE stream on port 6666)","args":[{"key":"url","type":"string","control":{"kind":"text","placeholder":"http://update.bin"},"required":true}]}
   ],
   "settings": [
     {"key":"link_mode","type":"enum","description":"Firmware link mode (apfpv, wfb, or empty to clear)","control":{"kind":"select","options":["apfpv","wfb",""],"multi":false,"allow_free":true}},
