@@ -85,6 +85,9 @@ static void cfg_defaults(config_t *c) {
     c->serve_ui = 0;
     c->ui_public = 1;
 
+    strncpy(c->media_dir, "/media", sizeof(c->media_dir) - 1);
+    strncpy(c->firmware_dir, "/usr/share/firmware", sizeof(c->firmware_dir) - 1);
+
     sync_cfg_defaults(c);
 }
 
@@ -194,6 +197,11 @@ static int parse_ini(const char *path, config_t *cfg) {
             if (!strcmp(k,"ui_path"))   strncpy(cfg->ui_path,v,sizeof(cfg->ui_path)-1);
             else if (!strcmp(k,"serve_ui"))  cfg->serve_ui=atoi(v);
             else if (!strcmp(k,"ui_public")) cfg->ui_public=atoi(v);
+        } else if (strcmp(sect,"files")==0) {
+            if (!strcmp(k,"media_dir")) strncpy(cfg->media_dir, v,
+                                                sizeof(cfg->media_dir) - 1);
+            else if (!strcmp(k,"firmware_dir")) strncpy(cfg->firmware_dir, v,
+                                                         sizeof(cfg->firmware_dir) - 1);
         } else if (strcmp(sect,"startup")==0) {
             if ((!strcmp(k,"exec") || !strcmp(k,"command")) &&
                 cfg->startup_exec_count < STARTUP_MAX_EXEC) {
@@ -799,6 +807,132 @@ static int stream_file(struct mg_connection *c, const char *path, int cors_publi
     return 1;
 }
 
+static int serve_file_share(struct mg_connection *c, const config_t *cfg,
+                            const struct mg_request_info *ri,
+                            const char *uri_prefix, const char *base_dir,
+                            const char *env_override, const char *default_dir,
+                            const char *unavailable_msg) {
+    if (!cfg || !ri || !uri_prefix || !default_dir) return 0;
+
+    int is_head = (strcmp(ri->request_method, "HEAD") == 0);
+    if (!is_head && strcmp(ri->request_method, "GET") != 0) {
+        send_plain(c, 405, "method_not_allowed", cfg->ui_public);
+        return 1;
+    }
+
+    const char *uri = ri->local_uri ? ri->local_uri : ri->request_uri;
+    if (!uri) return 0;
+
+    size_t prefix_len = strlen(uri_prefix);
+    size_t root_len = prefix_len;
+    while (root_len > 0 && uri_prefix[root_len - 1] == '/') root_len--;
+    if (root_len > 0 && strncmp(uri, uri_prefix, root_len) == 0) {
+        size_t uri_len = strlen(uri);
+        if (uri_len == root_len ||
+            (uri_len == root_len + 1 && uri[root_len] == '/')) {
+            send_plain(c, 404, "not_found", cfg->ui_public);
+            return 1;
+        }
+    }
+
+    if (strncmp(uri, uri_prefix, prefix_len) != 0) return 0;
+
+    const char *rel = uri + prefix_len;
+    while (*rel == '/') rel++;
+    if (!*rel) {
+        send_plain(c, 404, "not_found", cfg->ui_public);
+        return 1;
+    }
+
+    char decoded[PATH_MAX];
+    int dec_len = mg_url_decode(rel, (int)strlen(rel), decoded,
+                                (int)sizeof(decoded), 0);
+    if (dec_len <= 0 || dec_len >= (int)sizeof(decoded)) {
+        send_plain(c, 400, "bad_request", cfg->ui_public);
+        return 1;
+    }
+    decoded[dec_len] = '\0';
+
+    const char *base = NULL;
+    if (env_override) {
+        const char *env_val = getenv(env_override);
+        if (env_val && *env_val) base = env_val;
+    }
+    if (!base || !*base) {
+        if (base_dir && *base_dir) base = base_dir;
+        else base = default_dir;
+    }
+    if (!base || !*base) base = default_dir;
+
+    char base_real[PATH_MAX];
+    if (!realpath(base, base_real)) {
+        send_plain(c, 404, unavailable_msg ? unavailable_msg : "not_found",
+                   cfg->ui_public);
+        return 1;
+    }
+
+    char joined[PATH_MAX];
+    if (snprintf(joined, sizeof(joined), "%s/%s", base_real, decoded) >=
+        (int)sizeof(joined)) {
+        send_plain(c, 400, "path_too_long", cfg->ui_public);
+        return 1;
+    }
+
+    char resolved[PATH_MAX];
+    if (!realpath(joined, resolved)) {
+        send_plain(c, 404, "not_found", cfg->ui_public);
+        return 1;
+    }
+
+    size_t base_len = strlen(base_real);
+    if (strncmp(resolved, base_real, base_len) != 0 ||
+        (resolved[base_len] != '\0' && resolved[base_len] != '/')) {
+        send_plain(c, 403, "forbidden", cfg->ui_public);
+        return 1;
+    }
+
+    int fd = open(resolved, O_RDONLY);
+    if (fd < 0) {
+        send_plain(c, 404, "not_found", cfg->ui_public);
+        return 1;
+    }
+
+    struct stat st;
+    if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode)) {
+        close(fd);
+        send_plain(c, 404, "not_found", cfg->ui_public);
+        return 1;
+    }
+
+    const char *ctype = guess_mime_type(resolved);
+    char extra[192];
+    extra[0] = '\0';
+    char http_date[64];
+    if (format_http_date(st.st_mtime, http_date, sizeof(http_date)) == 0) {
+        int n = snprintf(extra, sizeof(extra), "Last-Modified: %s\r\n",
+                        http_date);
+        if (n < 0 || n >= (int)sizeof(extra)) extra[0] = '\0';
+    }
+
+    add_common_headers_extra(c, 200, ctype, (size_t)st.st_size, cfg->ui_public,
+                             extra[0] ? extra : NULL);
+
+    if (is_head) {
+        close(fd);
+        return 1;
+    }
+
+    off_t off = 0; char buf[64 * 1024];
+    while (off < st.st_size) {
+        ssize_t r = read(fd, buf, sizeof(buf));
+        if (r <= 0) break;
+        mg_write(c, buf, (size_t)r);
+        off += r;
+    }
+    close(fd);
+    return 1;
+}
+
 static int h_media(struct mg_connection *c, void *ud) {
     app_t *app = (app_t *)ud;
     config_t cfg; app_config_snapshot(app, &cfg);
@@ -810,113 +944,24 @@ static int h_media(struct mg_connection *c, void *ud) {
     const struct mg_request_info *ri = mg_get_request_info(c);
     if (!ri || !ri->request_method) return 0;
 
-    int is_head = (strcmp(ri->request_method, "HEAD") == 0);
-    if (!is_head && strcmp(ri->request_method, "GET") != 0) {
-        send_plain(c, 405, "method_not_allowed", cfg.ui_public);
-        return 1;
-    }
+    return serve_file_share(c, &cfg, ri, "/media/", cfg.media_dir,
+                            "DVR_MEDIA_DIR", "/media", "media_unavailable");
+}
 
-    const char *uri = ri->local_uri ? ri->local_uri : ri->request_uri;
-    if (!uri) return 0;
-
-    const char *prefix = "/media/";
-    size_t prefix_len = strlen(prefix);
-    if (strncmp(uri, prefix, prefix_len) != 0) {
-        if (!strcmp(uri, "/media") || !strcmp(uri, "/media/")) {
-            send_plain(c, 404, "not_found", cfg.ui_public);
-            return 1;
-        }
-        return 0;
-    }
-
-    const char *rel = uri + prefix_len;
-    while (*rel == '/') rel++;
-    if (!*rel) {
+static int h_firmware(struct mg_connection *c, void *ud) {
+    app_t *app = (app_t *)ud;
+    config_t cfg; app_config_snapshot(app, &cfg);
+    if (!cfg_has_cap(&cfg, "firmware")) {
         send_plain(c, 404, "not_found", cfg.ui_public);
         return 1;
     }
 
-    char decoded[PATH_MAX];
-    int dec_len = mg_url_decode(rel, (int)strlen(rel), decoded, (int)sizeof(decoded), 0);
-    if (dec_len <= 0 || dec_len >= (int)sizeof(decoded)) {
-        send_plain(c, 400, "bad_request", cfg.ui_public);
-        return 1;
-    }
-    decoded[dec_len] = '\0';
+    const struct mg_request_info *ri = mg_get_request_info(c);
+    if (!ri || !ri->request_method) return 0;
 
-    const char *base = getenv("DVR_MEDIA_DIR");
-    if (!base || !*base) base = "/media";
-
-    char base_real[PATH_MAX];
-    if (!realpath(base, base_real)) {
-        send_plain(c, 404, "media_unavailable", cfg.ui_public);
-        return 1;
-    }
-
-    char joined[PATH_MAX];
-    if (snprintf(joined, sizeof(joined), "%s/%s", base_real, decoded) >= (int)sizeof(joined)) {
-        send_plain(c, 400, "path_too_long", cfg.ui_public);
-        return 1;
-    }
-
-    char resolved[PATH_MAX];
-    if (!realpath(joined, resolved)) {
-        send_plain(c, 404, "not_found", cfg.ui_public);
-        return 1;
-    }
-
-    size_t base_len = strlen(base_real);
-    if (strncmp(resolved, base_real, base_len) != 0 ||
-        (resolved[base_len] != '\0' && resolved[base_len] != '/')) {
-        send_plain(c, 403, "forbidden", cfg.ui_public);
-        return 1;
-    }
-
-    int fd = open(resolved, O_RDONLY);
-    if (fd < 0) {
-        send_plain(c, 404, "not_found", cfg.ui_public);
-        return 1;
-    }
-
-    struct stat st;
-    if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode)) {
-        close(fd);
-        send_plain(c, 404, "not_found", cfg.ui_public);
-        return 1;
-    }
-
-    const char *ctype = "application/octet-stream";
-    const char *dot = strrchr(resolved, '.');
-    if (dot && (!strcasecmp(dot, ".mp4") || !strcasecmp(dot, ".m4v"))) {
-        ctype = "video/mp4";
-    }
-
-    char extra[192];
-    extra[0] = '\0';
-    char http_date[64];
-    if (format_http_date(st.st_mtime, http_date, sizeof(http_date)) == 0) {
-        int n = snprintf(extra, sizeof(extra), "Last-Modified: %s\r\n", http_date);
-        if (n < 0 || n >= (int)sizeof(extra)) extra[0] = '\0';
-    }
-
-    add_common_headers_extra(c, 200, ctype, (size_t)st.st_size, cfg.ui_public,
-                             extra[0] ? extra : NULL);
-
-    if (is_head) {
-        close(fd);
-        return 1;
-    }
-
-    off_t off = 0;
-    char buf[64 * 1024];
-    while (off < st.st_size) {
-        ssize_t r = read(fd, buf, sizeof(buf));
-        if (r <= 0) break;
-        mg_write(c, buf, (size_t)r);
-        off += r;
-    }
-    close(fd);
-    return 1;
+    return serve_file_share(c, &cfg, ri, "/firmware/", cfg.firmware_dir,
+                            "AUTOD_FIRMWARE_DIR", "/usr/share/firmware",
+                            "firmware_unavailable");
 }
 
 static int h_root(struct mg_connection *c, void *ud){
@@ -2031,6 +2076,7 @@ int main(int argc, char **argv){
     mg_set_request_handler(app.ctx, "/http",    h_http,          &app);
     mg_set_request_handler(app.ctx, "/nodes",   h_nodes,         &app);
     mg_set_request_handler(app.ctx, "/media",   h_media,         &app);
+    mg_set_request_handler(app.ctx, "/firmware", h_firmware,     &app);
     sync_register_http_handlers(app.ctx, &app);
     mg_set_request_handler(app.ctx, "/",        h_root,    &app);
 

@@ -53,6 +53,9 @@ typedef struct config {
     char ui_path[256];
     int  serve_ui;
     int  ui_public;
+
+    char media_dir[256];
+    char firmware_dir[256];
 } config_t;
 
 typedef struct app {
