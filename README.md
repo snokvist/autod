@@ -131,6 +131,12 @@ Important sections inside the master sample ([`configs/autod.conf`](configs/auto
 - `[caps]` – Device identity metadata and optional capability list exposed at `/caps`.
 - `[announce]` – List of Server-Sent Event (SSE) streams advertised to clients.
 - `[ui]` – Controls for serving the static UI bundle.
+- `[files]` – Directories exposed under `/media` and `/firmware` (defaults: `/media` and
+  `/usr/share/firmware`; override via config or the `DVR_MEDIA_DIR`/`AUTOD_FIRMWARE_DIR`
+  environment variables).
+
+The `/media` share is available when the `dvr` capability is present, while the new
+`/firmware` endpoint is gated by the `firmware` capability.
 
 The execution plane contract (`/exec` requests and handler expectations) is documented in [`handler_contract.txt`](handler_contract.txt). Ensure your handler script matches that agreement; a minimal sample lives in [`scripts/simple_exec-handler.sh`](scripts/simple_exec-handler.sh).
 
