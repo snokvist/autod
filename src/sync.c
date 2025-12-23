@@ -295,8 +295,11 @@ static int sync_master_slot_matches(const sync_master_state_t *state,
     if (!state || !id || !*id) return 0;
     if (slot_index < 0 || slot_index >= SYNC_MAX_SLOTS) return 0;
     if (!state->slot_assignees[slot_index][0]) return 0;
-    return strncmp(state->slot_assignees[slot_index], id,
-                   sizeof(state->slot_assignees[slot_index])) == 0;
+    size_t bound = sizeof(state->slot_assignees[slot_index]);
+    size_t slot_len = strnlen(state->slot_assignees[slot_index], bound);
+    size_t id_len = strnlen(id, bound);
+    if (slot_len != id_len) return 0;
+    return memcmp(state->slot_assignees[slot_index], id, slot_len) == 0;
 }
 
 static void sync_master_release_slot_locked(sync_master_state_t *state,
@@ -2065,4 +2068,3 @@ void sync_slave_stop_thread(sync_slave_state_t *state) {
         pthread_mutex_unlock(&state->lock);
     }
 }
-
