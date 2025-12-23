@@ -2945,8 +2945,11 @@ function collectUdpSenderValues(opts = {}){
 
 function buildUdpSenderPayloadString(values){
   const parts = ['xsize','ysize','xpos','ypos'].map(key => formatUdpSenderNumber(values[key]));
-  const zoom = `zoom=${parts.join(',')}`;
-  return `{"text":["","","","","","","","${zoom}"], "ttl_ms": ${values.ttl}}`;
+  const payload = {
+    zoom: parts.join(','),
+    ttl_ms: values.ttl
+  };
+  return JSON.stringify(payload);
 }
 
 function buildUdpSenderRequest(values){
