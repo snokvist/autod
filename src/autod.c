@@ -1476,13 +1476,9 @@ static int resolve_target(app_t *app, const config_t *cfg,
     if (node_ip && *node_ip) {
         for (int i = 0; i < node_count; i++) {
             if (strcmp(nodes[i].ip, node_ip) != 0) continue;
-            if (port_hint > 0 && nodes[i].port != port_hint) {
-                snprintf(err_code, err_sz, "%s", "port_mismatch");
-                return -1;
-            }
             strncpy(host_out, nodes[i].ip, host_sz - 1);
             host_out[host_sz - 1] = '\0';
-            *port_out = nodes[i].port;
+            *port_out = (port_hint > 0) ? port_hint : nodes[i].port;
             if (resolved_sync_id && nodes[i].sync_id[0]) {
                 strncpy(resolved_sync_id, nodes[i].sync_id, resolved_sz - 1);
                 resolved_sync_id[resolved_sz - 1] = '\0';
@@ -1499,7 +1495,7 @@ static int resolve_target(app_t *app, const config_t *cfg,
             if (strcasecmp(nodes[i].sync_id, target_sync_id) != 0) continue;
             strncpy(host_out, nodes[i].ip, host_sz - 1);
             host_out[host_sz - 1] = '\0';
-            *port_out = nodes[i].port;
+            *port_out = (port_hint > 0) ? port_hint : nodes[i].port;
             if (resolved_sync_id) {
                 strncpy(resolved_sync_id, nodes[i].sync_id, resolved_sz - 1);
                 resolved_sync_id[resolved_sz - 1] = '\0';
