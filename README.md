@@ -156,9 +156,23 @@ curl -X POST http://HOST:PORT/udp \
 
 For binary datagrams, encode the bytes in base64 and place them in `"payload_base64"` instead. The response confirms delivery and echoes the number of bytes written.
 
+If the destination IP is unknown, you can instead specify `"device"`, `"slot"`, or `"sync_id"` (and omit `"host"`) to resolve the target from the `autod` sync protocol or node cache. For example, to target a discovered device by name:
+
+```bash
+curl -X POST http://HOST:PORT/udp \
+  -H 'Content-Type: application/json' \
+  -d '{
+        "device": "camera-node",
+        "port": 9000,
+        "payload": "trigger"
+      }'
+```
+
+The daemon will look up the IP address of `camera-node` and send the payload to port 9000 on that host. Note that `"port"` must always be specified for UDP requests.
+
 ### Relaying HTTP requests via the HTTP API
 
-`autod` also exposes a `/http` endpoint for simple HTTP relays. Instead of free-form host/port forwarding, the relay resolves its target from the node cache or sync assignments: provide either a discovered `"node_ip"`, a registered slave `"sync_id"`, or a 1-based sync `"slot"` number (when acting as a master). The handler looks up the node in `/nodes` to obtain the IP and port, then returns the upstream status code, headers, and body encoded as base64.
+`autod` also exposes a `/http` endpoint for simple HTTP relays. Instead of free-form host/port forwarding, the relay resolves its target from the node cache or sync assignments: provide either a discovered `"node_ip"`, a registered slave `"sync_id"`, a 1-based sync `"slot"` number (when acting as a master), or a discovered `"device"` name. The handler looks up the node in `/nodes` to obtain the IP and (default) port, then returns the upstream status code, headers, and body encoded as base64.
 
 ```bash
 curl -X POST http://HOST:PORT/http \
@@ -172,7 +186,20 @@ curl -X POST http://HOST:PORT/http \
       }'
 ```
 
-To send a body, include either a UTF-8 string in `"body"` or raw bytes in `"body_base64"`; the fields are mutually exclusive. TLS is not supported by this relay—requests with `"tls": true` return an error (`"ssl_disabled"` when `autod` is built with `NO_SSL`). If you need to point at a specific discovered host, supply `"node_ip"` (optionally with `"port"` to assert the cached port matches) instead of `"sync_id"`/`"slot"`.
+You can also target by device name and optionally override the port (useful if the service isn't listening on the autod management port):
+
+```bash
+curl -X POST http://HOST:PORT/http \
+  -H 'Content-Type: application/json' \
+  -d '{
+        "device": "my-sensor",
+        "port": 8080,
+        "path": "/api/readings",
+        "method": "GET"
+      }'
+```
+
+To send a body, include either a UTF-8 string in `"body"` or raw bytes in `"body_base64"`; the fields are mutually exclusive. TLS is not supported by this relay—requests with `"tls": true` return an error (`"ssl_disabled"` when `autod` is built with `NO_SSL`). If you need to point at a specific discovered host, supply `"node_ip"` (optionally with `"port"` to assert the cached port matches) instead of `"sync_id"`/`"slot"`/`"device"`.
 
 ### Optional LAN Scanner
 

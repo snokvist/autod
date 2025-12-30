@@ -1189,6 +1189,14 @@ static int h_exec(struct mg_connection *c, void *ud){
     json_value_free(resp); json_value_free(root); return 1;
 }
 
+static int resolve_target(app_t *app, const config_t *cfg,
+                          const char *sync_id, int slot_index,
+                          const char *node_ip, const char *device_name,
+                          int port_hint,
+                          char *host_out, size_t host_sz, int *port_out,
+                          char *resolved_sync_id, size_t resolved_sz,
+                          char *err_code, size_t err_sz);
+
 static int h_udp(struct mg_connection *c, void *ud) {
     (void)ud;
     const struct mg_request_info *ri = mg_get_request_info(c);
@@ -1233,22 +1241,48 @@ static int h_udp(struct mg_connection *c, void *ud) {
     JSON_Object *obj = json_object(root);
     JSON_Value *host_v = json_object_get_value(obj, "host");
     JSON_Value *port_v = json_object_get_value(obj, "port");
+    JSON_Value *sync_id_v = json_object_get_value(obj, "sync_id");
+    JSON_Value *slot_v = json_object_get_value(obj, "slot");
+    JSON_Value *device_v = json_object_get_value(obj, "device");
+    JSON_Value *node_ip_v = json_object_get_value(obj, "node_ip");
     JSON_Value *payload_v = json_object_get_value(obj, "payload");
     JSON_Value *payload_b64_v = json_object_get_value(obj, "payload_base64");
 
-    const char *host = (host_v && json_value_get_type(host_v) == JSONString)
-                       ? json_value_get_string(host_v)
-                       : NULL;
+    const char *host_in = (host_v && json_value_get_type(host_v) == JSONString)
+                          ? json_value_get_string(host_v)
+                          : NULL;
     double port_d = (port_v && json_value_get_type(port_v) == JSONNumber)
                     ? json_value_get_number(port_v)
                     : -1.0;
     int port = (int)port_d;
 
+    const char *sync_id = (sync_id_v && json_value_get_type(sync_id_v) == JSONString)
+                          ? json_value_get_string(sync_id_v)
+                          : NULL;
+    double slot_d = (slot_v && json_value_get_type(slot_v) == JSONNumber)
+                    ? json_value_get_number(slot_v)
+                    : -1.0;
+    int slot_index = -1;
+    if (slot_d >= 0.0) {
+        slot_index = (int)slot_d - 1;
+        if ((double)(slot_index + 1) != slot_d) slot_index = -2;
+    }
+    const char *device = (device_v && json_value_get_type(device_v) == JSONString)
+                         ? json_value_get_string(device_v)
+                         : NULL;
+    const char *node_ip = (node_ip_v && json_value_get_type(node_ip_v) == JSONString)
+                          ? json_value_get_string(node_ip_v)
+                          : NULL;
+
     int has_payload = (payload_v && json_value_get_type(payload_v) == JSONString) ? 1 : 0;
     int has_payload_b64 = (payload_b64_v && json_value_get_type(payload_b64_v) == JSONString) ? 1 : 0;
 
-    if (!host || !*host || port_d < 1.0 || port_d > 65535.0 || (double)port != port_d ||
-        (!has_payload && !has_payload_b64) || (has_payload && has_payload_b64)) {
+    int valid = 1;
+    if (port_d < 1.0 || port_d > 65535.0 || (double)port != port_d) valid = 0;
+    if ((!has_payload && !has_payload_b64) || (has_payload && has_payload_b64)) valid = 0;
+    if (slot_index == -2) valid = 0;
+
+    if (!valid) {
         JSON_Value *v = json_value_init_object();
         JSON_Object *o = json_object(v);
         json_object_set_string(o, "error", "invalid_request");
@@ -1257,6 +1291,34 @@ static int h_udp(struct mg_connection *c, void *ud) {
         json_value_free(root);
         return 1;
     }
+
+    char target_host[64];
+    target_host[0] = '\0';
+    config_t cfg;
+    app_config_snapshot((app_t *)ud, &cfg);
+
+    if (host_in && *host_in) {
+        strncpy(target_host, host_in, sizeof(target_host) - 1);
+        target_host[sizeof(target_host) - 1] = '\0';
+    } else {
+        char err_code[32];
+        int resolved_port = 0; // ignored
+        char resolved_sync_id[64]; // ignored
+        if (resolve_target((app_t *)ud, &cfg, sync_id, slot_index, node_ip, device,
+                           0, target_host, sizeof(target_host), &resolved_port,
+                           resolved_sync_id, sizeof(resolved_sync_id),
+                           err_code, sizeof(err_code)) != 0) {
+            JSON_Value *v = json_value_init_object();
+            JSON_Object *o = json_object(v);
+            json_object_set_string(o, "error", err_code[0] ? err_code : "resolve_failed");
+            send_json(c, v, 502, 1);
+            json_value_free(v);
+            json_value_free(root);
+            return 1;
+        }
+    }
+
+    const char *host = target_host;
 
     const unsigned char *data = NULL;
     unsigned char *tmp = NULL;
@@ -1371,12 +1433,13 @@ static int h_udp(struct mg_connection *c, void *ud) {
     return 1;
 }
 
-static int resolve_http_target(app_t *app, const config_t *cfg,
-                               const char *sync_id, int slot_index,
-                               const char *node_ip, int port_hint,
-                               char *host_out, size_t host_sz, int *port_out,
-                               char *resolved_sync_id, size_t resolved_sz,
-                               char *err_code, size_t err_sz) {
+static int resolve_target(app_t *app, const config_t *cfg,
+                          const char *sync_id, int slot_index,
+                          const char *node_ip, const char *device_name,
+                          int port_hint,
+                          char *host_out, size_t host_sz, int *port_out,
+                          char *resolved_sync_id, size_t resolved_sz,
+                          char *err_code, size_t err_sz) {
     if (!app || !cfg || !host_out || !port_out || !err_code) return -1;
     host_out[0] = '\0';
     *port_out = 0;
@@ -1413,13 +1476,9 @@ static int resolve_http_target(app_t *app, const config_t *cfg,
     if (node_ip && *node_ip) {
         for (int i = 0; i < node_count; i++) {
             if (strcmp(nodes[i].ip, node_ip) != 0) continue;
-            if (port_hint > 0 && nodes[i].port != port_hint) {
-                snprintf(err_code, err_sz, "%s", "port_mismatch");
-                return -1;
-            }
             strncpy(host_out, nodes[i].ip, host_sz - 1);
             host_out[host_sz - 1] = '\0';
-            *port_out = nodes[i].port;
+            *port_out = (port_hint > 0) ? port_hint : nodes[i].port;
             if (resolved_sync_id && nodes[i].sync_id[0]) {
                 strncpy(resolved_sync_id, nodes[i].sync_id, resolved_sz - 1);
                 resolved_sync_id[resolved_sz - 1] = '\0';
@@ -1436,7 +1495,7 @@ static int resolve_http_target(app_t *app, const config_t *cfg,
             if (strcasecmp(nodes[i].sync_id, target_sync_id) != 0) continue;
             strncpy(host_out, nodes[i].ip, host_sz - 1);
             host_out[host_sz - 1] = '\0';
-            *port_out = nodes[i].port;
+            *port_out = (port_hint > 0) ? port_hint : nodes[i].port;
             if (resolved_sync_id) {
                 strncpy(resolved_sync_id, nodes[i].sync_id, resolved_sz - 1);
                 resolved_sync_id[resolved_sz - 1] = '\0';
@@ -1444,6 +1503,22 @@ static int resolve_http_target(app_t *app, const config_t *cfg,
             return 0;
         }
         snprintf(err_code, err_sz, "%s", "id_not_found");
+        return -1;
+    }
+
+    if (device_name && *device_name) {
+        for (int i = 0; i < node_count; i++) {
+            if (strcasecmp(nodes[i].device, device_name) != 0) continue;
+            strncpy(host_out, nodes[i].ip, host_sz - 1);
+            host_out[host_sz - 1] = '\0';
+            *port_out = (port_hint > 0) ? port_hint : nodes[i].port;
+            if (resolved_sync_id && nodes[i].sync_id[0]) {
+                strncpy(resolved_sync_id, nodes[i].sync_id, resolved_sz - 1);
+                resolved_sync_id[resolved_sz - 1] = '\0';
+            }
+            return 0;
+        }
+        snprintf(err_code, err_sz, "%s", "device_not_found");
         return -1;
     }
 
@@ -1497,6 +1572,7 @@ static int h_http(struct mg_connection *c, void *ud) {
     const JSON_Value *sync_id_v = json_object_get_value(obj, "sync_id");
     const JSON_Value *slot_v = json_object_get_value(obj, "slot");
     const JSON_Value *node_ip_v = json_object_get_value(obj, "node_ip");
+    const JSON_Value *device_v = json_object_get_value(obj, "device");
     const JSON_Value *port_v = json_object_get_value(obj, "port");
     const JSON_Value *path_v = json_object_get_value(obj, "path");
     const JSON_Value *method_v = json_object_get_value(obj, "method");
@@ -1512,6 +1588,9 @@ static int h_http(struct mg_connection *c, void *ud) {
     const char *node_ip = (node_ip_v && json_value_get_type(node_ip_v) == JSONString)
                           ? json_value_get_string(node_ip_v)
                           : NULL;
+    const char *device = (device_v && json_value_get_type(device_v) == JSONString)
+                         ? json_value_get_string(device_v)
+                         : NULL;
     double slot_d = (slot_v && json_value_get_type(slot_v) == JSONNumber)
                     ? json_value_get_number(slot_v)
                     : -1.0;
@@ -1547,6 +1626,7 @@ static int h_http(struct mg_connection *c, void *ud) {
     if (sync_id && *sync_id) target_count++;
     if (node_ip && *node_ip) target_count++;
     if (slot_index >= 0) target_count++;
+    if (device && *device) target_count++;
 
     if (slot_index == -2 || target_count != 1 ||
         !path || !*path || !method || !*method ||
@@ -1587,10 +1667,10 @@ static int h_http(struct mg_connection *c, void *ud) {
     char resolved_sync_id[64];
     char target_err[32];
 
-    if (resolve_http_target(app, &cfg, sync_id, slot_index, node_ip, port_hint,
-                             target_host, sizeof(target_host), &target_port,
-                             resolved_sync_id, sizeof(resolved_sync_id),
-                             target_err, sizeof(target_err)) != 0) {
+    if (resolve_target(app, &cfg, sync_id, slot_index, node_ip, device, port_hint,
+                       target_host, sizeof(target_host), &target_port,
+                       resolved_sync_id, sizeof(resolved_sync_id),
+                       target_err, sizeof(target_err)) != 0) {
         JSON_Value *v = json_value_init_object();
         JSON_Object *o = json_object(v);
         json_object_set_string(o, "error", target_err[0] ? target_err : "resolve_failed");
